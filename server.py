@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import asyncio
 import io
+import hashlib
 import socket
 import threading
 import time
@@ -18,7 +19,7 @@ from pyftpdlib.handlers import FTPHandler
 from pyftpdlib.servers import FTPServer
 
 BASE_DIR = Path(__file__).resolve().parent
-STORAGE_DIR = BASE_DIR / "storage"
+STORAGE_DIR = BASE_DIR / "shared_files"
 WEB_DIR = BASE_DIR / "web"
 STORAGE_DIR.mkdir(exist_ok=True)
 started_at = time.time()
@@ -33,6 +34,7 @@ events = []
 events_lock = threading.Lock()
 clipboard = {"text": "", "updated": 0, "source": ""}
 clipboard_lock = threading.Lock()
+clipboard_clients = set()
 
 
 def log_event(message, kind="info"):
@@ -207,11 +209,20 @@ async def upload_chunk(upload_id: str,request: Request):
         if item["status"]!="uploading": return JSONResponse({"error":"Upload is not active"},status_code=409)
         temp=Path(item["temp"])
     chunk=await request.body()
-    if not chunk: return {"received":0}
-    with temp.open("ab") as output: output.write(chunk)
+    if not chunk: return {"received":0,"total":item["total"]}
+    supplied=request.headers.get("x-chunk-sha256","").lower()
+    actual=hashlib.sha256(chunk).hexdigest()
+    if not supplied or supplied != actual:
+        return JSONResponse({"error":"Chunk integrity check failed; retry this chunk"},status_code=422)
     with uploads_lock:
         item=uploads.get(upload_id)
         if not item: return JSONResponse({"error":"Upload not found"},status_code=404)
+        if item["status"]!="uploading": return JSONResponse({"error":"Upload is not active"},status_code=409)
+        if item["size"] + len(chunk) > item["total"]:
+            return JSONResponse({"error":"Chunk exceeds expected file size"},status_code=413)
+        with temp.open("ab") as output:
+            output.write(chunk)
+            output.flush()
         item["size"]+=len(chunk); now=time.monotonic(); elapsed=max(now-item["last_chunk"],.001); item["speed"]=len(chunk)/elapsed; item["last_chunk"]=now
         return {"received":item["size"],"total":item["total"]}
 
@@ -232,7 +243,10 @@ async def finish_upload(upload_id: str):
         if not item: return JSONResponse({"error":"Upload not found"},status_code=404)
         if item["status"]!="uploading": return JSONResponse({"error":"Upload is paused or inactive"},status_code=409)
         temp=Path(item["temp"]); target=safe_path(item["path"])/item["name"]
-        if item["size"]!=item["total"]: return JSONResponse({"error":"Upload is incomplete"},status_code=400)
+        if item["size"]!=item["total"] or not temp.is_file() or temp.stat().st_size!=item["total"]:
+            return JSONResponse({"error":"Upload is incomplete or size verification failed"},status_code=400)
+        if target.exists():
+            return JSONResponse({"error":"A file with this name already exists"},status_code=409)
     temp.replace(target)
     with uploads_lock: uploads.pop(upload_id,None)
     log_event(f"Upload completed: {item['name']}","transfer"); return {"id":upload_id,"name":item["name"],"size":item["size"],"status":"complete"}
@@ -278,6 +292,36 @@ async def set_clipboard(request: Request):
     data=await request.json(); text=str(data.get("text") or "")
     with clipboard_lock: clipboard.update({"text":text,"updated":time.time(),"source":str(data.get("source") or "SciNET")})
     log_event("Clipboard updated","system"); return {"ok":True}
+
+@app.websocket("/ws/clipboard")
+async def clipboard_socket(websocket: WebSocket):
+    await websocket.accept()
+    clipboard_clients.add(websocket)
+    try:
+        with clipboard_lock:
+            await websocket.send_json(dict(clipboard))
+        while True:
+            data=await websocket.receive_json()
+            text=str(data.get("text") or "")
+            source=str(data.get("source") or "SciNET")
+            with clipboard_lock:
+                clipboard.update({"text":text,"updated":time.time(),"source":source})
+                payload=dict(clipboard)
+            stale=[]
+            for client in tuple(clipboard_clients):
+                if client is websocket:
+                    continue
+                try:
+                    await client.send_json(payload)
+                except Exception:
+                    stale.append(client)
+            for client in stale:
+                clipboard_clients.discard(client)
+            log_event("Clipboard updated","system")
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        clipboard_clients.discard(websocket)
 
 @app.websocket("/ws")
 async def system_socket(websocket: WebSocket):
