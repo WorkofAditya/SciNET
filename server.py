@@ -157,7 +157,7 @@ async def list_files(path: str = ""):
     try: directory = safe_path(path)
     except ValueError: return JSONResponse({"error":"Invalid path"},status_code=400)
     if not directory.is_dir(): return JSONResponse({"error":"Folder not found"},status_code=404)
-    entries=[file_entry(item) for item in directory.iterdir() if not item.name.startswith(".scinet-")]; entries.sort(key=lambda x:(x["type"]!="folder",x["name"].lower()))
+    entries=[file_entry(item) for item in directory.iterdir() if not item.name.startswith(".scinet-") and item.name != ".gitkeep"]; entries.sort(key=lambda x:(x["type"]!="folder",x["name"].lower()))
     parent=str(Path(path).parent).replace("\\","/") if path else ""
     if parent==".": parent=""
     return {"path":path.replace("\\","/").strip("/"),"parent":parent,"files":entries}
