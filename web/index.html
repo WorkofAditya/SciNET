@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="app-shell">
-<header class="topbar"><a class="brand" href="/"><span class="brand-mark">S</span><span class="brand-name">SCINET</span></a><div class="top-status"><span class="status-dot"></span><span id="connectionText">ONLINE</span></div></header>
+<header class="topbar"><a class="brand" href="/"><span class="brand-mark">S</span><span class="brand-name">SCINET</span></a><div class="topbar-actions"><a class="file-shortcut" href="/files" aria-label="Open file manager" title="File manager">▤</a><div class="top-status"><span class="status-dot"></span><span id="connectionText">ONLINE</span></div></div></header>
 <main>
 <section class="page-head"><div><div class="section-kicker">SYSTEM</div><h1>Overview</h1></div><div class="head-actions"><div class="host-info"><span>HOST</span><strong id="hostname">SCINET-CORE</strong></div><button class="qr-button" id="openQr" type="button" aria-label="Show QR code">QR</button></div></section>
 <section class="stats-grid">
@@ -24,7 +24,7 @@
 </section>
 <section class="card devices-card"><div class="section-head"><div><div class="label">NETWORK</div><h2>Connected devices</h2></div><div class="device-count"><strong id="deviceCount">0</strong><span>devices</span></div></div><div id="deviceList" class="device-list"><div class="empty">Waiting for devices...</div></div></section>
 <section class="phase2-grid">
-<article class="card manager-launch"><div class="manager-launch-icon">▤</div><div class="manager-launch-copy"><div class="label">STORAGE</div><h2>Your files</h2><p>Browse, preview, edit and organize files in shared storage.</p></div><a class="button manager-open" href="/files">OPEN FILE MANAGER <span aria-hidden="true">↗</span></a></article>
+
 <article class="card clipboard-card"><div class="section-head"><div><div class="label">SYNC</div><h2>Clipboard</h2></div><span class="pill" id="clipboardState">READY</span></div><textarea id="clipboardText" aria-label="Live shared clipboard" placeholder="Type here to share text with connected devices..." spellcheck="false"></textarea><p class="clipboard-hint">Changes are shared with connected devices as you type.</p></article>
 <article class="card transfer-card upload-card"><div class="section-head"><div><div class="label">FILES</div><h2>Upload</h2></div><span class="pill">HTTP</span></div><label class="dropzone" id="dropzone"><input type="file" id="fileInput" multiple><span class="upload-mark">↑</span><strong>Choose files</strong><span>or drag and drop</span></label><div id="uploadList" class="upload-list"></div></article>
 </section>
