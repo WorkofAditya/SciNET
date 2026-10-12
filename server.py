@@ -213,7 +213,7 @@ async def preview_file(path: str):
             return JSONResponse({"error": "File not found"}, status_code=404)
         import mimetypes
         media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-        if media_type.startswith("text/") or media_type in {"image/svg+xml", "application/pdf"}:
+        if media_type.startswith(("text/", "image/")) or media_type == "application/pdf":
             return FileResponse(target, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{target.name.replace(chr(34), "")}"'})
         return FileResponse(target, media_type=media_type, filename=target.name)
     except ValueError:
