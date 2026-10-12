@@ -20,9 +20,9 @@
 </section>
 <section class="monitor-grid">
 <article class="card network-card"><div class="section-head"><div><div class="label">NETWORK</div><h2>Traffic</h2></div><span class="pill live">LIVE</span></div><div class="traffic-values"><div><span class="traffic-label">DOWNLOAD</span><strong id="downloadRate">0 B/s</strong></div><div><span class="traffic-label">UPLOAD</span><strong id="uploadRate">0 B/s</strong></div></div><div class="network-chart"><svg viewBox="0 0 600 150" preserveAspectRatio="none"><polyline id="networkLine" points="0,140 600,140" fill="none" /></svg></div><div class="traffic-total"><span>RECEIVED <strong id="receivedTotal">0 B</strong></span><span>SENT <strong id="sentTotal">0 B</strong></span></div></article>
-<article class="card hardware-card"><div class="section-head"><div><div class="label">HARDWARE</div><h2>System load</h2></div></div><div class="hardware-row"><span>CPU</span><strong id="cpuLoad">0%</strong></div><div class="hardware-row"><span>MEMORY</span><strong id="ramLoad">0%</strong></div><div class="hardware-row"><span>DISK</span><strong id="diskLoad">0%</strong></div><div class="hardware-row"><span>NETWORK</span><strong id="networkState">ACTIVE</strong></div></article>
+<article class="card devices-card monitor-devices-card"><div class="section-head"><div><div class="label">NETWORK</div><h2>Connected devices</h2></div><div class="device-count"><strong id="deviceCount">0</strong><span>devices</span></div></div><div id="deviceList" class="device-list"><div class="empty">Waiting for devices...</div></div></article>
 </section>
-<section class="card devices-card"><div class="section-head"><div><div class="label">NETWORK</div><h2>Connected devices</h2></div><div class="device-count"><strong id="deviceCount">0</strong><span>devices</span></div></div><div id="deviceList" class="device-list"><div class="empty">Waiting for devices...</div></div></section>
+
 <section class="phase2-grid">
 
 <article class="card clipboard-card"><div class="section-head"><div><div class="label">SYNC</div><h2>Clipboard</h2></div><span class="pill" id="clipboardState">READY</span></div><textarea id="clipboardText" aria-label="Live shared clipboard" placeholder="Type here to share text with connected devices..." spellcheck="false"></textarea><p class="clipboard-hint">Changes are shared with connected devices as you type.</p></article>
