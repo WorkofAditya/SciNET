@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="app-shell">
-<header class="topbar"><a class="brand" href="/"><span class="brand-mark">S</span><span class="brand-name">SCINET</span></a><div class="top-status"><span class="status-dot"></span><span id="connectionText">ONLINE</span></div></header>
+<header class="topbar"><a class="brand" href="/"><span class="brand-mark">S</span><span class="brand-name">SCINET</span></a><div class="topbar-actions"><a class="file-shortcut" href="/files" aria-label="Open file manager" title="File manager">▤</a><div class="top-status"><span class="status-dot"></span><span id="connectionText">ONLINE</span></div></div></header>
 <main>
 <section class="page-head"><div><div class="section-kicker">SYSTEM</div><h1>Overview</h1></div><div class="head-actions"><div class="host-info"><span>HOST</span><strong id="hostname">SCINET-CORE</strong></div><button class="qr-button" id="openQr" type="button" aria-label="Show QR code">QR</button></div></section>
 <section class="stats-grid">
@@ -20,17 +20,16 @@
 </section>
 <section class="monitor-grid">
 <article class="card network-card"><div class="section-head"><div><div class="label">NETWORK</div><h2>Traffic</h2></div><span class="pill live">LIVE</span></div><div class="traffic-values"><div><span class="traffic-label">DOWNLOAD</span><strong id="downloadRate">0 B/s</strong></div><div><span class="traffic-label">UPLOAD</span><strong id="uploadRate">0 B/s</strong></div></div><div class="network-chart"><svg viewBox="0 0 600 150" preserveAspectRatio="none"><polyline id="networkLine" points="0,140 600,140" fill="none" /></svg></div><div class="traffic-total"><span>RECEIVED <strong id="receivedTotal">0 B</strong></span><span>SENT <strong id="sentTotal">0 B</strong></span></div></article>
-<article class="card hardware-card"><div class="section-head"><div><div class="label">HARDWARE</div><h2>System load</h2></div></div><div class="hardware-row"><span>CPU</span><strong id="cpuLoad">0%</strong></div><div class="hardware-row"><span>MEMORY</span><strong id="ramLoad">0%</strong></div><div class="hardware-row"><span>DISK</span><strong id="diskLoad">0%</strong></div><div class="hardware-row"><span>NETWORK</span><strong id="networkState">ACTIVE</strong></div></article>
+<article class="card devices-card monitor-devices-card"><div class="section-head"><div><div class="label">NETWORK</div><h2>Connected devices</h2></div><div class="device-count"><strong id="deviceCount">0</strong><span>devices</span></div></div><div id="deviceList" class="device-list"><div class="empty">Waiting for devices...</div></div></article>
 </section>
-<section class="card devices-card"><div class="section-head"><div><div class="label">NETWORK</div><h2>Connected devices</h2></div><div class="device-count"><strong id="deviceCount">0</strong><span>devices</span></div></div><div id="deviceList" class="device-list"><div class="empty">Waiting for devices...</div></div></section>
+
 <section class="phase2-grid">
-<article class="card file-manager"><div class="section-head"><div><div class="label">STORAGE</div><h2>File manager</h2><div class="breadcrumbs" id="breadcrumbs">STORAGE</div></div><div class="manager-actions"><button class="button" id="newFolder">NEW FOLDER</button><button class="button" id="upFolder">UP</button></div></div><div id="fileList" class="file-list"><div class="empty">Loading...</div></div></article>
-<article class="card clipboard-card"><div class="section-head"><div><div class="label">SYNC</div><h2>Clipboard</h2></div><span class="pill" id="clipboardState">READY</span></div><textarea id="clipboardText" placeholder="Text shared between SciNET devices..."></textarea><div class="clipboard-actions"><button class="button" id="getClipboard">GET FROM SCINET</button><button class="button" id="setClipboard">SEND TO SCINET</button></div></article>
+
+<article class="card clipboard-card"><div class="section-head"><div><div class="label">SYNC</div><h2>Clipboard</h2></div><span class="pill" id="clipboardState">READY</span></div><textarea id="clipboardText" aria-label="Live shared clipboard" placeholder="Type here to share text with connected devices..." spellcheck="false"></textarea><p class="clipboard-hint">Changes are shared with connected devices as you type.</p></article>
+<article class="card transfer-card upload-card"><div class="section-head"><div><div class="label">FILES</div><h2>Upload</h2></div><span class="pill">HTTP</span></div><label class="dropzone" id="dropzone"><input type="file" id="fileInput" multiple><span class="upload-mark">↑</span><strong>Choose files</strong><span>or drag and drop</span></label><div id="uploadList" class="upload-list"></div></article>
 </section>
-<section class="card events-card"><div class="section-head"><div><div class="label">SYSTEM</div><h2>Activity</h2></div><button class="button" id="clearEvents">CLEAR</button></div><div id="eventList" class="event-list"><div class="empty">No activity yet.</div></div></section>
-<section class="transfer-grid">
-<article class="card transfer-card"><div class="section-head"><div><div class="label">FILES</div><h2>Upload</h2></div><span class="pill">HTTP</span></div><label class="dropzone" id="dropzone"><input type="file" id="fileInput" multiple><span class="upload-mark">↑</span><strong>Choose files</strong><span>or drag and drop</span></label><div id="uploadList" class="upload-list"></div></article>
-<article class="card transfer-card"><div class="section-head"><div><div class="label">TRANSFER SERVICE</div><h2>FTP</h2></div><span class="pill live">ACTIVE</span></div><div class="ftp-grid"><div><span class="ftp-label">ADDRESS</span><code id="ftpAddress">ftp://SCINET-CORE:2121</code></div><div><span class="ftp-label">USERNAME</span><code>scinet</code></div><div><span class="ftp-label">PASSWORD</span><code>scinet</code></div></div><p class="ftp-note">FTP uses the same SciNET storage directory.</p></article>
+
+<section class="transfer-grid lower-grid"><article class="card events-card"><div class="section-head"><div><div class="label">SYSTEM</div><h2>Activity</h2></div><button class="button" id="clearEvents">CLEAR</button></div><div id="eventList" class="event-list"><div class="empty">No activity yet.</div></div></article><article class="card transfer-card"><div class="section-head"><div><div class="label">TRANSFER SERVICE</div><h2>FTP</h2></div><span class="pill live">ACTIVE</span></div><div class="ftp-grid"><div><span class="ftp-label">ADDRESS</span><code id="ftpAddress">ftp://SCINET-CORE:2121</code></div><div><span class="ftp-label">USERNAME</span><code>scinet</code></div><div><span class="ftp-label">PASSWORD</span><code>scinet</code></div></div><p class="ftp-note">FTP uses the same SciNET storage directory.</p></article>
 </section>
 </main><footer>SCINET</footer>
 </div>

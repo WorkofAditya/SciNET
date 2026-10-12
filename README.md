@@ -5,7 +5,9 @@ SciNET Link is a local dashboard and file-transfer server for the SciNET PC and 
 ## Features
 
 - Live CPU, RAM, disk and uptime monitoring
-- Local file uploads and downloads
+- Local file uploads and downloads with SHA-256 chunk verification and size checks
+- A dedicated `shared_files` directory for transferred files, separate from application source
+- Live clipboard sync across connected browsers with no send/receive buttons
 - Browser-based dashboard for phones and PCs
 - Windows launcher
 - Designed for a private phone-hotspot network
@@ -25,8 +27,8 @@ SciNET Link is intended to use a local hostname such as `scinet.local`. Local ho
 
 ## Storage
 
-Files uploaded through the dashboard are stored in the `storage` directory. The directory is intentionally ignored by Git.
+Files uploaded through the dashboard and FTP are stored in `shared_files`. This folder is created automatically and is separate from the source code, so the file manager only exposes the intended shared storage area. Its `.gitkeep` file tracks the empty directory without tracking transferred files.
 
 ## Network note
 
-The server listens on the PC's network interfaces so a phone on the same private hotspot can reach it. Do not expose this server to an untrusted network.
+The server listens on the PC's network interfaces so a phone on the same private hotspot can reach it. Do not expose this server to an untrusted network. FTP currently uses the configured local credentials and should only be used on a trusted private network.

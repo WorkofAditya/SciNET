@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import asyncio
 import io
+import json
+import hashlib
 import socket
 import threading
 import time
@@ -18,7 +20,13 @@ from pyftpdlib.handlers import FTPHandler
 from pyftpdlib.servers import FTPServer
 
 BASE_DIR = Path(__file__).resolve().parent
-STORAGE_DIR = BASE_DIR / "storage"
+STORAGE_DIR = BASE_DIR / "shared_files"
+DEVICE_NAMES_FILE = BASE_DIR / "device_names.json"
+device_names_lock = threading.Lock()
+try:
+    device_names = json.loads(DEVICE_NAMES_FILE.read_text(encoding="utf-8")) if DEVICE_NAMES_FILE.exists() else {}
+except (OSError, ValueError):
+    device_names = {}
 WEB_DIR = BASE_DIR / "web"
 STORAGE_DIR.mkdir(exist_ok=True)
 started_at = time.time()
@@ -33,6 +41,7 @@ events = []
 events_lock = threading.Lock()
 clipboard = {"text": "", "updated": 0, "source": ""}
 clipboard_lock = threading.Lock()
+clipboard_clients = set()
 
 
 def log_event(message, kind="info"):
@@ -140,12 +149,40 @@ def system_info():
         if ip not in unique or device.get("type") == "Web": unique[ip] = device
     host = {"id": "host", "ip": local_ip(), "port": 8000, "type": "Host", "agent": socket.gethostname(), "connected": started_at}
     devices = [host] + [d for d in unique.values() if d.get("ip") != host["ip"]]
+    with device_names_lock:
+        for device in devices:
+            device["name"] = device_names.get(device.get("id"), device.get("agent") or device.get("type") or "Device")
     with uploads_lock: active_uploads = [dict(item) for item in uploads.values() if item["status"] in {"uploading", "paused"}]
     return {"hostname": socket.gethostname(), "cpu": psutil.cpu_percent(interval=None), "memory": {"percent": memory.percent, "used": memory.used, "total": memory.total}, "disk": {"percent": disk.percent, "used": disk.used, "total": disk.total}, "network": {"sent": net.bytes_sent, "received": net.bytes_recv}, "uptime": int(time.time() - started_at), "devices": devices, "device_count": len(devices), "uploads": active_uploads}
 
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(): return (WEB_DIR / "index.html").read_text(encoding="utf-8")
+
+@app.get("/files", response_class=HTMLResponse)
+async def file_manager_page(): return (WEB_DIR / "files.html").read_text(encoding="utf-8")
+
+@app.put("/api/device-name")
+async def set_device_name(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    device_id = f"web:{client.host}"
+    data = await request.json()
+    name = str(data.get("name") or "").strip()[:40]
+    if not name:
+        return JSONResponse({"error": "Device name cannot be empty"}, status_code=400)
+    with connected_lock:
+        if device_id not in connected_devices:
+            return JSONResponse({"error": "This browser is not connected to the dashboard"}, status_code=409)
+    with device_names_lock:
+        device_names[device_id] = name
+        try:
+            DEVICE_NAMES_FILE.write_text(json.dumps(device_names, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            return JSONResponse({"error": "Could not save device name"}, status_code=500)
+    log_event(f"Device renamed: {name}", "system")
+    return {"ok": True, "name": name}
 
 @app.get("/api/system")
 async def api_system(): return system_info()
@@ -155,10 +192,65 @@ async def list_files(path: str = ""):
     try: directory = safe_path(path)
     except ValueError: return JSONResponse({"error":"Invalid path"},status_code=400)
     if not directory.is_dir(): return JSONResponse({"error":"Folder not found"},status_code=404)
-    entries=[file_entry(item) for item in directory.iterdir() if not item.name.startswith(".scinet-")]; entries.sort(key=lambda x:(x["type"]!="folder",x["name"].lower()))
+    entries=[file_entry(item) for item in directory.iterdir() if not item.name.startswith(".scinet-") and item.name != ".gitkeep"]; entries.sort(key=lambda x:(x["type"]!="folder",x["name"].lower()))
     parent=str(Path(path).parent).replace("\\","/") if path else ""
     if parent==".": parent=""
     return {"path":path.replace("\\","/").strip("/"),"parent":parent,"files":entries}
+
+@app.get("/api/files/content")
+async def read_text_file(path: str):
+    try:
+        target = safe_path(path)
+        if not target.is_file():
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        if target.stat().st_size > 2 * 1024 * 1024:
+            return JSONResponse({"error": "Text editor supports files up to 2 MB"}, status_code=413)
+        raw = target.read_bytes()
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return JSONResponse({"error": "This file is not valid UTF-8 text"}, status_code=415)
+        return {"path": target.relative_to(STORAGE_DIR).as_posix(), "name": target.name, "content": content, "size": len(raw)}
+    except ValueError:
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+
+
+@app.put("/api/files/content")
+async def write_text_file(request: Request):
+    data = await request.json()
+    try:
+        target = safe_path(data.get("path", ""))
+        content = data.get("content")
+        if not target.is_file():
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        if not isinstance(content, str):
+            return JSONResponse({"error": "Text content is required"}, status_code=400)
+        encoded = content.encode("utf-8")
+        if len(encoded) > 2 * 1024 * 1024:
+            return JSONResponse({"error": "Text editor supports files up to 2 MB"}, status_code=413)
+        target.write_bytes(encoded)
+        log_event(f"Edited: {target.name}", "file")
+        return {"ok": True, "size": len(encoded)}
+    except ValueError:
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+    except OSError:
+        return JSONResponse({"error": "Could not save file"}, status_code=500)
+
+
+@app.get("/api/files/preview")
+async def preview_file(path: str):
+    try:
+        target = safe_path(path)
+        if not target.is_file():
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        import mimetypes
+        media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if media_type.startswith(("text/", "image/")) or media_type == "application/pdf":
+            return FileResponse(target, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{target.name.replace(chr(34), "")}"'})
+        return FileResponse(target, media_type=media_type, filename=target.name)
+    except ValueError:
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+
 
 @app.post("/api/folders")
 async def create_folder(request: Request):
@@ -207,11 +299,20 @@ async def upload_chunk(upload_id: str,request: Request):
         if item["status"]!="uploading": return JSONResponse({"error":"Upload is not active"},status_code=409)
         temp=Path(item["temp"])
     chunk=await request.body()
-    if not chunk: return {"received":0}
-    with temp.open("ab") as output: output.write(chunk)
+    if not chunk: return {"received":0,"total":item["total"]}
+    supplied=request.headers.get("x-chunk-sha256","").lower()
+    actual=hashlib.sha256(chunk).hexdigest()
+    if not supplied or supplied != actual:
+        return JSONResponse({"error":"Chunk integrity check failed; retry this chunk"},status_code=422)
     with uploads_lock:
         item=uploads.get(upload_id)
         if not item: return JSONResponse({"error":"Upload not found"},status_code=404)
+        if item["status"]!="uploading": return JSONResponse({"error":"Upload is not active"},status_code=409)
+        if item["size"] + len(chunk) > item["total"]:
+            return JSONResponse({"error":"Chunk exceeds expected file size"},status_code=413)
+        with temp.open("ab") as output:
+            output.write(chunk)
+            output.flush()
         item["size"]+=len(chunk); now=time.monotonic(); elapsed=max(now-item["last_chunk"],.001); item["speed"]=len(chunk)/elapsed; item["last_chunk"]=now
         return {"received":item["size"],"total":item["total"]}
 
@@ -232,7 +333,10 @@ async def finish_upload(upload_id: str):
         if not item: return JSONResponse({"error":"Upload not found"},status_code=404)
         if item["status"]!="uploading": return JSONResponse({"error":"Upload is paused or inactive"},status_code=409)
         temp=Path(item["temp"]); target=safe_path(item["path"])/item["name"]
-        if item["size"]!=item["total"]: return JSONResponse({"error":"Upload is incomplete"},status_code=400)
+        if item["size"]!=item["total"] or not temp.is_file() or temp.stat().st_size!=item["total"]:
+            return JSONResponse({"error":"Upload is incomplete or size verification failed"},status_code=400)
+        if target.exists():
+            return JSONResponse({"error":"A file with this name already exists"},status_code=409)
     temp.replace(target)
     with uploads_lock: uploads.pop(upload_id,None)
     log_event(f"Upload completed: {item['name']}","transfer"); return {"id":upload_id,"name":item["name"],"size":item["size"],"status":"complete"}
@@ -279,6 +383,36 @@ async def set_clipboard(request: Request):
     with clipboard_lock: clipboard.update({"text":text,"updated":time.time(),"source":str(data.get("source") or "SciNET")})
     log_event("Clipboard updated","system"); return {"ok":True}
 
+@app.websocket("/ws/clipboard")
+async def clipboard_socket(websocket: WebSocket):
+    await websocket.accept()
+    clipboard_clients.add(websocket)
+    try:
+        with clipboard_lock:
+            await websocket.send_json(dict(clipboard))
+        while True:
+            data=await websocket.receive_json()
+            text=str(data.get("text") or "")
+            source=str(data.get("source") or "SciNET")
+            with clipboard_lock:
+                clipboard.update({"text":text,"updated":time.time(),"source":source})
+                payload=dict(clipboard)
+            stale=[]
+            for client in tuple(clipboard_clients):
+                if client is websocket:
+                    continue
+                try:
+                    await client.send_json(payload)
+                except Exception:
+                    stale.append(client)
+            for client in stale:
+                clipboard_clients.discard(client)
+            log_event("Clipboard updated","system")
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        clipboard_clients.discard(websocket)
+
 @app.websocket("/ws")
 async def system_socket(websocket: WebSocket):
     await websocket.accept(); client=websocket.client; ip=client.host if client else "unknown"; device_id=f"web:{ip}"
@@ -286,7 +420,13 @@ async def system_socket(websocket: WebSocket):
     with connected_lock: connected_devices[device_id]={"id":device_id,"ip":ip,"port":client.port if client else 0,"type":"Web","agent":user_agent[:160],"connected":time.time()}
     log_event(f"Web device connected from {ip}","connect")
     try:
-        while True: await websocket.send_json(system_info()); await asyncio.sleep(1)
+        while True:
+            with connected_lock:
+                has_dashboard = any(item.get("type") == "Web" for item in connected_devices.values())
+            if not has_dashboard:
+                break
+            payload = system_info(); payload["self_device_id"] = device_id; await websocket.send_json(payload)
+            await asyncio.sleep(1)
     except (WebSocketDisconnect,Exception): pass
     finally:
         with connected_lock: connected_devices.pop(device_id,None)
