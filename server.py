@@ -149,6 +149,9 @@ def system_info():
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(): return (WEB_DIR / "index.html").read_text(encoding="utf-8")
 
+@app.get("/files", response_class=HTMLResponse)
+async def file_manager_page(): return (WEB_DIR / "files.html").read_text(encoding="utf-8")
+
 @app.get("/api/system")
 async def api_system(): return system_info()
 
@@ -161,6 +164,61 @@ async def list_files(path: str = ""):
     parent=str(Path(path).parent).replace("\\","/") if path else ""
     if parent==".": parent=""
     return {"path":path.replace("\\","/").strip("/"),"parent":parent,"files":entries}
+
+@app.get("/api/files/content")
+async def read_text_file(path: str):
+    try:
+        target = safe_path(path)
+        if not target.is_file():
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        if target.stat().st_size > 2 * 1024 * 1024:
+            return JSONResponse({"error": "Text editor supports files up to 2 MB"}, status_code=413)
+        raw = target.read_bytes()
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return JSONResponse({"error": "This file is not valid UTF-8 text"}, status_code=415)
+        return {"path": target.relative_to(STORAGE_DIR).as_posix(), "name": target.name, "content": content, "size": len(raw)}
+    except ValueError:
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+
+
+@app.put("/api/files/content")
+async def write_text_file(request: Request):
+    data = await request.json()
+    try:
+        target = safe_path(data.get("path", ""))
+        content = data.get("content")
+        if not target.is_file():
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        if not isinstance(content, str):
+            return JSONResponse({"error": "Text content is required"}, status_code=400)
+        encoded = content.encode("utf-8")
+        if len(encoded) > 2 * 1024 * 1024:
+            return JSONResponse({"error": "Text editor supports files up to 2 MB"}, status_code=413)
+        target.write_bytes(encoded)
+        log_event(f"Edited: {target.name}", "file")
+        return {"ok": True, "size": len(encoded)}
+    except ValueError:
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+    except OSError:
+        return JSONResponse({"error": "Could not save file"}, status_code=500)
+
+
+@app.get("/api/files/preview")
+async def preview_file(path: str):
+    try:
+        target = safe_path(path)
+        if not target.is_file():
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        import mimetypes
+        media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if media_type.startswith("text/") or media_type in {"image/svg+xml", "application/pdf"}:
+            return FileResponse(target, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{target.name.replace(chr(34), "")}"'})
+        return FileResponse(target, media_type=media_type, filename=target.name)
+    except ValueError:
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+
 
 @app.post("/api/folders")
 async def create_folder(request: Request):
