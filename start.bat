@@ -3,7 +3,9 @@ setlocal
 cd /d "%~dp0"
 
 if /i "%~1"=="--hidden-worker" goto run_server
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$args = '/d /c ""' + $env:SCINET_START_BAT + '" --hidden-worker"' ; Start-Process -FilePath $env:ComSpec -ArgumentList $args -WorkingDirectory $env:SCINET_START_DIR -WindowStyle Hidden" 
+set "SCINET_START_BAT=%~f0"
+set "SCINET_START_DIR=%~dp0"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$cmdArgs = '/d /c ""' + $env:SCINET_START_BAT + '" --hidden-worker"'; Start-Process -FilePath $env:ComSpec -ArgumentList $cmdArgs -WorkingDirectory $env:SCINET_START_DIR -WindowStyle Hidden"
 exit /b
 
 :run_server
