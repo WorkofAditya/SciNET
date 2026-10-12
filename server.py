@@ -388,7 +388,13 @@ async def system_socket(websocket: WebSocket):
     with connected_lock: connected_devices[device_id]={"id":device_id,"ip":ip,"port":client.port if client else 0,"type":"Web","agent":user_agent[:160],"connected":time.time()}
     log_event(f"Web device connected from {ip}","connect")
     try:
-        while True: await websocket.send_json(system_info()); await asyncio.sleep(1)
+        while True:
+            with connected_lock:
+                has_dashboard = any(item.get("type") == "Web" for item in connected_devices.values())
+            if not has_dashboard:
+                break
+            await websocket.send_json(system_info())
+            await asyncio.sleep(5)
     except (WebSocketDisconnect,Exception): pass
     finally:
         with connected_lock: connected_devices.pop(device_id,None)
