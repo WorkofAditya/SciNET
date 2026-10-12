@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import asyncio
 import io
+import json
 import hashlib
 import socket
 import threading
@@ -20,6 +21,12 @@ from pyftpdlib.servers import FTPServer
 
 BASE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = BASE_DIR / "shared_files"
+DEVICE_NAMES_FILE = BASE_DIR / "device_names.json"
+device_names_lock = threading.Lock()
+try:
+    device_names = json.loads(DEVICE_NAMES_FILE.read_text(encoding="utf-8")) if DEVICE_NAMES_FILE.exists() else {}
+except (OSError, ValueError):
+    device_names = {}
 WEB_DIR = BASE_DIR / "web"
 STORAGE_DIR.mkdir(exist_ok=True)
 started_at = time.time()
@@ -142,6 +149,9 @@ def system_info():
         if ip not in unique or device.get("type") == "Web": unique[ip] = device
     host = {"id": "host", "ip": local_ip(), "port": 8000, "type": "Host", "agent": socket.gethostname(), "connected": started_at}
     devices = [host] + [d for d in unique.values() if d.get("ip") != host["ip"]]
+    with device_names_lock:
+        for device in devices:
+            device["name"] = device_names.get(device.get("id"), device.get("agent") or device.get("type") or "Device")
     with uploads_lock: active_uploads = [dict(item) for item in uploads.values() if item["status"] in {"uploading", "paused"}]
     return {"hostname": socket.gethostname(), "cpu": psutil.cpu_percent(interval=None), "memory": {"percent": memory.percent, "used": memory.used, "total": memory.total}, "disk": {"percent": disk.percent, "used": disk.used, "total": disk.total}, "network": {"sent": net.bytes_sent, "received": net.bytes_recv}, "uptime": int(time.time() - started_at), "devices": devices, "device_count": len(devices), "uploads": active_uploads}
 
@@ -151,6 +161,28 @@ async def dashboard(): return (WEB_DIR / "index.html").read_text(encoding="utf-8
 
 @app.get("/files", response_class=HTMLResponse)
 async def file_manager_page(): return (WEB_DIR / "files.html").read_text(encoding="utf-8")
+
+@app.put("/api/device-name")
+async def set_device_name(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    device_id = f"web:{client.host}"
+    data = await request.json()
+    name = str(data.get("name") or "").strip()[:40]
+    if not name:
+        return JSONResponse({"error": "Device name cannot be empty"}, status_code=400)
+    with connected_lock:
+        if device_id not in connected_devices:
+            return JSONResponse({"error": "This browser is not connected to the dashboard"}, status_code=409)
+    with device_names_lock:
+        device_names[device_id] = name
+        try:
+            DEVICE_NAMES_FILE.write_text(json.dumps(device_names, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            return JSONResponse({"error": "Could not save device name"}, status_code=500)
+    log_event(f"Device renamed: {name}", "system")
+    return {"ok": True, "name": name}
 
 @app.get("/api/system")
 async def api_system(): return system_info()
