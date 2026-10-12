@@ -393,7 +393,7 @@ async def system_socket(websocket: WebSocket):
                 has_dashboard = any(item.get("type") == "Web" for item in connected_devices.values())
             if not has_dashboard:
                 break
-            await websocket.send_json(system_info())
+            payload = system_info(); payload["self_device_id"] = device_id; await websocket.send_json(payload)
             await asyncio.sleep(1)
     except (WebSocketDisconnect,Exception): pass
     finally:
