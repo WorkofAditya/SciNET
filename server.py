@@ -394,7 +394,7 @@ async def system_socket(websocket: WebSocket):
             if not has_dashboard:
                 break
             await websocket.send_json(system_info())
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)
     except (WebSocketDisconnect,Exception): pass
     finally:
         with connected_lock: connected_devices.pop(device_id,None)
