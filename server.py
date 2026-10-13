@@ -1,4 +1,8 @@
 from contextlib import asynccontextmanager
+import ctypes
+import ipaddress
+import platform
+import subprocess
 from pathlib import Path
 import asyncio
 import io
@@ -186,6 +190,71 @@ async def set_device_name(request: Request):
 
 @app.get("/api/system")
 async def api_system(): return system_info()
+
+@app.get("/control", response_class=HTMLResponse)
+async def control_panel_page(): return (WEB_DIR / "control.html").read_text(encoding="utf-8")
+
+@app.get("/manifest.webmanifest")
+async def pwa_manifest(): return FileResponse(WEB_DIR / "manifest.webmanifest", media_type="application/manifest+json")
+
+@app.get("/sw.js")
+async def service_worker():
+    return FileResponse(WEB_DIR / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
+
+@app.post("/api/control")
+async def control_host(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Controls are only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    if platform.system() != "Windows":
+        return JSONResponse({"error": "Host controls are supported on Windows only"}, status_code=501)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
+    action = str(data.get("action") or "").strip().lower()
+    media_keys = {
+        "play-pause": 0xB3, "next": 0xB0, "previous": 0xB1,
+        "volume-up": 0xAF, "volume-down": 0xAE, "mute": 0xAD,
+    }
+    user32 = ctypes.windll.user32
+    if action in media_keys:
+        key = media_keys[action]
+        user32.keybd_event(key, 0, 0, 0)
+        user32.keybd_event(key, 0, 2, 0)
+        log_event(f"Remote control: {action}", "control")
+        return {"ok": True, "action": action}
+    if action == "lock":
+        if not user32.LockWorkStation():
+            return JSONResponse({"error": "Windows could not lock the workstation"}, status_code=500)
+        log_event("PC locked remotely", "control")
+        return {"ok": True, "action": action}
+    if action == "sleep":
+        try:
+            result = ctypes.windll.powrprof.SetSuspendState(False, True, False)
+        except Exception:
+            result = False
+        if not result:
+            return JSONResponse({"error": "Windows could not enter sleep. Check system power settings."}, status_code=500)
+        log_event("PC put to sleep remotely", "control")
+        return {"ok": True, "action": action}
+    if action == "shutdown":
+        if str(data.get("confirm") or "") != "SHUTDOWN":
+            return JSONResponse({"error": "Shutdown confirmation is required"}, status_code=400)
+        try:
+            subprocess.Popen(["shutdown.exe", "/s", "/t", "5"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError:
+            return JSONResponse({"error": "Could not request Windows shutdown"}, status_code=500)
+        log_event("PC shutdown requested remotely", "control")
+        return {"ok": True, "action": action, "delay_seconds": 5}
+    return JSONResponse({"error": "Unknown control action"}, status_code=400)
+
 
 @app.get("/api/files")
 async def list_files(path: str = ""):
