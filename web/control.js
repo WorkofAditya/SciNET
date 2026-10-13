@@ -88,7 +88,7 @@ if(textInput){
   if(composingText)return;
   if(heldModifiers.size){
    const value=textInput.value;if(!value)return;textInput.value='';
-   const modifiers=consumeModifiers();if(modifiers.includes('meta'))cancelWinTap();
+   const modifiers=consumeModifiers();
    const chars=Array.from(value);
    textQueue=textQueue.then(async()=>{for(const char of chars){const key=keyNameFromEvent(char);if(key)await requestControl({action:'key',key,modifiers},true);else await requestControl({action:'type',text:char},true)}}).then(()=>showMessage('Shortcut sent to PC'));
    return;
