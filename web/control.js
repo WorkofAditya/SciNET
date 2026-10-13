@@ -26,28 +26,14 @@ function clearModifiers(){
  modifierButtons.forEach(button=>button.classList.remove('active'));
 }
 function consumeModifiers(){const modifiers=[...heldModifiers];clearModifiers();return modifiers;}
-let winTapTimer=null;
-function cancelWinTap(){if(winTapTimer){clearTimeout(winTapTimer);winTapTimer=null}}
 modifierButtons.forEach(button=>button.addEventListener('pointerdown',event=>event.preventDefault()));
 modifierButtons.forEach(button=>button.addEventListener('click',()=>{
  const name=button.dataset.modifier;
- if(name==='meta'){
-  if(heldModifiers.has(name)){
-   cancelWinTap();heldModifiers.delete(name);button.classList.remove('active');sendKey('meta');
-  }else{
-   heldModifiers.add(name);button.classList.add('active');
-   winTapTimer=setTimeout(()=>{
-    winTapTimer=null;
-    if(heldModifiers.has('meta')){heldModifiers.delete('meta');button.classList.remove('active');sendKey('meta')}
-   },650);
-  }
-  return;
- }
  if(heldModifiers.has(name)){heldModifiers.delete(name);button.classList.remove('active')}
  else{heldModifiers.add(name);button.classList.add('active')}
 }));
-window.addEventListener('pagehide',()=>{cancelWinTap();clearModifiers()});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelWinTap();clearModifiers()}});
+window.addEventListener('pagehide',clearModifiers);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearModifiers()});
 const textInput=$('remoteTextInput'),openKeyboard=$('openKeyboard');
 if(textInput&&openKeyboard)openKeyboard.addEventListener('click',()=>textInput.focus({preventScroll:true}));
 let textQueue=Promise.resolve();
@@ -85,7 +71,7 @@ if(textInput){
  textInput.addEventListener('keydown',event=>{
   const key=keyNameFromEvent(event.key);
   if(heldModifiers.size&&key){
-   event.preventDefault();const modifiers=consumeModifiers();if(modifiers.includes('meta'))cancelWinTap();sendKey(key,modifiers);return;
+   event.preventDefault();const modifiers=consumeModifiers();sendKey(key,modifiers);return;
   }
   if(event.key==='Backspace'||event.key==='Delete'){
    if(!textInput.value){event.preventDefault();sendKey(event.key==='Backspace'?'backspace':'delete',consumeModifiers())}return;
