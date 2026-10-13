@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "SciNET Link",
+  "short_name": "SciNET",
+  "description": "Local device sharing and remote PC control",
+  "start_url": "/control",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0c0f",
+  "theme_color": "#0b0d10",
+  "icons": [
+    {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}
