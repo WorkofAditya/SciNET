@@ -26,17 +26,42 @@ function clearModifiers(){
  modifierButtons.forEach(button=>button.classList.remove('active'));
 }
 function consumeModifiers(){const modifiers=[...heldModifiers];clearModifiers();return modifiers;}
+let winTapTimer=null;
+function cancelWinTap(){if(winTapTimer){clearTimeout(winTapTimer);winTapTimer=null}}
+modifierButtons.forEach(button=>button.addEventListener('pointerdown',event=>event.preventDefault()));
 modifierButtons.forEach(button=>button.addEventListener('click',()=>{
  const name=button.dataset.modifier;
+ if(name==='meta'){
+  if(heldModifiers.has(name)){
+   cancelWinTap();heldModifiers.delete(name);button.classList.remove('active');sendKey('meta');
+  }else{
+   heldModifiers.add(name);button.classList.add('active');
+   winTapTimer=setTimeout(()=>{
+    winTapTimer=null;
+    if(heldModifiers.has('meta')){heldModifiers.delete('meta');button.classList.remove('active');sendKey('meta')}
+   },650);
+  }
+  return;
+ }
  if(heldModifiers.has(name)){heldModifiers.delete(name);button.classList.remove('active')}
  else{heldModifiers.add(name);button.classList.add('active')}
 }));
-window.addEventListener('pagehide',clearModifiers);
-document.addEventListener('visibilitychange',()=>{if(document.hidden)clearModifiers()});
+window.addEventListener('pagehide',()=>{cancelWinTap();clearModifiers()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelWinTap();clearModifiers()}});
 const textInput=$('remoteTextInput'),openKeyboard=$('openKeyboard');
 if(textInput&&openKeyboard)openKeyboard.addEventListener('click',()=>textInput.focus({preventScroll:true}));
 let textQueue=Promise.resolve();
 function queueText(value){if(!value)return;textQueue=textQueue.then(()=>requestControl({action:'type',text:value},true)).then(result=>{if(result)showMessage('Text sent to PC')})}
+let composingText=false;
+function sendCommittedText(){
+ if(!textInput||composingText||heldModifiers.size)return;
+ const value=textInput.value;
+ const boundary=Math.max(value.lastIndexOf(' '),value.lastIndexOf('\\n'),value.lastIndexOf('\\t'));
+ if(boundary<0)return;
+ const committed=value.slice(0,boundary+1);
+ textInput.value=value.slice(boundary+1);
+ queueText(committed);
+}
 function keyNameFromEvent(key){
  const k=String(key||'').toLowerCase();
  if(k==='escape')return 'esc';
@@ -54,36 +79,35 @@ async function sendKey(key,modifiers=[]){
  else showMessage('Key sent: '+key.toUpperCase());
 }
 if(textInput){
+ document.querySelectorAll('.keyboard-section button,.keyboard-section summary').forEach(control=>control.addEventListener('pointerdown',event=>event.preventDefault()));
+ textInput.addEventListener('compositionstart',()=>{composingText=true});
+ textInput.addEventListener('compositionend',()=>{composingText=false;sendCommittedText()});
  textInput.addEventListener('keydown',event=>{
   const key=keyNameFromEvent(event.key);
   if(heldModifiers.size&&key){
-   event.preventDefault();const modifiers=consumeModifiers();sendKey(key,modifiers);return;
+   event.preventDefault();const modifiers=consumeModifiers();if(modifiers.includes('meta'))cancelWinTap();sendKey(key,modifiers);return;
   }
   if(event.key==='Backspace'||event.key==='Delete'){
-   event.preventDefault();sendKey(event.key==='Backspace'?'backspace':'delete',consumeModifiers());return;
+   if(!textInput.value){event.preventDefault();sendKey(event.key==='Backspace'?'backspace':'delete',consumeModifiers())}return;
   }
-  if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendKey('enter',consumeModifiers());return}
+  if(event.key==='Enter'&&!event.shiftKey){
+   event.preventDefault();if(textInput.value){queueText(textInput.value);textInput.value=''}sendKey('enter',consumeModifiers());return;
+  }
   if(event.key==='Escape'){event.preventDefault();textInput.blur()}
  });
  textInput.addEventListener('beforeinput',event=>{
-  if(event.inputType==='deleteContentBackward'||event.inputType==='deleteContentForward'){
-   if(!textInput.value){event.preventDefault();sendKey(event.inputType==='deleteContentBackward'?'backspace':'delete',consumeModifiers())}
-  }
+  if((event.inputType==='deleteContentBackward'||event.inputType==='deleteContentForward')&&!textInput.value){event.preventDefault();sendKey(event.inputType==='deleteContentBackward'?'backspace':'delete',consumeModifiers())}
  });
  textInput.addEventListener('input',()=>{
-  const value=textInput.value;if(!value)return;
-  textInput.value='';
+  if(composingText)return;
   if(heldModifiers.size){
-   const modifiers=consumeModifiers();
+   const value=textInput.value;if(!value)return;textInput.value='';
+   const modifiers=consumeModifiers();if(modifiers.includes('meta'))cancelWinTap();
    const chars=Array.from(value);
-   textQueue=textQueue.then(async()=>{
-    for(const char of chars){
-     const key=keyNameFromEvent(char);
-     if(key)await requestControl({action:'key',key,modifiers},true);
-     else await requestControl({action:'type',text:char},true);
-    }
-   }).then(()=>showMessage('Shortcut sent to PC'));
-  }else queueText(value);
+   textQueue=textQueue.then(async()=>{for(const char of chars){const key=keyNameFromEvent(char);if(key)await requestControl({action:'key',key,modifiers},true);else await requestControl({action:'type',text:char},true)}}).then(()=>showMessage('Shortcut sent to PC'));
+   return;
+  }
+  sendCommittedText();
  });
 }
 document.querySelectorAll('[data-key]').forEach(button=>button.addEventListener('click',()=>{
@@ -98,7 +122,7 @@ trackpad.addEventListener('pointermove',event=>{
  if(pointer!==event.pointerId)return;
  const dx=event.clientX-lastX,dy=event.clientY-lastY;lastX=event.clientX;lastY=event.clientY;
  if(Math.hypot(event.clientX-startX,event.clientY-startY)>5)moved=true;
- if(dx||dy){const scale=window.innerWidth<600?1.65:1.2;requestControl({action:'mouse-move',dx:Math.round(dx*scale),dy:Math.round(dy*scale)},true)}
+ if(dx||dy){const scale=window.innerWidth<600?3.0:2.0;requestControl({action:'mouse-move',dx:Math.round(dx*scale),dy:Math.round(dy*scale)},true)}
 });
 async function finishPad(event){
  if(pointer!==event.pointerId)return;
