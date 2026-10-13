@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0d10"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/static/icon.svg" type="image/svg+xml"><title>SciNET · PC Control</title><link rel="stylesheet" href="/static/style.css">
+</head>
+<body><div class="app-shell">
+<header class="topbar"><a class="brand" href="/"><span class="brand-mark">S</span><span class="brand-name">SCINET</span></a><div class="files-top-actions"><a class="file-shortcut" href="/files" aria-label="File manager" title="File manager">▤</a><button class="file-shortcut" id="installApp" type="button" hidden aria-label="Install SciNET" title="Install SciNET">↓</button><span class="top-status"><span class="status-dot"></span>HOST CONTROL</span><a class="button" href="/">← OVERVIEW</a></div></header>
+<main class="control-page">
+<section class="files-page-heading"><div><div class="section-kicker">REMOTE ACCESS</div><h1>PC Control</h1><p>Control media playback and power on the SciNET host.</p></div><span class="pill live" id="controlStatus">READY</span></section>
+<section class="card control-card">
+<div class="section-head"><div><div class="label">MEDIA</div><h2>Playback</h2></div><span class="pill">HOST PC</span></div>
+<div class="media-controls"><button class="control-button" data-action="previous" aria-label="Previous track"><span>⏮</span><small>PREVIOUS</small></button><button class="control-button control-play" data-action="play-pause" aria-label="Play or pause"><span>⏯</span><small>PLAY / PAUSE</small></button><button class="control-button" data-action="next" aria-label="Next track"><span>⏭</span><small>NEXT</small></button></div>
+</section>
+<section class="card control-card">
+<div class="section-head"><div><div class="label">AUDIO</div><h2>System volume</h2></div><span class="pill">WINDOWS</span></div>
+<div class="volume-controls"><button class="control-button" data-action="volume-down" aria-label="Volume down"><span>−</span><small>VOLUME DOWN</small></button><button class="control-button" data-action="mute" aria-label="Mute or unmute"><span>◖</span><small>MUTE / UNMUTE</small></button><button class="control-button" data-action="volume-up" aria-label="Volume up"><span>＋</span><small>VOLUME UP</small></button></div>
+<p class="control-note">Volume buttons send the standard Windows media keys. The current volume percentage is not read back.</p>
+</section>
+<section class="card control-card">
+<div class="section-head"><div><div class="label">POWER</div><h2>Power options</h2></div><span class="pill">HOST PC</span></div>
+<div class="power-controls"><button class="power-button" data-action="lock"><span class="power-icon">▣</span><span><strong>Lock PC</strong><small>Lock the Windows session</small></span><b>→</b></button><button class="power-button" data-action="sleep"><span class="power-icon">☾</span><span><strong>Sleep</strong><small>Put the host PC to sleep</small></span><b>→</b></button><button class="power-button danger" data-action="shutdown"><span class="power-icon">⏻</span><span><strong>Shut down</strong><small>Power off the host PC</small></span><b>→</b></button></div>
+<p class="control-note">Sleep and shutdown disconnect SciNET until the host wakes or starts again. Shutdown has a 5-second delay.</p>
+</section>
+<div class="control-toast" id="controlToast" role="status" aria-live="polite"></div>
+</main><footer>SCINET · REMOTE CONTROL</footer></div>
+<script src="/static/control.js"></script></body></html>
