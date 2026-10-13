@@ -4,14 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b0d10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <title>SciNET</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div class="app-shell">
-<header class="topbar"><a class="brand" href="/"><span class="brand-mark">S</span><span class="brand-name">SCINET</span></a><div class="topbar-actions"><a class="file-shortcut" href="/files" aria-label="Open file manager" title="File manager">▤</a><div class="top-status"><span class="status-dot"></span><span id="connectionText">ONLINE</span></div></div></header>
+<header class="topbar"><a class="brand" href="/"><span class="brand-mark">S</span><span class="brand-name">SCINET</span></a><div class="topbar-actions"><a class="file-shortcut" href="/control" aria-label="Remote control" title="Remote control">⌁</a><a class="file-shortcut" href="/files" aria-label="Open file manager" title="File manager">▤</a><button class="file-shortcut install-app" id="installApp" type="button" hidden aria-label="Install SciNET" title="Install SciNET">↓</button><div class="top-status"><span class="status-dot"></span><span id="connectionText">ONLINE</span></div></div></header>
 <main>
 <section class="page-head"><div><div class="section-kicker">SYSTEM</div><h1>Overview</h1></div><div class="head-actions"><div class="host-info"><span>HOST</span><strong id="hostname">SCINET-CORE</strong></div><button class="qr-button" id="openQr" type="button" aria-label="Show QR code">QR</button></div></section>
+<a class="card manager-launch control-launch" href="/control"><div class="manager-launch-icon">⌁</div><div class="manager-launch-copy"><div class="label">REMOTE ACCESS</div><h2>PC Control</h2><p>Control media playback, system volume, lock, sleep, and shutdown from this device.</p></div><span class="button manager-open">OPEN CONTROLS <span>→</span></span></a>
 <section class="stats-grid">
 <article class="card stat-card"><div class="label">CPU</div><div class="stat-main"><span id="cpu">0</span><small>%</small></div><div class="meter"><i id="cpuBar"></i></div></article>
 <article class="card stat-card"><div class="label">MEMORY</div><div class="stat-main"><span id="ram">0</span><small>%</small></div><div class="detail" id="ramDetail">0 / 0 GB</div><div class="meter"><i id="ramBar"></i></div></article>
