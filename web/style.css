@@ -39,3 +39,15 @@
 .special-keys button{font-size:10px;font-weight:500}
 .modifier-key:active,.special-keys button:active,.mouse-button:active{transform:translateY(1px)}
 @media(max-width:520px){.trackpad{min-height:190px}.trackpad-shell{padding:8px}.mouse-button{min-height:50px;font-size:9px}.keyboard-tip{max-width:115px;line-height:1.4}.type-field{padding:11px}.modifier-key,.special-keys button{min-height:44px;font-size:11px}}
+
+/* Compact function-key tray for remote keyboard */
+.function-key-panel{margin-top:9px;border:1px solid #252b33;border-radius:8px;background:#0c0f13;overflow:hidden}
+.function-key-panel summary{display:flex;min-height:42px;align-items:center;justify-content:space-between;padding:0 12px;color:#c7ced7;font-size:10px;font-weight:600;cursor:pointer;list-style:none}
+.function-key-panel summary::-webkit-details-marker{display:none}
+.function-key-panel summary:after{content:"＋";color:#8b95a1;font-size:14px}
+.function-key-panel[open] summary:after{content:"−"}
+.function-key-panel summary span{margin-left:auto;margin-right:10px;color:#78828e;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:500}
+.function-keys{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;padding:0 9px 9px}
+.function-keys button{min-height:36px;border:1px solid #303741;border-radius:6px;background:#15191e;color:#c7ced7;font-family:'JetBrains Mono',monospace;font-size:10px;cursor:pointer;touch-action:manipulation}
+.function-keys button:active{background:#29313a;border-color:#738090}
+@media(max-width:520px){.function-keys{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.function-keys button{min-height:40px}}
