@@ -9,6 +9,8 @@ SciNET Link is a local dashboard and file-transfer server for the SciNET PC and 
 - A dedicated `shared_files` directory for transferred files, separate from application source
 - Live clipboard sync across connected browsers with no send/receive buttons
 - Browser-based dashboard for phones and PCs
+- Remote Windows media, volume, lock, sleep and shutdown controls
+- Installable Progressive Web App (PWA) with an offline shell
 - Silent Windows launcher with diagnostic logging
 - Designed for a private phone-hotspot network
 
