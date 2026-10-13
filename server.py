@@ -244,7 +244,12 @@ async def control_host(request: Request):
         if key_name not in modifier_codes:
             return JSONResponse({"error": "Unsupported modifier"}, status_code=400)
         down = bool(data.get("down"))
-        user32.keybd_event(modifier_codes[key_name], 0, 0 if down else 2, 0)
+        # Windows logo keys are extended keys; flag them explicitly so the
+        # shell receives Win shortcuts consistently (Win+R, Win+E, etc.).
+        flags = 0x0001 if key_name == "meta" else 0
+        if not down:
+            flags |= 0x0002
+        user32.keybd_event(modifier_codes[key_name], 0, flags, 0)
         return {"ok": True, "action": f"{key_name}-{'down' if down else 'up'}"}
     if action == "key":
         key_name = str(data.get("key") or "").lower()
@@ -257,13 +262,14 @@ async def control_host(request: Request):
                 continue
             if name in modifier_codes:
                 code = modifier_codes[name]
-                user32.keybd_event(code, 0, 0, 0)
-                temporary.append(code)
+                flags = 0x0001 if name == "meta" else 0
+                user32.keybd_event(code, 0, flags, 0)
+                temporary.append((code, flags))
         code = key_codes[key_name]
         user32.keybd_event(code, 0, 0, 0)
         user32.keybd_event(code, 0, 2, 0)
-        for code in reversed(temporary):
-            user32.keybd_event(code, 0, 2, 0)
+        for code, flags in reversed(temporary):
+            user32.keybd_event(code, 0, flags | 0x0002, 0)
         log_event(f"Remote key: {key_name}", "control")
         return {"ok": True, "action": key_name}
     if action == "type":
