@@ -234,7 +234,7 @@ async def control_host(request: Request):
     key_codes = {
         "esc": 0x1B, "tab": 0x09, "enter": 0x0D, "backspace": 0x08,
         "delete": 0x2E, "up": 0x26, "down": 0x28, "left": 0x25,
-        "right": 0x27, "home": 0x24, "end": 0x23, "meta": 0x5B,
+        "right": 0x27, "home": 0x24, "end": 0x23,
         **{f"f{i}": 0x70 + i - 1 for i in range(1, 13)},
         **{chr(i): i - 32 for i in range(ord("a"), ord("z") + 1)},
         **{str(i): 0x30 + i for i in range(10)},
