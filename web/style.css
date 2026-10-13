@@ -54,3 +54,5 @@
 
 /* Keep the remote keyboard area stable while mobile native keyboards are active. */
 .keyboard-section button{touch-action:manipulation}.remote-text-input{font-size:16px;touch-action:manipulation}.trackpad{touch-action:none;cursor:crosshair}
+
+.remote-text-input::placeholder{font-size:12px;opacity:.8}
