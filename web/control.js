@@ -34,7 +34,7 @@ async function releaseModifiers(){
 window.addEventListener('pagehide',()=>{for(const name of heldModifiers)navigator.sendBeacon('/api/control',new Blob([JSON.stringify({action:'modifier',key:name,down:false})],{type:'application/json'}))});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)releaseModifiers()});
 const textInput=$('remoteTextInput'),openKeyboard=$('openKeyboard');
-openKeyboard.addEventListener('click',()=>{textInput.focus({preventScroll:true});textInput.style.height='1px';textInput.style.height=textInput.scrollHeight+'px';});
+if(textInput&&openKeyboard)openKeyboard.addEventListener('click',()=>textInput.focus({preventScroll:true}));
 let textQueue=Promise.resolve();
 textInput.addEventListener('input',()=>{
  const value=textInput.value;if(!value)return;
@@ -42,7 +42,7 @@ textInput.addEventListener('input',()=>{
  textQueue=textQueue.then(()=>requestControl({action:'type',text:value},true)).then(result=>{if(result)showMessage('Text sent to PC')});
 });
 textInput.addEventListener('keydown',event=>{
- if(event.key==='Enter'){event.preventDefault();requestControl({action:'key',key:'enter'},true);textInput.blur()}
+ if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();requestControl({action:'key',key:'enter'},true)}
  if(event.key==='Escape'){event.preventDefault();textInput.blur()}
 });
 document.querySelectorAll('[data-key]').forEach(button=>button.addEventListener('click',async()=>{
