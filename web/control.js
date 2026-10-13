@@ -65,7 +65,12 @@ async function sendKey(key,modifiers=[]){
  else showMessage('Key sent: '+key.toUpperCase());
 }
 if(textInput){
- document.querySelectorAll('.keyboard-section button,.keyboard-section summary').forEach(control=>control.addEventListener('pointerdown',event=>event.preventDefault()));
+ document.querySelectorAll('.keyboard-section button:not(#openKeyboard),.keyboard-section summary').forEach(control=>control.addEventListener('pointerdown',event=>{
+  // Keep modifier/special-key taps from reopening the phone's native keyboard
+  // when the textarea still owns focus after the keyboard was dismissed.
+  event.preventDefault();
+  if(document.activeElement===textInput)textInput.blur();
+ }));
  textInput.addEventListener('compositionstart',()=>{composingText=true});
  textInput.addEventListener('compositionend',()=>{composingText=false;sendCommittedText()});
  textInput.addEventListener('keydown',event=>{
