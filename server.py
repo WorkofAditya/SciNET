@@ -219,17 +219,85 @@ async def control_host(request: Request):
     except Exception:
         return JSONResponse({"error": "Invalid request"}, status_code=400)
     action = str(data.get("action") or "").strip().lower()
+    user32 = ctypes.windll.user32
     media_keys = {
         "play-pause": 0xB3, "next": 0xB0, "previous": 0xB1,
         "volume-up": 0xAF, "volume-down": 0xAE, "mute": 0xAD,
     }
-    user32 = ctypes.windll.user32
     if action in media_keys:
         key = media_keys[action]
         user32.keybd_event(key, 0, 0, 0)
         user32.keybd_event(key, 0, 2, 0)
         log_event(f"Remote control: {action}", "control")
         return {"ok": True, "action": action}
+    modifier_codes = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "meta": 0x5B}
+    key_codes = {
+        "esc": 0x1B, "tab": 0x09, "enter": 0x0D, "backspace": 0x08,
+        "delete": 0x2E, "up": 0x26, "down": 0x28, "left": 0x25,
+        "right": 0x27, "home": 0x24, "end": 0x23, "space": 0x20,
+    }
+    if action == "modifier":
+        key_name = str(data.get("key") or "").lower()
+        if key_name not in modifier_codes:
+            return JSONResponse({"error": "Unsupported modifier"}, status_code=400)
+        down = bool(data.get("down"))
+        user32.keybd_event(modifier_codes[key_name], 0, 0 if down else 2, 0)
+        return {"ok": True, "action": f"{key_name}-{'down' if down else 'up'}"}
+    if action == "key":
+        key_name = str(data.get("key") or "").lower()
+        if key_name not in key_codes:
+            return JSONResponse({"error": "Unsupported key"}, status_code=400)
+        # Apply any modifiers selected in the UI for this one-shot key press.
+        temporary = []
+        for name in data.get("modifiers", []):
+            if name in modifier_codes and name not in {"ctrl", "alt", "shift", "meta"}:
+                continue
+            if name in modifier_codes:
+                code = modifier_codes[name]
+                user32.keybd_event(code, 0, 0, 0)
+                temporary.append(code)
+        code = key_codes[key_name]
+        user32.keybd_event(code, 0, 0, 0)
+        user32.keybd_event(code, 0, 2, 0)
+        for code in reversed(temporary):
+            user32.keybd_event(code, 0, 2, 0)
+        log_event(f"Remote key: {key_name}", "control")
+        return {"ok": True, "action": key_name}
+    if action == "type":
+        text_to_type = str(data.get("text") or "")[:4000]
+        # KEYEVENTF_UNICODE sends text without relying on the host keyboard layout.
+        for char in text_to_type:
+            code_unit = ord(char)
+            if code_unit > 0xFFFF:
+                code_unit -= 0x10000
+                units = (0xD800 + (code_unit >> 10), 0xDC00 + (code_unit & 0x3FF))
+            else:
+                units = (code_unit,)
+            for unit in units:
+                user32.keybd_event(0, unit, 0x0004, 0)
+                user32.keybd_event(0, unit, 0x0004 | 0x0002, 0)
+        return {"ok": True, "action": "text"}
+    if action == "mouse-move":
+        try:
+            dx = max(-1200, min(1200, int(data.get("dx", 0))))
+            dy = max(-1200, min(1200, int(data.get("dy", 0))))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "Invalid mouse movement"}, status_code=400)
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+        point = POINT()
+        if user32.GetCursorPos(ctypes.byref(point)):
+            user32.SetCursorPos(point.x + dx, point.y + dy)
+        return {"ok": True, "action": "mouse-move"}
+    if action == "mouse-click":
+        button = str(data.get("button") or "left").lower()
+        click_flags = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
+        if button not in click_flags:
+            return JSONResponse({"error": "Unsupported mouse button"}, status_code=400)
+        down_flag, up_flag = click_flags[button]
+        user32.mouse_event(down_flag, 0, 0, 0, 0)
+        user32.mouse_event(up_flag, 0, 0, 0, 0)
+        return {"ok": True, "action": f"{button}-click"}
     if action == "lock":
         if not user32.LockWorkStation():
             return JSONResponse({"error": "Windows could not lock the workstation"}, status_code=500)
