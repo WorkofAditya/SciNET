@@ -21,38 +21,78 @@ async function sendAction(action){
 }
 document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>sendAction(b.dataset.action)));
 const modifierButtons=[...document.querySelectorAll('[data-modifier]')];
-async function setModifier(name,enabled){
- const result=await requestControl({action:'modifier',key:name,down:enabled},true);
- if(!result)return;
- if(enabled)heldModifiers.add(name);else heldModifiers.delete(name);
- const button=document.querySelector('[data-modifier="'+name+'"]');if(button)button.classList.toggle('active',enabled);
+function clearModifiers(){
+ heldModifiers.clear();
+ modifierButtons.forEach(button=>button.classList.remove('active'));
 }
-modifierButtons.forEach(button=>button.addEventListener('click',()=>setModifier(button.dataset.modifier,!heldModifiers.has(button.dataset.modifier))));
-async function releaseModifiers(){
- for(const name of [...heldModifiers])await setModifier(name,false);
-}
-window.addEventListener('pagehide',()=>{for(const name of heldModifiers)navigator.sendBeacon('/api/control',new Blob([JSON.stringify({action:'modifier',key:name,down:false})],{type:'application/json'}))});
-document.addEventListener('visibilitychange',()=>{if(document.hidden)releaseModifiers()});
+function consumeModifiers(){const modifiers=[...heldModifiers];clearModifiers();return modifiers;}
+modifierButtons.forEach(button=>button.addEventListener('click',()=>{
+ const name=button.dataset.modifier;
+ if(heldModifiers.has(name)){heldModifiers.delete(name);button.classList.remove('active')}
+ else{heldModifiers.add(name);button.classList.add('active')}
+}));
+window.addEventListener('pagehide',clearModifiers);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearModifiers()});
 const textInput=$('remoteTextInput'),openKeyboard=$('openKeyboard');
 if(textInput&&openKeyboard)openKeyboard.addEventListener('click',()=>textInput.focus({preventScroll:true}));
 let textQueue=Promise.resolve();
-textInput.addEventListener('input',()=>{
- const value=textInput.value;if(!value)return;
- textInput.value='';
- textQueue=textQueue.then(()=>requestControl({action:'type',text:value},true)).then(result=>{if(result)showMessage('Text sent to PC')});
-});
-textInput.addEventListener('keydown',event=>{
- if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();requestControl({action:'key',key:'enter'},true)}
- if(event.key==='Escape'){event.preventDefault();textInput.blur()}
-});
-document.querySelectorAll('[data-key]').forEach(button=>button.addEventListener('click',async()=>{
- const result=await requestControl({action:'key',key:button.dataset.key,modifiers:[...heldModifiers]},true);
- if(!result)showMessage('Could not send key',true);else showMessage('Key sent: '+button.textContent.trim());
+function queueText(value){if(!value)return;textQueue=textQueue.then(()=>requestControl({action:'type',text:value},true)).then(result=>{if(result)showMessage('Text sent to PC')})}
+function keyNameFromEvent(key){
+ const k=String(key||'').toLowerCase();
+ if(k==='escape')return 'esc';
+ if(k===' ')return 'space';
+ if(k==='arrowup')return 'up';if(k==='arrowdown')return 'down';if(k==='arrowleft')return 'left';if(k==='arrowright')return 'right';
+ if(k==='backspace')return 'backspace';if(k==='delete')return 'delete';if(k==='enter')return 'enter';if(k==='tab')return 'tab';
+ if(k==='home'||k==='end')return k;
+ if(/^f([1-9]|1[0-2])$/.test(k))return k;
+ if(/^[a-z0-9]$/.test(k))return k;
+ return null;
+}
+async function sendKey(key,modifiers=[]){
+ const result=await requestControl({action:'key',key,modifiers},true);
+ if(!result)showMessage('Could not send key',true);
+ else showMessage('Key sent: '+key.toUpperCase());
+}
+if(textInput){
+ textInput.addEventListener('keydown',event=>{
+  const key=keyNameFromEvent(event.key);
+  if(heldModifiers.size&&key){
+   event.preventDefault();const modifiers=consumeModifiers();sendKey(key,modifiers);return;
+  }
+  if(event.key==='Backspace'||event.key==='Delete'){
+   event.preventDefault();sendKey(event.key==='Backspace'?'backspace':'delete',consumeModifiers());return;
+  }
+  if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendKey('enter',consumeModifiers());return}
+  if(event.key==='Escape'){event.preventDefault();textInput.blur()}
+ });
+ textInput.addEventListener('beforeinput',event=>{
+  if(event.inputType==='deleteContentBackward'||event.inputType==='deleteContentForward'){
+   if(!textInput.value){event.preventDefault();sendKey(event.inputType==='deleteContentBackward'?'backspace':'delete',consumeModifiers())}
+  }
+ });
+ textInput.addEventListener('input',()=>{
+  const value=textInput.value;if(!value)return;
+  textInput.value='';
+  if(heldModifiers.size){
+   const modifiers=consumeModifiers();
+   const chars=Array.from(value);
+   textQueue=textQueue.then(async()=>{
+    for(const char of chars){
+     const key=keyNameFromEvent(char);
+     if(key)await requestControl({action:'key',key,modifiers},true);
+     else await requestControl({action:'type',text:char},true);
+    }
+   }).then(()=>showMessage('Shortcut sent to PC'));
+  }else queueText(value);
+ });
+}
+document.querySelectorAll('[data-key]').forEach(button=>button.addEventListener('click',()=>{
+ const key=button.dataset.key;sendKey(key,consumeModifiers());
 }));
-const trackpad=$('trackpad');let pointer=null,moved=false,lastX=0,lastY=0,startX=0,startY=0,lastMoveAt=0;
+const trackpad=$('trackpad');let pointer=null,moved=false,lastX=0,lastY=0,startX=0,startY=0;
 trackpad.addEventListener('pointerdown',event=>{
  if(event.pointerType==='mouse'&&event.button!==0)return;
- trackpad.setPointerCapture(event.pointerId);pointer=event.pointerId;moved=false;lastX=startX=event.clientX;lastY=startY=event.clientY;lastMoveAt=performance.now();
+ trackpad.setPointerCapture(event.pointerId);pointer=event.pointerId;moved=false;lastX=startX=event.clientX;lastY=startY=event.clientY;
 });
 trackpad.addEventListener('pointermove',event=>{
  if(pointer!==event.pointerId)return;
