@@ -262,6 +262,8 @@ async def control_host(request: Request):
                 continue
             if name in modifier_codes:
                 code = modifier_codes[name]
+                # The Windows logo key is an extended key; set this flag
+                # for both key-down and key-up so Win+R / Win+E reach the shell.
                 flags = 0x0001 if name == "meta" else 0
                 user32.keybd_event(code, 0, flags, 0)
                 temporary.append((code, flags))
