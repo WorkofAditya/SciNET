@@ -51,3 +51,6 @@
 .function-keys button{min-height:36px;border:1px solid #303741;border-radius:6px;background:#15191e;color:#c7ced7;font-family:'JetBrains Mono',monospace;font-size:10px;cursor:pointer;touch-action:manipulation}
 .function-keys button:active{background:#29313a;border-color:#738090}
 @media(max-width:520px){.function-keys{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.function-keys button{min-height:40px}}
+
+/* Keep the remote keyboard area stable while mobile native keyboards are active. */
+.keyboard-section button{touch-action:manipulation}.remote-text-input{font-size:16px;touch-action:manipulation}.trackpad{touch-action:none;cursor:crosshair}
