@@ -14,3 +14,5 @@ const qrModal=$('qrModal'),openQr=$('openQr'),closeQr=$('closeQr');
 function showQr(){const address=`http://${location.hostname}:8000`;$('webAddress').textContent=address;$('qrCode').src=`/api/qr?t=${Date.now()}`;qrModal.hidden=false}
 function hideQr(){qrModal.hidden=true}
 openQr.onclick=showQr;closeQr.onclick=hideQr;qrModal.addEventListener('click',e=>{if(e.target===qrModal)hideQr()});document.addEventListener('keydown',e=>{if(e.key==='Escape')hideQr()});
+
+let scinetInstallPrompt=null;window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();scinetInstallPrompt=event;const button=$('installApp');if(button)button.hidden=false});const scinetInstallButton=$('installApp');if(scinetInstallButton)scinetInstallButton.addEventListener('click',async()=>{if(!scinetInstallPrompt)return;scinetInstallPrompt.prompt();await scinetInstallPrompt.userChoice;scinetInstallPrompt=null;scinetInstallButton.hidden=true});if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
