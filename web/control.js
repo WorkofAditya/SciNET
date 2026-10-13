@@ -56,7 +56,7 @@ let composingText=false;
 function sendCommittedText(){
  if(!textInput||composingText||heldModifiers.size)return;
  const value=textInput.value;
- const boundary=Math.max(value.lastIndexOf(' '),value.lastIndexOf('\\n'),value.lastIndexOf('\\t'));
+ const boundary=Math.max(value.lastIndexOf(' '),value.lastIndexOf(String.fromCharCode(10)),value.lastIndexOf(String.fromCharCode(9)));
  if(boundary<0)return;
  const committed=value.slice(0,boundary+1);
  textInput.value=value.slice(boundary+1);
