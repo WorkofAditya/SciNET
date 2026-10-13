@@ -17,6 +17,21 @@
 <div class="volume-controls"><button class="control-button" data-action="volume-down" aria-label="Volume down"><span>−</span><small>VOLUME DOWN</small></button><button class="control-button" data-action="mute" aria-label="Mute or unmute"><span>◖</span><small>MUTE / UNMUTE</small></button><button class="control-button" data-action="volume-up" aria-label="Volume up"><span>＋</span><small>VOLUME UP</small></button></div>
 <p class="control-note">Volume buttons send the standard Windows media keys. The current volume percentage is not read back.</p>
 </section>
+<section class="card control-card input-card">
+<div class="section-head"><div><div class="label">INPUT</div><h2>Touchpad &amp; keyboard</h2></div><span class="pill">REMOTE INPUT</span></div>
+<div class="trackpad-shell">
+<div class="trackpad" id="trackpad" role="application" aria-label="Touchpad. Drag to move the PC cursor and tap to left click"><span class="trackpad-crosshair">＋</span><span class="trackpad-hint">TOUCH &amp; DRAG TO MOVE</span></div>
+<div class="mouse-buttons"><button type="button" class="mouse-button" data-mouse-click="left"><span>↖</span> LEFT CLICK</button><button type="button" class="mouse-button" data-mouse-click="right"><span>▤</span> RIGHT CLICK</button></div>
+<p class="control-note">Drag to move the PC pointer. Tap the pad to left-click, or use the dedicated buttons below.</p>
+</div>
+<div class="keyboard-section">
+<div class="keyboard-top"><div><div class="label">TEXT INPUT</div><h3>Keyboard</h3></div><span class="keyboard-tip">Uses your phone’s keyboard</span></div>
+<button type="button" class="type-field" id="openKeyboard"><span>⌨</span><span><strong>Tap to type on your PC</strong><small>Opens your device’s native keyboard</small></span><b>↗</b></button>
+<textarea id="remoteTextInput" class="remote-text-input" aria-label="Type text to send to the PC" placeholder="Tap here to open your phone keyboard…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" rows="1"></textarea>
+<div class="modifier-row" aria-label="Keyboard modifiers"><button type="button" class="modifier-key" data-modifier="ctrl">Ctrl</button><button type="button" class="modifier-key" data-modifier="alt">Alt</button><button type="button" class="modifier-key" data-modifier="shift">Shift</button><button type="button" class="modifier-key" data-modifier="meta">Win</button></div>
+<div class="special-keys"><button type="button" data-key="esc">Esc</button><button type="button" data-key="tab">Tab</button><button type="button" data-key="enter">Enter</button><button type="button" data-key="backspace">⌫</button><button type="button" data-key="delete">Del</button><button type="button" data-key="up">↑</button><button type="button" data-key="left">←</button><button type="button" data-key="down">↓</button><button type="button" data-key="right">→</button><button type="button" data-key="home">Home</button><button type="button" data-key="end">End</button><button type="button" data-key="space">Space</button></div>
+<p class="control-note">Tap Ctrl, Alt, Shift or Win to hold a modifier, then type or press a special key. Tap it again to release.</p>
+</div></section>
 <section class="card control-card">
 <div class="section-head"><div><div class="label">POWER</div><h2>Power options</h2></div><span class="pill">HOST PC</span></div>
 <div class="power-controls"><button class="power-button" data-action="lock"><span class="power-icon">▣</span><span><strong>Lock PC</strong><small>Lock the Windows session</small></span><b>→</b></button><button class="power-button" data-action="sleep"><span class="power-icon">☾</span><span><strong>Sleep</strong><small>Put the host PC to sleep</small></span><b>→</b></button><button class="power-button danger" data-action="shutdown"><span class="power-icon">⏻</span><span><strong>Shut down</strong><small>Power off the host PC</small></span><b>→</b></button></div>
