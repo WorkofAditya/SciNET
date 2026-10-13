@@ -245,14 +245,12 @@ async def control_host(request: Request):
         log_event("PC put to sleep remotely", "control")
         return {"ok": True, "action": action}
     if action == "shutdown":
-        if str(data.get("confirm") or "") != "SHUTDOWN":
-            return JSONResponse({"error": "Shutdown confirmation is required"}, status_code=400)
         try:
-            subprocess.Popen(["shutdown.exe", "/s", "/t", "5"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            subprocess.Popen(["shutdown.exe", "/s", "/t", "0"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except OSError:
             return JSONResponse({"error": "Could not request Windows shutdown"}, status_code=500)
-        log_event("PC shutdown requested remotely", "control")
-        return {"ok": True, "action": action, "delay_seconds": 5}
+        log_event("Immediate PC shutdown requested remotely", "control")
+        return {"ok": True, "action": action}
     return JSONResponse({"error": "Unknown control action"}, status_code=400)
 
 
