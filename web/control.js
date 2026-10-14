@@ -160,7 +160,7 @@ async function runScreenLoop(){
    if(!screenActive)break;
    const nextUrl=URL.createObjectURL(blob);
    const previousUrl=screenObjectUrl;screenObjectUrl=nextUrl;
-   screenFrame.src=nextUrl;screenFrame.hidden=false;screenPlaceholder.hidden=true;
+   screenFrame.src=nextUrl;screenFrame.hidden=false;screenPlaceholder.hidden=true;screenFrame.onload=()=>{if(screenFrame.naturalWidth&&screenFrame.naturalHeight)$('screenViewer').style.aspectRatio=screenFrame.naturalWidth+' / '+screenFrame.naturalHeight};
    if(previousUrl)URL.revokeObjectURL(previousUrl);
    screenMessage.textContent='Live desktop · refreshing automatically';
   }catch(error){
