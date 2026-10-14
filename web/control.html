@@ -17,6 +17,17 @@
 <div class="volume-controls"><button class="control-button" data-action="volume-down" aria-label="Volume down"><span>−</span><small>VOLUME DOWN</small></button><button class="control-button" data-action="mute" aria-label="Mute or unmute"><span>◖</span><small>MUTE / UNMUTE</small></button><button class="control-button" data-action="volume-up" aria-label="Volume up"><span>＋</span><small>VOLUME UP</small></button></div>
 <p class="control-note">Volume buttons send the standard Windows media keys. The current volume percentage is not read back.</p>
 </section>
+<section class="card control-card screen-card">
+<div class="section-head"><div><div class="label">LIVE DESKTOP</div><h2>Screen mirroring</h2></div><span class="pill" id="screenState">OFF</span></div>
+<div class="screen-intro"><div class="screen-symbol">▣</div><div><strong>See your PC in real time</strong><p>Start a private live view of the Windows desktop. Use the touchpad and keyboard below to control it.</p></div></div>
+<div class="screen-viewer" id="screenViewer" aria-live="polite">
+<div class="screen-placeholder" id="screenPlaceholder"><span class="screen-placeholder-icon">▱</span><strong>Your desktop is not being shared</strong><small>Screen capture starts only when you press Start viewing.</small></div>
+<img id="screenFrame" alt="Live Windows desktop" hidden>
+<div class="screen-live-indicator" id="screenLiveIndicator" hidden><span></span> LIVE</div>
+</div>
+<div class="screen-actions"><button type="button" class="button screen-start" id="screenStart"><span>▶</span> Start viewing</button><button type="button" class="button" id="screenStop" hidden>■ Stop viewing</button><span class="screen-fps" id="screenMessage">Screen capture is off</span></div>
+<p class="control-note">The live view refreshes while active and stops when you press Stop or leave this page. For pointer and keyboard input, use the controls below. Keep SciNET-Link on a trusted private network.</p>
+</section>
 <section class="card control-card input-card">
 <div class="section-head"><div><div class="label">INPUT</div><h2>Touchpad &amp; keyboard</h2></div><span class="pill">REMOTE INPUT</span></div>
 <div class="trackpad-shell">
