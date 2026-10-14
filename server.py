@@ -443,6 +443,19 @@ async def control_host(request: Request):
                 user32.keybd_event(0, unit, 0x0004, 0)
                 user32.keybd_event(0, unit, 0x0004 | 0x0002, 0)
         return {"ok": True, "action": "text"}
+    if action == "mouse-position":
+        try:
+            x = max(0.0, min(1.0, float(data.get("x", 0))))
+            y = max(0.0, min(1.0, float(data.get("y", 0))))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "Invalid mouse position"}, status_code=400)
+        # Map normalized viewer coordinates to the primary Windows display.
+        width = user32.GetSystemMetrics(0)
+        height = user32.GetSystemMetrics(1)
+        if width <= 0 or height <= 0:
+            return JSONResponse({"error": "Could not determine desktop dimensions"}, status_code=500)
+        user32.SetCursorPos(round(x * (width - 1)), round(y * (height - 1)))
+        return {"ok": True, "action": "mouse-position"}
     if action == "mouse-move":
         try:
             dx = max(-1200, min(1200, int(data.get("dx", 0))))
