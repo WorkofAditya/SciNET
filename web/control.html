@@ -24,8 +24,9 @@
 <div class="screen-placeholder" id="screenPlaceholder"><span class="screen-placeholder-icon">▱</span><strong>Your desktop is not being shared</strong><small>Screen capture starts only when you press Start viewing.</small></div>
 <video id="screenFrame" aria-label="Live Windows desktop" autoplay playsinline muted hidden></video>
 <div class="screen-live-indicator" id="screenLiveIndicator" hidden><span></span> LIVE</div>
+<div class="screen-touch-controls" id="screenTouchControls" hidden><span class="screen-touch-hint">Tap to click · drag to move</span><button type="button" data-screen-click="left">◉ Left click</button><button type="button" data-screen-click="right">▤ Right click</button><button type="button" id="screenType">⌨ Type</button><button type="button" id="screenExitFullscreen">⤢ Exit</button></div>
 </div>
-<div class="screen-actions"><button type="button" class="button screen-start" id="screenStart"><span>▶</span> Start viewing</button><button type="button" class="button" id="screenStop" hidden>■ Stop viewing</button><span class="screen-fps" id="screenMessage">WebRTC stream is off</span></div>
+<div class="screen-actions"><button type="button" class="button screen-start" id="screenStart"><span>▶</span> Start viewing</button><button type="button" class="button" id="screenFullscreen" disabled>⛶ Fullscreen</button><button type="button" class="button" id="screenStop" hidden>■ Stop viewing</button><span class="screen-fps" id="screenMessage">WebRTC stream is off</span></div>
 <p class="control-note">WebRTC real-time video starts only when requested and stops when you leave this page. Choose a lower resolution or frame rate for lighter network and CPU load. For pointer and keyboard input, use the controls below.</p>
 </section>
 <section class="card control-card input-card">
