@@ -446,6 +446,56 @@ async def create_folder(request: Request):
     except (ValueError,OSError): return JSONResponse({"error":"Could not create folder"},status_code=400)
     log_event(f"Folder created: {name}","file"); return {"ok":True}
 
+@app.post("/api/files/upload")
+async def upload_files(request: Request, path: str = ""):
+    try:
+        directory = safe_path(path)
+        if not directory.is_dir():
+            return JSONResponse({"error": "Destination folder not found"}, status_code=404)
+        form = await request.form()
+        incoming = form.getlist("files")
+        if not incoming:
+            return JSONResponse({"error": "Choose at least one file"}, status_code=400)
+        uploaded = []
+        for item in incoming:
+            if not hasattr(item, "filename") or not item.filename:
+                continue
+            name = Path(str(item.filename).replace("\\\\", "/")).name
+            if not name or name in {".", ".."}:
+                continue
+            target = directory / name
+            if target.exists():
+                for prior in uploaded:
+                    (directory / prior["name"]).unlink(missing_ok=True)
+                return JSONResponse({"error": f"A file named '{name}' already exists in this folder. No files were uploaded."}, status_code=409)
+            temp = directory / f".scinet-{uuid.uuid4().hex}.part"
+            try:
+                with temp.open("xb") as output:
+                    while chunk := await item.read(1024 * 1024):
+                        output.write(chunk)
+                if target.exists():
+                    raise FileExistsError(name)
+                temp.replace(target)
+                uploaded.append({"name": name, "size": target.stat().st_size})
+            except Exception:
+                temp.unlink(missing_ok=True)
+                for prior in uploaded:
+                    (directory / prior["name"]).unlink(missing_ok=True)
+                raise
+            finally:
+                await item.close()
+        if not uploaded:
+            return JSONResponse({"error": "No valid files were selected"}, status_code=400)
+        for item in uploaded:
+            log_event(f"File uploaded: {item['name']}", "file")
+        return {"ok": True, "path": directory.relative_to(STORAGE_DIR).as_posix() if directory != STORAGE_DIR else "", "files": uploaded}
+    except ValueError:
+        return JSONResponse({"error": "Invalid destination path"}, status_code=400)
+    except FileExistsError as exc:
+        return JSONResponse({"error": f"A file named '{exc.args[0]}' already exists in this folder"}, status_code=409)
+    except OSError:
+        return JSONResponse({"error": "Could not save uploaded files"}, status_code=500)
+
 @app.delete("/api/files")
 async def delete_file(path: str):
     try:
