@@ -17,6 +17,18 @@
 <div class="volume-controls"><button class="control-button" data-action="volume-down" aria-label="Volume down"><span>−</span><small>VOLUME DOWN</small></button><button class="control-button" data-action="mute" aria-label="Mute or unmute"><span>◖</span><small>MUTE / UNMUTE</small></button><button class="control-button" data-action="volume-up" aria-label="Volume up"><span>＋</span><small>VOLUME UP</small></button></div>
 <p class="control-note">Volume buttons send the standard Windows media keys. The current volume percentage is not read back.</p>
 </section>
+<section class="card control-card screen-card">
+<div class="section-head"><div><div class="label">LIVE DESKTOP</div><h2>Screen mirroring</h2></div><span class="pill" id="screenState">OFF</span></div>
+<div class="screen-stream-options"><label for="screenResolution">VIDEO RESOLUTION<select id="screenResolution"><option value="480p">480p · lower load</option><option value="720p" selected>720p · balanced</option><option value="1080p">1080p · sharper</option></select></label><label for="screenFps">FRAME RATE<select id="screenFps"><option value="15">15 FPS · lower load</option><option value="24">24 FPS</option><option value="30" selected>30 FPS · smoother</option></select></label></div>
+<div class="screen-viewer" id="screenViewer" aria-live="polite">
+<div class="screen-placeholder" id="screenPlaceholder"><span class="screen-placeholder-icon">▱</span><strong>Your desktop is not being shared</strong><small>Screen capture starts only when you press Start viewing.</small></div>
+<video id="screenFrame" aria-label="Live Windows desktop" autoplay playsinline muted hidden></video>
+<div class="screen-live-indicator" id="screenLiveIndicator" hidden><span></span> LIVE</div>
+<div class="screen-touch-controls" id="screenTouchControls" hidden><span class="screen-touch-hint">Tap to click · drag to move</span><button type="button" data-screen-click="left">◉ Left click</button><button type="button" data-screen-click="right">▤ Right click</button><button type="button" id="screenType">⌨ Type</button><button type="button" id="screenExitFullscreen">⤢ Exit</button></div>
+</div>
+<div class="screen-actions"><button type="button" class="button screen-start" id="screenStart"><span>▶</span> Start viewing</button><button type="button" class="button" id="screenFullscreen" disabled>⛶ Fullscreen</button><button type="button" class="button" id="screenStop" hidden>■ Stop viewing</button><span class="screen-fps" id="screenMessage">WebRTC stream is off</span></div>
+<p class="control-note">WebRTC real-time video starts only when requested and stops when you leave this page. Choose a lower resolution or frame rate for lighter network and CPU load. For pointer and keyboard input, use the controls below.</p>
+</section>
 <section class="card control-card input-card">
 <div class="section-head"><div><div class="label">INPUT</div><h2>Touchpad &amp; keyboard</h2></div><span class="pill">REMOTE INPUT</span></div>
 <div class="trackpad-shell">

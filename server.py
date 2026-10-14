@@ -12,11 +12,16 @@ import socket
 import threading
 import time
 import uuid
+from fractions import Fraction
 
 import psutil
 import qrcode
+import mss
+from PIL import Image, ImageDraw
+import av
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from zeroconf import IPVersion, ServiceInfo, Zeroconf
 from pyftpdlib.authorizers import DummyAuthorizer
@@ -46,6 +51,8 @@ events_lock = threading.Lock()
 clipboard = {"text": "", "updated": 0, "source": ""}
 clipboard_lock = threading.Lock()
 clipboard_clients = set()
+screen_peers = set()
+screen_peers_lock = asyncio.Lock()
 
 
 def log_event(message, kind="info"):
@@ -194,6 +201,154 @@ async def api_system(): return system_info()
 @app.get("/control", response_class=HTMLResponse)
 async def control_panel_page(): return (WEB_DIR / "control.html").read_text(encoding="utf-8")
 
+class DesktopVideoTrack(VideoStreamTrack):
+    """Low-latency Windows desktop track for WebRTC."""
+    def __init__(self, width=1280, height=720, fps=30):
+        super().__init__()
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self._monitor = None
+        self._capture = None
+        self._next_pts = 0
+        self._frame_step = max(1, int(90000 / fps))
+        self._frame_interval = 1.0 / fps
+        self._next_frame_time = 0.0
+        self._closed = False
+
+    async def recv(self):
+        if self._closed:
+            raise asyncio.CancelledError
+        now = time.monotonic()
+        if self._next_frame_time > now:
+            await asyncio.sleep(self._next_frame_time - now)
+        self._next_frame_time = max(self._next_frame_time + self._frame_interval, time.monotonic())
+        if self._capture is None:
+            self._capture = mss.mss()
+            self._monitor = self._capture.monitors[1]
+        shot = await asyncio.to_thread(self._capture.grab, self._monitor)
+        image = Image.frombytes("RGB", shot.size, shot.rgb)
+        # Resolution is a maximum quality tier, not a forced 16:9 canvas. Preserve
+        # the source monitor aspect ratio so 1080p does not add oversized letterboxes.
+        scale = min(self.width / shot.width, self.height / shot.height)
+        output_w = max(2, int(shot.width * scale) // 2 * 2)
+        output_h = max(2, int(shot.height * scale) // 2 * 2)
+        if image.size != (output_w, output_h):
+            image = image.resize((output_w, output_h), Image.Resampling.BILINEAR)
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+        point = POINT()
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+            px = point.x - self._monitor["left"]
+            py = point.y - self._monitor["top"]
+            screen_w, screen_h = shot.size
+            # The output frame now uses the monitor's aspect ratio with no padding.
+            scale_x = image.width / screen_w
+            scale_y = image.height / screen_h
+            px = int(px * scale_x)
+            py = int(py * scale_y)
+            draw = ImageDraw.Draw(image)
+            cursor = [(px, py), (px, py + 22), (px + 5, py + 17), (px + 9, py + 25),
+                      (px + 13, py + 23), (px + 9, py + 15), (px + 17, py + 15)]
+            draw.polygon(cursor, fill="white", outline="black", width=2)
+        frame = av.VideoFrame.from_image(image)
+        frame.pts = self._next_pts
+        frame.time_base = Fraction(1, 90000)
+        self._next_pts += self._frame_step
+        return frame
+
+    async def stop(self):
+        self._closed = True
+        if self._capture is not None:
+            try:
+                self._capture.close()
+            except Exception:
+                pass
+            self._capture = None
+        super().stop()
+
+
+@app.post("/api/screen/offer")
+async def screen_offer(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Screen viewing is only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    if platform.system() != "Windows":
+        return JSONResponse({"error": "Screen mirroring is supported on Windows only"}, status_code=501)
+    try:
+        data = await request.json()
+        sdp = str(data.get("sdp") or "")
+        kind = str(data.get("type") or "")
+        if not sdp or kind != "offer":
+            return JSONResponse({"error": "Invalid WebRTC offer"}, status_code=400)
+        resolutions = {
+            "480p": (854, 480),
+            "720p": (1280, 720),
+            "1080p": (1920, 1080),
+        }
+        resolution = str(data.get("resolution") or "720p")
+        if resolution not in resolutions:
+            return JSONResponse({"error": "Unsupported resolution"}, status_code=400)
+        try:
+            fps = int(data.get("fps", 30))
+        except (TypeError, ValueError):
+            fps = 30
+        if fps not in (15, 24, 30):
+            return JSONResponse({"error": "FPS must be 15, 24, or 30"}, status_code=400)
+        width, height = resolutions[resolution]
+        pc = RTCPeerConnection()
+        track = DesktopVideoTrack(width, height, fps)
+        pc.addTrack(track)
+        pc._scinet_client_host = client.host
+        screen_peers.add(pc)
+
+        @pc.on("connectionstatechange")
+        async def on_connection_state_change():
+            if pc.connectionState in ("failed", "closed", "disconnected"):
+                screen_peers.discard(pc)
+                await pc.close()
+
+        await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=kind))
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        deadline = time.monotonic() + 8
+        while pc.iceGatheringState != "complete" and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+    except Exception as exc:
+        log_event(f"WebRTC setup failed: {type(exc).__name__}", "control")
+        return JSONResponse({"error": "Could not start WebRTC screen stream. Check SciNET dependencies and the Windows desktop session."}, status_code=500)
+
+
+@app.post("/api/screen/stop")
+async def screen_stop(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Screen viewing is only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    # WebRTC peer connections are scoped to this server process; closing peers releases
+    # capture and encoder resources immediately when the viewer stops.
+    for pc in list(screen_peers):
+        if getattr(pc, "_scinet_client_host", None) != client.host:
+            continue
+        try:
+            await pc.close()
+        finally:
+            screen_peers.discard(pc)
+    return {"ok": True}
+
+
 @app.get("/manifest.webmanifest")
 async def pwa_manifest(): return FileResponse(WEB_DIR / "manifest.webmanifest", media_type="application/manifest+json")
 
@@ -288,6 +443,19 @@ async def control_host(request: Request):
                 user32.keybd_event(0, unit, 0x0004, 0)
                 user32.keybd_event(0, unit, 0x0004 | 0x0002, 0)
         return {"ok": True, "action": "text"}
+    if action == "mouse-position":
+        try:
+            x = max(0.0, min(1.0, float(data.get("x", 0))))
+            y = max(0.0, min(1.0, float(data.get("y", 0))))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "Invalid mouse position"}, status_code=400)
+        # Map normalized viewer coordinates to the primary Windows display.
+        width = user32.GetSystemMetrics(0)
+        height = user32.GetSystemMetrics(1)
+        if width <= 0 or height <= 0:
+            return JSONResponse({"error": "Could not determine desktop dimensions"}, status_code=500)
+        user32.SetCursorPos(round(x * (width - 1)), round(y * (height - 1)))
+        return {"ok": True, "action": "mouse-position"}
     if action == "mouse-move":
         try:
             dx = max(-1200, min(1200, int(data.get("dx", 0))))
@@ -412,6 +580,56 @@ async def create_folder(request: Request):
     except FileExistsError: return JSONResponse({"error":"Folder already exists"},status_code=409)
     except (ValueError,OSError): return JSONResponse({"error":"Could not create folder"},status_code=400)
     log_event(f"Folder created: {name}","file"); return {"ok":True}
+
+@app.post("/api/files/upload")
+async def upload_files(request: Request, path: str = ""):
+    try:
+        directory = safe_path(path)
+        if not directory.is_dir():
+            return JSONResponse({"error": "Destination folder not found"}, status_code=404)
+        form = await request.form()
+        incoming = form.getlist("files")
+        if not incoming:
+            return JSONResponse({"error": "Choose at least one file"}, status_code=400)
+        uploaded = []
+        for item in incoming:
+            if not hasattr(item, "filename") or not item.filename:
+                continue
+            name = Path(str(item.filename).replace("\\", "/")).name
+            if not name or name in {".", ".."}:
+                continue
+            target = directory / name
+            if target.exists():
+                for prior in uploaded:
+                    (directory / prior["name"]).unlink(missing_ok=True)
+                return JSONResponse({"error": f"A file named '{name}' already exists in this folder. No files were uploaded."}, status_code=409)
+            temp = directory / f".scinet-{uuid.uuid4().hex}.part"
+            try:
+                with temp.open("xb") as output:
+                    while chunk := await item.read(1024 * 1024):
+                        output.write(chunk)
+                if target.exists():
+                    raise FileExistsError(name)
+                temp.replace(target)
+                uploaded.append({"name": name, "size": target.stat().st_size})
+            except Exception:
+                temp.unlink(missing_ok=True)
+                for prior in uploaded:
+                    (directory / prior["name"]).unlink(missing_ok=True)
+                raise
+            finally:
+                await item.close()
+        if not uploaded:
+            return JSONResponse({"error": "No valid files were selected"}, status_code=400)
+        for item in uploaded:
+            log_event(f"File uploaded: {item['name']}", "file")
+        return {"ok": True, "path": directory.relative_to(STORAGE_DIR).as_posix() if directory != STORAGE_DIR else "", "files": uploaded}
+    except ValueError:
+        return JSONResponse({"error": "Invalid destination path"}, status_code=400)
+    except FileExistsError as exc:
+        return JSONResponse({"error": f"A file named '{exc.args[0]}' already exists in this folder"}, status_code=409)
+    except OSError:
+        return JSONResponse({"error": "Could not save uploaded files"}, status_code=500)
 
 @app.delete("/api/files")
 async def delete_file(path: str):
