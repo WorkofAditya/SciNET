@@ -25,8 +25,8 @@
 <img id="screenFrame" alt="Live Windows desktop" hidden>
 <div class="screen-live-indicator" id="screenLiveIndicator" hidden><span></span> LIVE</div>
 </div>
-<div class="screen-actions"><button type="button" class="button screen-start" id="screenStart"><span>▶</span> Start viewing</button><button type="button" class="button" id="screenStop" hidden>■ Stop viewing</button><span class="screen-fps" id="screenMessage">Screen capture is off</span></div>
-<p class="control-note">The live view refreshes while active and stops when you press Stop or leave this page. For pointer and keyboard input, use the controls below. Keep SciNET-Link on a trusted private network.</p>
+<div class="screen-stream-options"><label for="screenResolution">Resolution<select id="screenResolution"><option value="480p">480p · lowest latency</option><option value="720p" selected>720p · balanced</option><option value="1080p">1080p · sharper</option></select></label><label for="screenFps">Frame rate<select id="screenFps"><option value="15">15 FPS · lighter</option><option value="24">24 FPS</option><option value="30" selected>30 FPS · smooth</option></select></label></div><div class="screen-actions"><button type="button" class="button screen-start" id="screenStart"><span>▶</span> Start viewing</button><button type="button" class="button" id="screenStop" hidden>■ Stop viewing</button><span class="screen-fps" id="screenMessage">WebRTC stream is off</span></div>
+<p class="control-note">WebRTC real-time video starts only when requested and stops when you leave this page. Choose a lower resolution or frame rate for lighter network and CPU load. For pointer and keyboard input, use the controls below.</p>
 </section>
 <section class="card control-card input-card">
 <div class="section-head"><div><div class="label">INPUT</div><h2>Touchpad &amp; keyboard</h2></div><span class="pill">REMOTE INPUT</span></div>
