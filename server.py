@@ -228,14 +228,13 @@ class DesktopVideoTrack(VideoStreamTrack):
             self._monitor = self._capture.monitors[1]
         shot = await asyncio.to_thread(self._capture.grab, self._monitor)
         image = Image.frombytes("RGB", shot.size, shot.rgb)
-        image.thumbnail((self.width, self.height), Image.Resampling.BILINEAR)
-        # Pad to an encoder-friendly even size while preserving the entire desktop.
-        if image.size != (self.width, self.height):
-            canvas = Image.new("RGB", (self.width, self.height), (0, 0, 0))
-            left = (self.width - image.width) // 2
-            top = (self.height - image.height) // 2
-            canvas.paste(image, (left, top))
-            image = canvas
+        # Resolution is a maximum quality tier, not a forced 16:9 canvas. Preserve
+        # the source monitor aspect ratio so 1080p does not add oversized letterboxes.
+        scale = min(self.width / shot.width, self.height / shot.height)
+        output_w = max(2, int(shot.width * scale) // 2 * 2)
+        output_h = max(2, int(shot.height * scale) // 2 * 2)
+        if image.size != (output_w, output_h):
+            image = image.resize((output_w, output_h), Image.Resampling.BILINEAR)
         class POINT(ctypes.Structure):
             _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
         point = POINT()
@@ -243,14 +242,11 @@ class DesktopVideoTrack(VideoStreamTrack):
             px = point.x - self._monitor["left"]
             py = point.y - self._monitor["top"]
             screen_w, screen_h = shot.size
-            # Use the same uniform scale and centered letterbox offsets as the captured frame.
-            scale = min(self.width / screen_w, self.height / screen_h)
-            rendered_w = max(1, int(screen_w * scale))
-            rendered_h = max(1, int(screen_h * scale))
-            offset_x = (self.width - rendered_w) // 2
-            offset_y = (self.height - rendered_h) // 2
-            px = int(px * scale) + offset_x
-            py = int(py * scale) + offset_y
+            # The output frame now uses the monitor's aspect ratio with no padding.
+            scale_x = image.width / screen_w
+            scale_y = image.height / screen_h
+            px = int(px * scale_x)
+            py = int(py * scale_y)
             draw = ImageDraw.Draw(image)
             cursor = [(px, py), (px, py + 22), (px + 5, py + 17), (px + 9, py + 25),
                       (px + 13, py + 23), (px + 9, py + 15), (px + 17, py + 15)]
