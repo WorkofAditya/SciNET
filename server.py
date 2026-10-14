@@ -16,7 +16,7 @@ import uuid
 import psutil
 import qrcode
 import mss
-from PIL import Image
+from PIL import Image, ImageDraw
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -216,7 +216,23 @@ async def screen_frame(request: Request):
                 monitor = capture.monitors[1]
                 shot = capture.grab(monitor)
                 frame = Image.frombytes("RGB", shot.size, shot.rgb)
+                # MSS does not include the Windows pointer in screenshots; draw a visible
+                # pointer into the frame so it is also visible on the remote phone.
+                class POINT(ctypes.Structure):
+                    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+                point = POINT()
+                if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                    px = point.x - monitor["left"]
+                    py = point.y - monitor["top"]
+                    if 0 <= px < shot.width and 0 <= py < shot.height:
+                        scale = min(1.0, 1440 / shot.width, 900 / shot.height)
+                        px, py = int(px * scale), int(py * scale)
+                        pointer = [(px, py), (px, py + int(22 * scale)), (px + int(5 * scale), py + int(17 * scale)), (px + int(9 * scale), py + int(25 * scale)), (px + int(13 * scale), py + int(23 * scale)), (px + int(9 * scale), py + int(15 * scale)), (px + int(17 * scale), py + int(15 * scale))]
+                        # Draw after resizing below so the cursor remains crisp.
                 frame.thumbnail((1440, 900), Image.Resampling.LANCZOS)
+                if 'pointer' in locals():
+                    draw = ImageDraw.Draw(frame)
+                    draw.polygon(pointer, fill="white", outline="black", width=2)
                 output = io.BytesIO()
                 frame.save(output, format="JPEG", quality=68, optimize=True)
                 return output.getvalue()
