@@ -133,13 +133,16 @@ if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serv
 const screenStart=$('screenStart'),screenStop=$('screenStop'),screenFrame=$('screenFrame');
 const screenPlaceholder=$('screenPlaceholder'),screenState=$('screenState');
 const screenLiveIndicator=$('screenLiveIndicator'),screenMessage=$('screenMessage');
+const screenViewer=$('screenViewer'),screenFullscreen=$('screenFullscreen'),screenTouchControls=$('screenTouchControls');
+let screenPointerId=null,screenPointerMoved=false,screenPointerStart=null,lastRemotePosition=null,positionSending=false;
 let screenActive=false,screenPeer=null,screenStream=null;
 function setScreenUi(active,message){
  screenState.textContent=active?'LIVE':'OFF';
  screenState.classList.toggle('live',active);
  screenStart.hidden=active;screenStop.hidden=!active;screenLiveIndicator.hidden=!active;
+ screenFullscreen.disabled=!active;
  if(message)screenMessage.textContent=message;
- if(!active){screenFrame.hidden=true;screenFrame.srcObject=null;screenPlaceholder.hidden=false;}
+ if(!active){screenFrame.hidden=true;screenFrame.srcObject=null;screenPlaceholder.hidden=false;screenTouchControls.hidden=true;}
 }
 async function stopScreenStream(message='Screen stream stopped'){
  screenActive=false;
@@ -195,6 +198,86 @@ async function startScreenStream(){
 }
 screenStart.addEventListener('click',startScreenStream);
 screenStop.addEventListener('click',()=>stopScreenStream());
+
+async function enterScreenFullscreen(){
+ if(!screenActive)return;
+ try{
+  if(!document.fullscreenElement)await screenViewer.requestFullscreen();
+  if(screenViewer.requestFullscreen&&screenViewer===document.fullscreenElement&&screenTouchControls)screenTouchControls.hidden=false;
+  try{await screenViewer.focus({preventScroll:true})}catch{}
+  if(screenFrame.requestVideoFrameCallback)screenFrame.requestVideoFrameCallback(()=>{});
+  if(screen.orientation&&screen.orientation.lock)await screen.orientation.lock('landscape').catch(()=>{});
+ }catch(error){
+  showMessage('Fullscreen is unavailable in this browser. Try rotating your phone sideways.',true);
+ }
+}
+async function leaveScreenFullscreen(){
+ if(document.fullscreenElement===screenViewer)await document.exitFullscreen().catch(()=>{});
+ if(screenTouchControls)screenTouchControls.hidden=true;
+ if(screen.orientation&&screen.orientation.unlock){try{screen.orientation.unlock()}catch{}}
+}
+screenFullscreen.addEventListener('click',enterScreenFullscreen);
+$('screenExitFullscreen').addEventListener('click',leaveScreenFullscreen);
+document.addEventListener('fullscreenchange',()=>{
+ const full=document.fullscreenElement===screenViewer;
+ screenTouchControls.hidden=!full||!screenActive;
+ screenFullscreen.textContent=full?'⛶ Fullscreen':'⛶ Fullscreen';
+ if(!full&&screen.orientation&&screen.orientation.unlock){try{screen.orientation.unlock()}catch{}}
+});
+document.querySelectorAll('[data-screen-click]').forEach(button=>button.addEventListener('click',async event=>{
+ event.stopPropagation();
+ const result=await requestControl({action:'mouse-click',button:button.dataset.screenClick},true);
+ if(!result)showMessage('Mouse click failed',true);
+}));
+$('screenType').addEventListener('click',event=>{
+ event.stopPropagation();
+ leaveScreenFullscreen().finally(()=>{textInput.focus({preventScroll:true})});
+});
+
+// Touch directly on the full-screen desktop: tap positions and clicks; drag moves
+// the Windows pointer without generating an accidental click on release.
+function screenCoordinates(clientX,clientY){
+ const rect=screenViewer.getBoundingClientRect();
+ const vw=screenFrame.videoWidth||rect.width,vh=screenFrame.videoHeight||rect.height;
+ if(!vw||!vh||!rect.width||!rect.height)return null;
+ const scale=Math.min(rect.width/vw,rect.height/vh);
+ const renderedW=vw*scale,renderedH=vh*scale;
+ const left=rect.left+(rect.width-renderedW)/2,top=rect.top+(rect.height-renderedH)/2;
+ if(clientX<left||clientX>left+renderedW||clientY<top||clientY>top+renderedH)return null;
+ return {x:Math.max(0,Math.min(1,(clientX-left)/renderedW)),y:Math.max(0,Math.min(1,(clientY-top)/renderedH))};
+}
+function queueRemotePosition(position){
+ lastRemotePosition=position;
+ if(positionSending)return;
+ positionSending=true;
+ (async()=>{
+  while(lastRemotePosition){
+   const next=lastRemotePosition;lastRemotePosition=null;
+   await requestControl({action:'mouse-position',x:next.x,y:next.y},true);
+  }
+  positionSending=false;
+ })();
+}
+screenViewer.addEventListener('pointerdown',event=>{
+ if(document.fullscreenElement!==screenViewer||event.target.closest('.screen-touch-controls'))return;
+ if(event.pointerType==='mouse'&&event.button!==0)return;
+ const position=screenCoordinates(event.clientX,event.clientY);if(!position)return;
+ event.preventDefault();screenPointerId=event.pointerId;screenPointerMoved=false;
+ screenPointerStart={x:event.clientX,y:event.clientY};queueRemotePosition(position);
+ try{screenViewer.setPointerCapture(event.pointerId)}catch{}
+});
+screenViewer.addEventListener('pointermove',event=>{
+ if(document.fullscreenElement!==screenViewer||screenPointerId!==event.pointerId)return;
+ if(Math.hypot(event.clientX-screenPointerStart.x,event.clientY-screenPointerStart.y)>6)screenPointerMoved=true;
+ const position=screenCoordinates(event.clientX,event.clientY);if(position)queueRemotePosition(position);
+});
+screenViewer.addEventListener('pointerup',async event=>{
+ if(screenPointerId!==event.pointerId)return;
+ const click=!screenPointerMoved;screenPointerId=null;screenPointerStart=null;
+ if(click)await requestControl({action:'mouse-click',button:'left'},true);
+});
+screenViewer.addEventListener('pointercancel',()=>{screenPointerId=null;screenPointerStart=null;});
+
 let screenSettingsChangeQueued=false;
 async function applyLiveScreenSettings(){
  if(!screenActive||screenSettingsChangeQueued)return;
