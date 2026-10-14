@@ -15,8 +15,10 @@ import uuid
 
 import psutil
 import qrcode
+import mss
+from PIL import Image
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from zeroconf import IPVersion, ServiceInfo, Zeroconf
 from pyftpdlib.authorizers import DummyAuthorizer
@@ -193,6 +195,37 @@ async def api_system(): return system_info()
 
 @app.get("/control", response_class=HTMLResponse)
 async def control_panel_page(): return (WEB_DIR / "control.html").read_text(encoding="utf-8")
+
+@app.get("/api/screen/frame")
+async def screen_frame(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Screen viewing is only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    if platform.system() != "Windows":
+        return JSONResponse({"error": "Screen capture is supported on Windows only"}, status_code=501)
+    try:
+        def capture_frame():
+            # Capture only in response to an active viewer request; no background capture loop.
+            with mss.mss() as capture:
+                monitor = capture.monitors[1]
+                shot = capture.grab(monitor)
+                frame = Image.frombytes("RGB", shot.size, shot.rgb)
+                frame.thumbnail((1440, 900), Image.Resampling.LANCZOS)
+                output = io.BytesIO()
+                frame.save(output, format="JPEG", quality=68, optimize=True)
+                return output.getvalue()
+        image_bytes = await asyncio.to_thread(capture_frame)
+        return Response(content=image_bytes, media_type="image/jpeg", headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"})
+    except Exception as exc:
+        log_event(f"Screen capture failed: {type(exc).__name__}", "control")
+        return JSONResponse({"error": "Could not capture the Windows desktop. Ensure SciNET-Link is running in the interactive user session."}, status_code=500)
+
 
 @app.get("/manifest.webmanifest")
 async def pwa_manifest(): return FileResponse(WEB_DIR / "manifest.webmanifest", media_type="application/manifest+json")
