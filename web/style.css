@@ -56,3 +56,26 @@
 .keyboard-section button{touch-action:manipulation}.remote-text-input{font-size:16px;touch-action:manipulation}.trackpad{touch-action:none;cursor:crosshair}
 
 .remote-text-input::placeholder{font-size:12px;opacity:.8}
+
+/* On-demand desktop screen mirroring */
+.screen-intro{display:flex;align-items:center;gap:13px;margin:0 0 15px;padding:13px;border:1px solid #20262e;border-radius:8px;background:#0c0f13}
+.screen-symbol{width:40px;height:40px;flex:0 0 40px;display:grid;place-items:center;border:1px solid #303944;border-radius:9px;background:#171c22;color:#c8d0da;font-size:20px}
+.screen-intro strong{font-size:11px;font-weight:600}
+.screen-intro p{margin:5px 0 0;color:#7b8490;font-size:10px;line-height:1.55}
+.screen-viewer{position:relative;display:grid;place-items:center;min-height:190px;aspect-ratio:16/9;overflow:hidden;border:1px solid #282f38;border-radius:9px;background:repeating-linear-gradient(135deg,#0c0f13,#0c0f13 12px,#10141a 12px,#10141a 24px)}
+.screen-viewer img{display:block;width:100%;height:100%;max-height:65vh;object-fit:contain}
+.screen-viewer img[hidden]{display:none}
+.screen-placeholder{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:9px;padding:22px;text-align:center}
+.screen-placeholder-icon{display:grid;place-items:center;width:43px;height:43px;border:1px solid #303741;border-radius:10px;background:#171c22;color:#aeb8c5;font-size:23px}
+.screen-placeholder strong{font-size:11px;font-weight:600;color:#c9cfd7}
+.screen-placeholder small{max-width:290px;color:#747e8a;font-size:9px;line-height:1.5}
+.screen-live-indicator{position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:6px;padding:5px 7px;border:1px solid #57302f;border-radius:5px;background:rgba(23,12,12,.9);color:#f0aaa4;font-size:8px;font-weight:700;letter-spacing:.1em}
+.screen-live-indicator[hidden]{display:none}
+.screen-live-indicator span{width:6px;height:6px;border-radius:50%;background:#e8756d;box-shadow:0 0 8px #e8756d}
+.screen-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:11px}
+.screen-actions .button{min-height:36px;padding:8px 12px}
+.screen-start{border-color:#385a43;background:#142219;color:#b5dfbf}
+.screen-start:hover{border-color:#538461;background:#192d20;color:#d1f0d7}
+.screen-fps{margin-left:auto;color:#7b8490;font-size:9px}
+.screen-card #screenState.live{color:#f0aaa4;border-color:#57302f}
+@media(max-width:520px){.screen-intro{align-items:flex-start;padding:11px}.screen-viewer{min-height:160px}.screen-fps{width:100%;margin-left:0}}
