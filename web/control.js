@@ -195,4 +195,15 @@ async function startScreenStream(){
 }
 screenStart.addEventListener('click',startScreenStream);
 screenStop.addEventListener('click',()=>stopScreenStream());
+let screenSettingsChangeQueued=false;
+async function applyLiveScreenSettings(){
+ if(!screenActive||screenSettingsChangeQueued)return;
+ screenSettingsChangeQueued=true;
+ screenMessage.textContent='Applying stream settings…';
+ await stopScreenStream('Reconfiguring stream…');
+ screenSettingsChangeQueued=false;
+ await startScreenStream();
+}
+$('screenResolution').addEventListener('change',applyLiveScreenSettings);
+$('screenFps').addEventListener('change',applyLiveScreenSettings);
 window.addEventListener('pagehide',()=>{screenActive=false;if(screenPeer)screenPeer.close();if(screenStream)screenStream.getTracks().forEach(track=>track.stop());});
