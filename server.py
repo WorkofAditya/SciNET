@@ -460,7 +460,7 @@ async def upload_files(request: Request, path: str = ""):
         for item in incoming:
             if not hasattr(item, "filename") or not item.filename:
                 continue
-            name = Path(str(item.filename).replace("\\\\", "/")).name
+            name = Path(str(item.filename).replace("\\", "/")).name
             if not name or name in {".", ".."}:
                 continue
             target = directory / name
