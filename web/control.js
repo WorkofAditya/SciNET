@@ -16,7 +16,7 @@ async function requestControl(payload,quiet=false){
 async function sendAction(action){
  if(busyActions)return;busyActions=true;
  const buttons=[...document.querySelectorAll('[data-action]')];buttons.forEach(b=>b.disabled=true);status.textContent='SENDING';
- try{const result=await requestControl({action},true);if(result)showMessage(action==='shutdown'?'Shutdown command sent':action==='sleep'?'Sleep requested':action==='lock'?'Lock command sent':`Sent: ${action.replaceAll('-',' ')}`,false)}
+ try{const result=await requestControl({action},true);if(result)showMessage(action==='shutdown'?'Shutdown command sent':action==='sleep'?'Sleep requested':action==='restart'?'Restart scheduled in 10 seconds':action==='lock'?'Lock command sent':`Sent: ${action.replaceAll('-',' ')}`,false)}
  finally{busyActions=false;buttons.forEach(b=>b.disabled=false)}
 }
 document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>sendAction(b.dataset.action)));
