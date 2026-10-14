@@ -243,8 +243,14 @@ class DesktopVideoTrack(VideoStreamTrack):
             px = point.x - self._monitor["left"]
             py = point.y - self._monitor["top"]
             screen_w, screen_h = shot.size
-            px = int(px * self.width / screen_w)
-            py = int(py * self.height / screen_h)
+            # Use the same uniform scale and centered letterbox offsets as the captured frame.
+            scale = min(self.width / screen_w, self.height / screen_h)
+            rendered_w = max(1, int(screen_w * scale))
+            rendered_h = max(1, int(screen_h * scale))
+            offset_x = (self.width - rendered_w) // 2
+            offset_y = (self.height - rendered_h) // 2
+            px = int(px * scale) + offset_x
+            py = int(py * scale) + offset_y
             draw = ImageDraw.Draw(image)
             cursor = [(px, py), (px, py + 22), (px + 5, py + 17), (px + 9, py + 25),
                       (px + 13, py + 23), (px + 9, py + 15), (px + 17, py + 15)]
