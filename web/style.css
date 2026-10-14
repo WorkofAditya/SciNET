@@ -10,3 +10,49 @@
 @media(max-width:700px){.phase2-grid{grid-template-columns:minmax(0,1fr)}.phase2-grid>.file-manager,.phase2-grid>.clipboard-card,.phase2-grid>.upload-card{grid-column:auto;grid-row:auto}.lower-grid{grid-template-columns:minmax(0,1fr)}.host-info{display:none}.head-actions{width:auto;justify-content:flex-end;align-self:flex-end}.qr-button{min-width:58px;min-height:36px;padding:0 14px;border:1px solid #30363d;border-radius:8px;background:#15191e;color:#b9c0c8;font-size:10px;font-weight:600;letter-spacing:.1em}}
 
 .manager-launch{margin-top:10px;padding:18px;display:flex;align-items:center;gap:14px}.manager-launch-icon{width:42px;height:42px;flex:0 0 42px;display:grid;place-items:center;border:1px solid #2b3139;border-radius:9px;background:#171b21;color:#c4cbd4;font-size:22px}.manager-launch-copy{min-width:0;flex:1}.manager-launch-copy h2{margin-top:5px}.manager-launch-copy p{margin:6px 0 0;color:#777f89;font-size:11px;line-height:1.5}.manager-open{text-decoration:none;white-space:nowrap}.manager-open span{margin-left:7px}@media(max-width:520px){.manager-launch{align-items:flex-start;flex-wrap:wrap}.manager-launch-copy{flex:1 1 calc(100% - 60px)}.manager-open{margin-left:56px}}
+
+/* Remote control panel */
+.control-launch{color:inherit;text-decoration:none}.control-launch:hover{border-color:#3a424c;background:#11151a}.control-page{max-width:820px;margin:0 auto}.control-page>section,.control-page>.control-toast{margin-bottom:12px}.control-page .files-page-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin:0 0 20px}.files-page-heading p{margin:8px 0 0;color:#737b86;font-size:11px;line-height:1.6}.control-card{padding:20px}.media-controls,.volume-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.control-button{display:flex;min-height:100px;flex-direction:column;align-items:center;justify-content:center;gap:10px;border:1px solid #252b33;border-radius:9px;background:#0c0f13;color:#d7dce2;cursor:pointer;transition:background .15s,border-color .15s}.control-button:hover{background:#171c22;border-color:#59616c}.control-button:disabled,.power-button:disabled{opacity:.5;cursor:wait}.control-button>span{font-size:28px;line-height:1}.control-button small{color:#8a929d;font-size:9px;font-weight:600;letter-spacing:.07em}.control-play{background:#171b21;border-color:#3a424c}.control-note{margin:13px 0 0;color:#737b86;font-size:10px;line-height:1.6}.power-controls{display:flex;flex-direction:column;gap:8px}.power-button{display:flex;align-items:center;gap:13px;width:100%;padding:13px;border:1px solid #252b33;border-radius:8px;background:#0c0f13;color:#d7dce2;text-align:left;cursor:pointer}.power-button:hover{background:#171c22;border-color:#59616c}.power-icon{width:36px;height:36px;flex:0 0 36px;display:grid;place-items:center;border:1px solid #30363d;border-radius:7px;background:#171b21;font-size:17px}.power-button>span:nth-child(2){display:flex;flex:1;min-width:0;flex-direction:column;gap:4px}.power-button strong{font-size:11px}.power-button small{color:#747d88;font-size:9px}.power-button>b{color:#737b86;font-size:15px}.power-button.danger .power-icon{color:#ef9b92;border-color:#57302f;background:#211414}.power-button.danger strong{color:#efb0aa}.control-toast{min-height:0;padding:0;color:#9cc7a5;font-size:11px;line-height:1.5}.control-toast.visible{padding:12px 14px;border:1px solid #31503b;border-radius:8px;background:#101a13}.control-toast.error{color:#f0a6a0;border-color:#613634;background:#1b1111}.install-app{cursor:pointer}.install-app[hidden]{display:none}.files-top-actions{display:flex;align-items:center;gap:10px}
+@media(max-width:520px){.control-page .files-page-heading{align-items:flex-start;flex-direction:column}.control-card{padding:14px}.control-button{min-height:88px}.control-button>span{font-size:24px}.control-button small{font-size:8px}.power-button{padding:11px}.files-top-actions{gap:6px}.files-top-actions .button{padding:7px 8px;font-size:8px}}
+
+/* Remote touchpad and mobile keyboard */
+.input-card h3{margin:5px 0 0;font-size:14px;font-weight:600;letter-spacing:-.02em}
+.trackpad-shell{padding:12px;border:1px solid #20252c;border-radius:9px;background:#0b0e12}
+.trackpad{position:relative;display:flex;min-height:210px;align-items:center;justify-content:center;overflow:hidden;touch-action:none;user-select:none;border:1px solid #303741;border-radius:8px;background:radial-gradient(ellipse at center,#151a20 0,#0d1014 75%);color:#68727e;cursor:crosshair}
+.trackpad:before,.trackpad:after{position:absolute;content:"";pointer-events:none;background:#20262e}
+.trackpad:before{width:1px;height:100%;left:50%;opacity:.55}.trackpad:after{height:1px;width:100%;top:50%;opacity:.55}
+.trackpad-crosshair{font-size:27px;color:#9ba5b1;z-index:1}.trackpad-hint{position:absolute;bottom:13px;font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.12em;color:#707985}
+.mouse-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:9px}
+.mouse-button{display:flex;min-height:48px;align-items:center;justify-content:center;gap:9px;border:1px solid #303741;border-radius:7px;background:#15191e;color:#cbd1d9;font-size:10px;font-weight:600;letter-spacing:.04em;cursor:pointer}
+.mouse-button span{font-size:16px;color:#a4adb8}.mouse-button:active,.modifier-key.active{background:#29313a;border-color:#738090;color:#fff}
+.keyboard-section{margin-top:20px;padding-top:18px;border-top:1px solid #222831}
+.keyboard-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.keyboard-tip{color:#68727d;font-size:9px;text-align:right}
+.type-field{display:flex;width:100%;align-items:center;gap:12px;padding:13px;border:1px solid #303741;border-radius:8px;background:#0c0f13;color:#dce1e7;text-align:left;cursor:pointer}
+.type-field>span:first-child{display:grid;place-items:center;width:36px;height:36px;border:1px solid #303741;border-radius:7px;background:#171c22;font-size:18px}
+.type-field>span:nth-child(2){display:flex;flex:1;flex-direction:column;gap:4px}.type-field strong{font-size:11px;font-weight:600}.type-field small{font-size:9px;color:#747e89}.type-field>b{color:#8b95a1}
+.remote-text-input{display:block;width:100%;min-height:46px;height:46px;margin-top:8px;padding:12px;border:1px solid #303741;border-radius:8px;background:#0c0f13;color:#dce1e7;outline:none;resize:none;font-size:12px;line-height:20px}.remote-text-input:focus{border-color:#687482}.remote-text-input::placeholder{color:#707985}.input-card h3{margin:5px 0 0;font-size:14px;font-weight:600;letter-spacing:-.02em}
+.modifier-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:10px}
+.modifier-key,.special-keys button{min-height:42px;border:1px solid #303741;border-radius:7px;background:#15191e;color:#c7ced7;font-size:11px;font-weight:600;cursor:pointer;touch-action:manipulation}
+.modifier-key.active{box-shadow:inset 0 0 0 1px #8793a2}
+.special-keys{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:8px}
+.special-keys button{font-size:10px;font-weight:500}
+.modifier-key:active,.special-keys button:active,.mouse-button:active{transform:translateY(1px)}
+@media(max-width:520px){.trackpad{min-height:190px}.trackpad-shell{padding:8px}.mouse-button{min-height:50px;font-size:9px}.keyboard-tip{max-width:115px;line-height:1.4}.type-field{padding:11px}.modifier-key,.special-keys button{min-height:44px;font-size:11px}}
+
+/* Compact function-key tray for remote keyboard */
+.function-key-panel{margin-top:9px;border:1px solid #252b33;border-radius:8px;background:#0c0f13;overflow:hidden}
+.function-key-panel summary{display:flex;min-height:42px;align-items:center;justify-content:space-between;padding:0 12px;color:#c7ced7;font-size:10px;font-weight:600;cursor:pointer;list-style:none}
+.function-key-panel summary::-webkit-details-marker{display:none}
+.function-key-panel summary:after{content:"＋";color:#8b95a1;font-size:14px}
+.function-key-panel[open] summary:after{content:"−"}
+.function-key-panel summary span{margin-left:auto;margin-right:10px;color:#78828e;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:500}
+.function-keys{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;padding:0 9px 9px}
+.function-keys button{min-height:36px;border:1px solid #303741;border-radius:6px;background:#15191e;color:#c7ced7;font-family:'JetBrains Mono',monospace;font-size:10px;cursor:pointer;touch-action:manipulation}
+.function-keys button:active{background:#29313a;border-color:#738090}
+@media(max-width:520px){.function-keys{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.function-keys button{min-height:40px}}
+
+/* Keep the remote keyboard area stable while mobile native keyboards are active. */
+.keyboard-section button{touch-action:manipulation}.remote-text-input{font-size:16px;touch-action:manipulation}.trackpad{touch-action:none;cursor:crosshair}
+
+.remote-text-input::placeholder{font-size:12px;opacity:.8}

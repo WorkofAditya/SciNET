@@ -1,4 +1,8 @@
 from contextlib import asynccontextmanager
+import ctypes
+import ipaddress
+import platform
+import subprocess
 from pathlib import Path
 import asyncio
 import io
@@ -186,6 +190,155 @@ async def set_device_name(request: Request):
 
 @app.get("/api/system")
 async def api_system(): return system_info()
+
+@app.get("/control", response_class=HTMLResponse)
+async def control_panel_page(): return (WEB_DIR / "control.html").read_text(encoding="utf-8")
+
+@app.get("/manifest.webmanifest")
+async def pwa_manifest(): return FileResponse(WEB_DIR / "manifest.webmanifest", media_type="application/manifest+json")
+
+@app.get("/sw.js")
+async def service_worker():
+    return FileResponse(WEB_DIR / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
+
+@app.post("/api/control")
+async def control_host(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Controls are only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    if platform.system() != "Windows":
+        return JSONResponse({"error": "Host controls are supported on Windows only"}, status_code=501)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
+    action = str(data.get("action") or "").strip().lower()
+    user32 = ctypes.windll.user32
+    media_keys = {
+        "play-pause": 0xB3, "next": 0xB0, "previous": 0xB1,
+        "volume-up": 0xAF, "volume-down": 0xAE, "mute": 0xAD,
+    }
+    if action in media_keys:
+        key = media_keys[action]
+        user32.keybd_event(key, 0, 0, 0)
+        user32.keybd_event(key, 0, 2, 0)
+        log_event(f"Remote control: {action}", "control")
+        return {"ok": True, "action": action}
+    modifier_codes = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "meta": 0x5B}
+    key_codes = {
+        "esc": 0x1B, "tab": 0x09, "enter": 0x0D, "backspace": 0x08,
+        "delete": 0x2E, "up": 0x26, "down": 0x28, "left": 0x25,
+        "right": 0x27, "home": 0x24, "end": 0x23,
+        **{f"f{i}": 0x70 + i - 1 for i in range(1, 13)},
+        **{chr(i): i - 32 for i in range(ord("a"), ord("z") + 1)},
+        **{str(i): 0x30 + i for i in range(10)},
+    }
+    if action == "modifier":
+        key_name = str(data.get("key") or "").lower()
+        if key_name not in modifier_codes:
+            return JSONResponse({"error": "Unsupported modifier"}, status_code=400)
+        down = bool(data.get("down"))
+        # Windows logo keys are extended keys; flag them explicitly so the
+        # shell receives Win shortcuts consistently (Win+R, Win+E, etc.).
+        flags = 0x0001 if key_name == "meta" else 0
+        if not down:
+            flags |= 0x0002
+        user32.keybd_event(modifier_codes[key_name], 0, flags, 0)
+        return {"ok": True, "action": f"{key_name}-{'down' if down else 'up'}"}
+    if action == "key":
+        key_name = str(data.get("key") or "").lower()
+        if key_name not in key_codes:
+            return JSONResponse({"error": "Unsupported key"}, status_code=400)
+        # Apply any modifiers selected in the UI for this one-shot key press.
+        temporary = []
+        for name in data.get("modifiers", []):
+            if name in modifier_codes and name not in {"ctrl", "alt", "shift", "meta"}:
+                continue
+            if name in modifier_codes:
+                code = modifier_codes[name]
+                # The Windows logo key is an extended key; set this flag
+                # for both key-down and key-up so Win+R / Win+E reach the shell.
+                flags = 0x0001 if name == "meta" else 0
+                user32.keybd_event(code, 0, flags, 0)
+                temporary.append((code, flags))
+        code = key_codes[key_name]
+        user32.keybd_event(code, 0, 0, 0)
+        user32.keybd_event(code, 0, 2, 0)
+        for code, flags in reversed(temporary):
+            user32.keybd_event(code, 0, flags | 0x0002, 0)
+        log_event(f"Remote key: {key_name}", "control")
+        return {"ok": True, "action": key_name}
+    if action == "type":
+        text_to_type = str(data.get("text") or "")[:4000]
+        # KEYEVENTF_UNICODE sends text without relying on the host keyboard layout.
+        for char in text_to_type:
+            code_unit = ord(char)
+            if code_unit > 0xFFFF:
+                code_unit -= 0x10000
+                units = (0xD800 + (code_unit >> 10), 0xDC00 + (code_unit & 0x3FF))
+            else:
+                units = (code_unit,)
+            for unit in units:
+                user32.keybd_event(0, unit, 0x0004, 0)
+                user32.keybd_event(0, unit, 0x0004 | 0x0002, 0)
+        return {"ok": True, "action": "text"}
+    if action == "mouse-move":
+        try:
+            dx = max(-1200, min(1200, int(data.get("dx", 0))))
+            dy = max(-1200, min(1200, int(data.get("dy", 0))))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "Invalid mouse movement"}, status_code=400)
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+        point = POINT()
+        if user32.GetCursorPos(ctypes.byref(point)):
+            user32.SetCursorPos(point.x + dx, point.y + dy)
+        return {"ok": True, "action": "mouse-move"}
+    if action == "mouse-click":
+        button = str(data.get("button") or "left").lower()
+        click_flags = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
+        if button not in click_flags:
+            return JSONResponse({"error": "Unsupported mouse button"}, status_code=400)
+        down_flag, up_flag = click_flags[button]
+        user32.mouse_event(down_flag, 0, 0, 0, 0)
+        user32.mouse_event(up_flag, 0, 0, 0, 0)
+        return {"ok": True, "action": f"{button}-click"}
+    if action == "lock":
+        if not user32.LockWorkStation():
+            return JSONResponse({"error": "Windows could not lock the workstation"}, status_code=500)
+        log_event("PC locked remotely", "control")
+        return {"ok": True, "action": action}
+    if action == "sleep":
+        try:
+            result = ctypes.windll.powrprof.SetSuspendState(False, True, False)
+        except Exception:
+            result = False
+        if not result:
+            return JSONResponse({"error": "Windows could not enter sleep. Check system power settings."}, status_code=500)
+        log_event("PC put to sleep remotely", "control")
+        return {"ok": True, "action": action}
+    if action == "restart":
+        try:
+            subprocess.Popen(["shutdown.exe", "/r", "/t", "0"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError:
+            return JSONResponse({"error": "Could not request Windows restart"}, status_code=500)
+        log_event("PC restart requested remotely", "control")
+        return {"ok": True, "action": action}
+    if action == "shutdown":
+        try:
+            subprocess.Popen(["shutdown.exe", "/s", "/t", "0"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError:
+            return JSONResponse({"error": "Could not request Windows shutdown"}, status_code=500)
+        log_event("Immediate PC shutdown requested remotely", "control")
+        return {"ok": True, "action": action}
+    return JSONResponse({"error": "Unknown control action"}, status_code=400)
+
 
 @app.get("/api/files")
 async def list_files(path: str = ""):

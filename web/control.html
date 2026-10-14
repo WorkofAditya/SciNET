@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0d10"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/static/icon.svg" type="image/svg+xml"><title>SciNET · PC Control</title><link rel="stylesheet" href="/static/style.css">
+</head>
+<body><div class="app-shell">
+<header class="topbar"><a class="brand" href="/"><span class="brand-mark">S</span><span class="brand-name">SCINET</span></a><div class="files-top-actions"><a class="file-shortcut" href="/files" aria-label="File manager" title="File manager">▤</a><button class="file-shortcut" id="installApp" type="button" hidden aria-label="Install SciNET" title="Install SciNET">↓</button><span class="top-status"><span class="status-dot"></span>HOST CONTROL</span><a class="button" href="/">← OVERVIEW</a></div></header>
+<main class="control-page">
+<section class="files-page-heading"><div><div class="section-kicker">REMOTE ACCESS</div><h1>PC Control</h1><p>Control media playback and power on the SciNET host.</p></div><span class="pill live" id="controlStatus">READY</span></section>
+<section class="card control-card">
+<div class="section-head"><div><div class="label">MEDIA</div><h2>Playback</h2></div><span class="pill">HOST PC</span></div>
+<div class="media-controls"><button class="control-button" data-action="previous" aria-label="Previous track"><span>⏮</span><small>PREVIOUS</small></button><button class="control-button control-play" data-action="play-pause" aria-label="Play or pause"><span>⏯</span><small>PLAY / PAUSE</small></button><button class="control-button" data-action="next" aria-label="Next track"><span>⏭</span><small>NEXT</small></button></div>
+</section>
+<section class="card control-card">
+<div class="section-head"><div><div class="label">AUDIO</div><h2>System volume</h2></div><span class="pill">WINDOWS</span></div>
+<div class="volume-controls"><button class="control-button" data-action="volume-down" aria-label="Volume down"><span>−</span><small>VOLUME DOWN</small></button><button class="control-button" data-action="mute" aria-label="Mute or unmute"><span>◖</span><small>MUTE / UNMUTE</small></button><button class="control-button" data-action="volume-up" aria-label="Volume up"><span>＋</span><small>VOLUME UP</small></button></div>
+<p class="control-note">Volume buttons send the standard Windows media keys. The current volume percentage is not read back.</p>
+</section>
+<section class="card control-card input-card">
+<div class="section-head"><div><div class="label">INPUT</div><h2>Touchpad &amp; keyboard</h2></div><span class="pill">REMOTE INPUT</span></div>
+<div class="trackpad-shell">
+<div class="trackpad" id="trackpad" role="application" aria-label="Touchpad. Drag to move the PC cursor and tap to left click"><span class="trackpad-crosshair">＋</span><span class="trackpad-hint">TOUCH &amp; DRAG TO MOVE</span></div>
+<div class="mouse-buttons"><button type="button" class="mouse-button" data-mouse-click="left"><span>↖</span> LEFT CLICK</button><button type="button" class="mouse-button" data-mouse-click="right"><span>▤</span> RIGHT CLICK</button></div>
+<p class="control-note">Drag to move the PC pointer. Tap the pad to left-click, or use the dedicated buttons below.</p>
+</div>
+<div class="keyboard-section">
+<div class="keyboard-top"><div><div class="label">TEXT INPUT</div><h3>Keyboard</h3></div><span class="keyboard-tip">Uses your phone’s keyboard</span></div>
+<button type="button" class="type-field" id="openKeyboard"><span>⌨</span><span><strong>Tap to type on your PC</strong><small>Opens your device’s native keyboard</small></span><b>↗</b></button>
+<textarea id="remoteTextInput" class="remote-text-input" aria-label="Type text to send to the PC" placeholder="Tap here to open your phone keyboard…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" rows="1"></textarea>
+<div class="modifier-row" aria-label="Keyboard modifiers"><button type="button" class="modifier-key" data-modifier="ctrl">Ctrl</button><button type="button" class="modifier-key" data-modifier="alt">Alt</button><button type="button" class="modifier-key" data-modifier="shift">Shift</button><button type="button" class="modifier-key" data-modifier="meta">Win</button></div>
+<div class="special-keys"><button type="button" data-key="esc">Esc</button><button type="button" data-key="tab">Tab</button><button type="button" data-key="enter">Enter</button><button type="button" data-key="delete">Del</button><button type="button" data-key="up">↑</button><button type="button" data-key="left">←</button><button type="button" data-key="down">↓</button><button type="button" data-key="right">→</button><button type="button" data-key="home">Home</button><button type="button" data-key="end">End</button></div>
+<details class="function-key-panel"><summary>Function keys <span>F1–F12</span></summary><div class="function-keys"><button type="button" data-key="f1">F1</button><button type="button" data-key="f2">F2</button><button type="button" data-key="f3">F3</button><button type="button" data-key="f4">F4</button><button type="button" data-key="f5">F5</button><button type="button" data-key="f6">F6</button><button type="button" data-key="f7">F7</button><button type="button" data-key="f8">F8</button><button type="button" data-key="f9">F9</button><button type="button" data-key="f10">F10</button><button type="button" data-key="f11">F11</button><button type="button" data-key="f12">F12</button></div></details>
+<p class="control-note">Tap a modifier once, then type or tap a key. The modifier applies to the next key and resets automatically. Phone keyboard Backspace erases on the PC.</p>
+</div></section>
+<section class="card control-card">
+<div class="section-head"><div><div class="label">POWER</div><h2>Power options</h2></div><span class="pill">HOST PC</span></div>
+<div class="power-controls"><button class="power-button" data-action="lock"><span class="power-icon">▣</span><span><strong>Lock PC</strong><small>Lock the Windows session</small></span><b>→</b></button><button class="power-button" data-action="sleep"><span class="power-icon">☾</span><span><strong>Sleep</strong><small>Put the host PC to sleep</small></span><b>→</b></button><button class="power-button" data-action="restart"><span class="power-icon">↻</span><span><strong>Restart</strong><small>Restart the host PC</small></span><b>→</b></button><button class="power-button danger" data-action="shutdown"><span class="power-icon">⏻</span><span><strong>Shut down</strong><small>Power off the host PC</small></span><b>→</b></button></div>
+<p class="control-note">Sleep and shutdown disconnect SciNET until the host wakes or starts again.</p>
+</section>
+<div class="control-toast" id="controlToast" role="status" aria-live="polite"></div>
+</main><footer>SCINET · REMOTE CONTROL</footer></div>
+<script src="/static/control.js"></script></body></html>
