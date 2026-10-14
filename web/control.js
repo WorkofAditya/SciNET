@@ -129,65 +129,70 @@ window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installProm
 $('installApp').addEventListener('click',async()=>{if(!installPrompt){showMessage('Use your browser menu to install SciNET when available.',true);return}installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installApp').hidden=true});
 if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
 
-/* Desktop screen mirroring is explicitly opt-in and captures only while active. */
+/* Real-time desktop mirroring over WebRTC (no screenshot polling). */
 const screenStart=$('screenStart'),screenStop=$('screenStop'),screenFrame=$('screenFrame');
 const screenPlaceholder=$('screenPlaceholder'),screenState=$('screenState');
 const screenLiveIndicator=$('screenLiveIndicator'),screenMessage=$('screenMessage');
-let screenActive=false,screenAbort=null,screenObjectUrl=null;
-const screenDelay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+let screenActive=false,screenPeer=null,screenStream=null;
 function setScreenUi(active,message){
  screenState.textContent=active?'LIVE':'OFF';
  screenState.classList.toggle('live',active);
- screenStart.hidden=active;screenStop.hidden=!active;
- screenLiveIndicator.hidden=!active;
+ screenStart.hidden=active;screenStop.hidden=!active;screenLiveIndicator.hidden=!active;
  if(message)screenMessage.textContent=message;
- if(!active){
-  screenFrame.hidden=true;screenPlaceholder.hidden=false;
-  if(screenObjectUrl){URL.revokeObjectURL(screenObjectUrl);screenObjectUrl=null}
-  screenFrame.removeAttribute('src');
- }
+ if(!active){screenFrame.hidden=true;screenFrame.srcObject=null;screenPlaceholder.hidden=false;}
 }
-async function runScreenLoop(){
- while(screenActive){
-  screenAbort=new AbortController();
-  try{
-   const response=await fetch('/api/screen/frame?t='+Date.now(),{cache:'no-store',signal:screenAbort.signal});
-   if(!response.ok){
-    let details={};try{details=await response.json()}catch{}
-    throw Error(details.error||'Screen capture failed');
-   }
-   const blob=await response.blob();
-   if(!screenActive)break;
-   const nextUrl=URL.createObjectURL(blob);
-   const previousUrl=screenObjectUrl;screenObjectUrl=nextUrl;
-   screenFrame.src=nextUrl;screenFrame.hidden=false;screenPlaceholder.hidden=true;screenFrame.onload=()=>{if(screenFrame.naturalWidth&&screenFrame.naturalHeight)$('screenViewer').style.aspectRatio=screenFrame.naturalWidth+' / '+screenFrame.naturalHeight};
-   if(previousUrl)URL.revokeObjectURL(previousUrl);
-   screenMessage.textContent='Live desktop · refreshing automatically';
-  }catch(error){
-   if(!screenActive||error.name==='AbortError')break;
-   screenActive=false;setScreenUi(false,error.message||'Screen view stopped');
-   showMessage(error.message||'Could not capture the desktop',true);
-   break;
-  }
-  await screenDelay(250);
- }
- screenAbort=null;
+async function stopScreenStream(message='Screen stream stopped'){
+ screenActive=false;
+ if(screenPeer){try{screenPeer.ontrack=null;screenPeer.close()}catch{}screenPeer=null}
+ if(screenStream){screenStream.getTracks().forEach(track=>track.stop());screenStream=null}
+ setScreenUi(false,message);
+ try{await fetch('/api/screen/stop',{method:'POST',keepalive:true})}catch{}
 }
-screenStart.addEventListener('click',()=>{
+async function startScreenStream(){
  if(screenActive)return;
- screenActive=true;setScreenUi(true,'Connecting to desktop…');
+ screenActive=true;setScreenUi(true,'Negotiating low-latency WebRTC stream…');
  screenFrame.hidden=true;screenPlaceholder.hidden=false;
  screenPlaceholder.querySelector('strong').textContent='Connecting to your desktop…';
- screenPlaceholder.querySelector('small').textContent='The screen view is active only while this session runs.';
- runScreenLoop();
-});
-screenStop.addEventListener('click',()=>{
- screenActive=false;if(screenAbort)screenAbort.abort();
- setScreenUi(false,'Screen capture is off');
- screenPlaceholder.querySelector('strong').textContent='Your desktop is not being shared';
- screenPlaceholder.querySelector('small').textContent='Screen capture starts only when you press Start viewing.';
-});
-window.addEventListener('pagehide',()=>{
- screenActive=false;if(screenAbort)screenAbort.abort();
- if(screenObjectUrl)URL.revokeObjectURL(screenObjectUrl);
-});
+ screenPlaceholder.querySelector('small').textContent='Starting real-time video transport.';
+ try{
+  const pc=new RTCPeerConnection({iceServers:[]});
+  screenPeer=pc;
+  pc.addTransceiver('video',{direction:'recvonly'});
+  pc.ontrack=event=>{
+   if(!screenActive)return;
+   screenStream=event.streams[0]||new MediaStream([event.track]);
+   screenFrame.srcObject=screenStream;screenFrame.hidden=false;screenPlaceholder.hidden=true;
+   screenFrame.playsInline=true;screenFrame.autoplay=true;
+   screenFrame.play().catch(()=>{});
+   screenMessage.textContent='WebRTC live · '+$('screenResolution').value+' · '+$('screenFps').value+' FPS target';
+  };
+  pc.onconnectionstatechange=()=>{
+   if(!screenActive)return;
+   if(pc.connectionState==='connected')screenMessage.textContent='WebRTC connected · real-time desktop video';
+   if(['failed','disconnected','closed'].includes(pc.connectionState)&&pc.connectionState!=='closed')stopScreenStream('Connection lost — press Start viewing to reconnect');
+  };
+  const offer=await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await new Promise((resolve,reject)=>{
+   if(pc.iceGatheringState==='complete')return resolve();
+   const timeout=setTimeout(()=>resolve(),5000);
+   pc.addEventListener('icegatheringstatechange',()=>{
+    if(pc.iceGatheringState==='complete'){clearTimeout(timeout);resolve()}
+   });
+  });
+  const response=await fetch('/api/screen/offer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sdp:pc.localDescription.sdp,type:pc.localDescription.type,resolution:$('screenResolution').value,fps:Number($('screenFps').value)})});
+  const answer=await response.json().catch(()=>({}));
+  if(!response.ok)throw Error(answer.error||'Could not establish WebRTC stream');
+  if(!screenActive){pc.close();return}
+  await pc.setRemoteDescription(answer);
+ }catch(error){
+  if(screenPeer){try{screenPeer.close()}catch{}screenPeer=null}
+  screenActive=false;setScreenUi(false,error.message||'Could not start screen stream');
+  screenPlaceholder.querySelector('strong').textContent='Could not connect to your desktop';
+  screenPlaceholder.querySelector('small').textContent=error.message||'Check SciNET-Link on the PC and try again.';
+  showMessage(error.message||'Could not start screen mirroring',true);
+ }
+}
+screenStart.addEventListener('click',startScreenStream);
+screenStop.addEventListener('click',()=>stopScreenStream());
+window.addEventListener('pagehide',()=>{screenActive=false;if(screenPeer)screenPeer.close();if(screenStream)screenStream.getTracks().forEach(track=>track.stop());});
