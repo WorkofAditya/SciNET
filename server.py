@@ -325,7 +325,7 @@ async def control_host(request: Request):
         return {"ok": True, "action": action}
     if action == "restart":
         try:
-            subprocess.Popen(["shutdown.exe", "/r", "/t", "10"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            subprocess.Popen(["shutdown.exe", "/r", "/t", "0"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except OSError:
             return JSONResponse({"error": "Could not request Windows restart"}, status_code=500)
         log_event("PC restart requested remotely", "control")
