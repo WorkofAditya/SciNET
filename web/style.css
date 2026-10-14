@@ -79,3 +79,6 @@
 .screen-fps{margin-left:auto;color:#7b8490;font-size:9px}
 .screen-card #screenState.live{color:#f0aaa4;border-color:#57302f}
 @media(max-width:520px){.screen-intro{align-items:flex-start;padding:11px}.screen-viewer{min-height:160px}.screen-fps{width:100%;margin-left:0}}
+
+/* The placeholder has an explicit display:flex rule, so preserve the browser's hidden state. */
+.screen-placeholder[hidden]{display:none!important}
