@@ -12,11 +12,14 @@ import socket
 import threading
 import time
 import uuid
+from fractions import Fraction
 
 import psutil
 import qrcode
 import mss
 from PIL import Image, ImageDraw
+import av
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -48,6 +51,8 @@ events_lock = threading.Lock()
 clipboard = {"text": "", "updated": 0, "source": ""}
 clipboard_lock = threading.Lock()
 clipboard_clients = set()
+screen_peers = set()
+screen_peers_lock = asyncio.Lock()
 
 
 def log_event(message, kind="info"):
@@ -196,8 +201,73 @@ async def api_system(): return system_info()
 @app.get("/control", response_class=HTMLResponse)
 async def control_panel_page(): return (WEB_DIR / "control.html").read_text(encoding="utf-8")
 
-@app.get("/api/screen/frame")
-async def screen_frame(request: Request):
+class DesktopVideoTrack(VideoStreamTrack):
+    """Low-latency Windows desktop track for WebRTC."""
+    def __init__(self, width=1280, height=720, fps=30):
+        super().__init__()
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self._monitor = None
+        self._capture = None
+        self._next_pts = 0
+        self._frame_step = max(1, int(90000 / fps))
+        self._frame_interval = 1.0 / fps
+        self._next_frame_time = 0.0
+        self._closed = False
+
+    async def recv(self):
+        if self._closed:
+            raise asyncio.CancelledError
+        now = time.monotonic()
+        if self._next_frame_time > now:
+            await asyncio.sleep(self._next_frame_time - now)
+        self._next_frame_time = max(self._next_frame_time + self._frame_interval, time.monotonic())
+        if self._capture is None:
+            self._capture = mss.mss()
+            self._monitor = self._capture.monitors[1]
+        shot = await asyncio.to_thread(self._capture.grab, self._monitor)
+        image = Image.frombytes("RGB", shot.size, shot.rgb)
+        image.thumbnail((self.width, self.height), Image.Resampling.BILINEAR)
+        # Pad to an encoder-friendly even size while preserving the entire desktop.
+        if image.size != (self.width, self.height):
+            canvas = Image.new("RGB", (self.width, self.height), (0, 0, 0))
+            left = (self.width - image.width) // 2
+            top = (self.height - image.height) // 2
+            canvas.paste(image, (left, top))
+            image = canvas
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+        point = POINT()
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+            px = point.x - self._monitor["left"]
+            py = point.y - self._monitor["top"]
+            screen_w, screen_h = shot.size
+            px = int(px * self.width / screen_w)
+            py = int(py * self.height / screen_h)
+            draw = ImageDraw.Draw(image)
+            cursor = [(px, py), (px, py + 22), (px + 5, py + 17), (px + 9, py + 25),
+                      (px + 13, py + 23), (px + 9, py + 15), (px + 17, py + 15)]
+            draw.polygon(cursor, fill="white", outline="black", width=2)
+        frame = av.VideoFrame.from_image(image)
+        frame.pts = self._next_pts
+        frame.time_base = Fraction(1, 90000)
+        self._next_pts += self._frame_step
+        return frame
+
+    async def stop(self):
+        self._closed = True
+        if self._capture is not None:
+            try:
+                self._capture.close()
+            except Exception:
+                pass
+            self._capture = None
+        await super().stop()
+
+
+@app.post("/api/screen/offer")
+async def screen_offer(request: Request):
     client = request.client
     if not client:
         return JSONResponse({"error": "Could not identify this device"}, status_code=400)
@@ -208,39 +278,70 @@ async def screen_frame(request: Request):
     except ValueError:
         return JSONResponse({"error": "Invalid client address"}, status_code=400)
     if platform.system() != "Windows":
-        return JSONResponse({"error": "Screen capture is supported on Windows only"}, status_code=501)
+        return JSONResponse({"error": "Screen mirroring is supported on Windows only"}, status_code=501)
     try:
-        def capture_frame():
-            # Capture only in response to an active viewer request; no background capture loop.
-            with mss.mss() as capture:
-                monitor = capture.monitors[1]
-                shot = capture.grab(monitor)
-                frame = Image.frombytes("RGB", shot.size, shot.rgb)
-                # MSS does not include the Windows pointer in screenshots; draw a visible
-                # pointer into the frame so it is also visible on the remote phone.
-                class POINT(ctypes.Structure):
-                    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-                point = POINT()
-                if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
-                    px = point.x - monitor["left"]
-                    py = point.y - monitor["top"]
-                    if 0 <= px < shot.width and 0 <= py < shot.height:
-                        scale = min(1.0, 1440 / shot.width, 900 / shot.height)
-                        px, py = int(px * scale), int(py * scale)
-                        pointer = [(px, py), (px, py + int(22 * scale)), (px + int(5 * scale), py + int(17 * scale)), (px + int(9 * scale), py + int(25 * scale)), (px + int(13 * scale), py + int(23 * scale)), (px + int(9 * scale), py + int(15 * scale)), (px + int(17 * scale), py + int(15 * scale))]
-                        # Draw after resizing below so the cursor remains crisp.
-                frame.thumbnail((1440, 900), Image.Resampling.LANCZOS)
-                if 'pointer' in locals():
-                    draw = ImageDraw.Draw(frame)
-                    draw.polygon(pointer, fill="white", outline="black", width=2)
-                output = io.BytesIO()
-                frame.save(output, format="JPEG", quality=68, optimize=True)
-                return output.getvalue()
-        image_bytes = await asyncio.to_thread(capture_frame)
-        return Response(content=image_bytes, media_type="image/jpeg", headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"})
+        data = await request.json()
+        sdp = str(data.get("sdp") or "")
+        kind = str(data.get("type") or "")
+        if not sdp or kind != "offer":
+            return JSONResponse({"error": "Invalid WebRTC offer"}, status_code=400)
+        resolutions = {
+            "480p": (854, 480),
+            "720p": (1280, 720),
+            "1080p": (1920, 1080),
+        }
+        resolution = str(data.get("resolution") or "720p")
+        if resolution not in resolutions:
+            return JSONResponse({"error": "Unsupported resolution"}, status_code=400)
+        try:
+            fps = int(data.get("fps", 30))
+        except (TypeError, ValueError):
+            fps = 30
+        if fps not in (15, 24, 30):
+            return JSONResponse({"error": "FPS must be 15, 24, or 30"}, status_code=400)
+        width, height = resolutions[resolution]
+        pc = RTCPeerConnection()
+        track = DesktopVideoTrack(width, height, fps)
+        pc.addTrack(track)
+        screen_peers.add(pc)
+
+        @pc.on("connectionstatechange")
+        async def on_connection_state_change():
+            if pc.connectionState in ("failed", "closed", "disconnected"):
+                screen_peers.discard(pc)
+                await pc.close()
+
+        await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=kind))
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        deadline = time.monotonic() + 8
+        while pc.iceGatheringState != "complete" and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
     except Exception as exc:
-        log_event(f"Screen capture failed: {type(exc).__name__}", "control")
-        return JSONResponse({"error": "Could not capture the Windows desktop. Ensure SciNET-Link is running in the interactive user session."}, status_code=500)
+        log_event(f"WebRTC setup failed: {type(exc).__name__}", "control")
+        return JSONResponse({"error": "Could not start WebRTC screen stream. Check SciNET dependencies and the Windows desktop session."}, status_code=500)
+
+
+@app.post("/api/screen/stop")
+async def screen_stop(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Screen viewing is only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    # WebRTC peer connections are scoped to this server process; closing peers releases
+    # capture and encoder resources immediately when the viewer stops.
+    for pc in list(screen_peers):
+        try:
+            await pc.close()
+        finally:
+            screen_peers.discard(pc)
+    return {"ok": True}
 
 
 @app.get("/manifest.webmanifest")
