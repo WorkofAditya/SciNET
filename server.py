@@ -263,7 +263,7 @@ class DesktopVideoTrack(VideoStreamTrack):
             except Exception:
                 pass
             self._capture = None
-        await super().stop()
+        super().stop()
 
 
 @app.post("/api/screen/offer")
@@ -303,6 +303,7 @@ async def screen_offer(request: Request):
         pc = RTCPeerConnection()
         track = DesktopVideoTrack(width, height, fps)
         pc.addTrack(track)
+        pc._scinet_client_host = client.host
         screen_peers.add(pc)
 
         @pc.on("connectionstatechange")
@@ -337,6 +338,8 @@ async def screen_stop(request: Request):
     # WebRTC peer connections are scoped to this server process; closing peers releases
     # capture and encoder resources immediately when the viewer stops.
     for pc in list(screen_peers):
+        if getattr(pc, "_scinet_client_host", None) != client.host:
+            continue
         try:
             await pc.close()
         finally:
