@@ -47,7 +47,7 @@
 </div></section>
 <section class="card control-card process-manager-card" id="processManager">
 <div class="section-head"><div><div class="label">PROCESS MANAGER</div><h2>Running apps &amp; processes</h2></div><span class="pill">ON-DEMAND</span></div>
-<p class="control-note">Nothing is queried or displayed until you press <strong>Display current processes</strong>. Ending apps may discard unsaved work. Windows-critical and SciNET processes are protected.</p>
+<p class="control-note">Process information is fetched only while this list is visible and refreshes live. Hide the list to stop all process monitoring. Ending apps may discard unsaved work. Windows-critical and SciNET processes are protected.</p>
 <div class="process-launch-row"><button type="button" class="button primary-action" id="displayProcesses" aria-expanded="false">▤ Display current processes</button><span id="processLoadStatus" class="process-muted" role="status" hidden></span></div>
 <div id="processResults" hidden>
 <div class="process-overview" id="processOverview">
@@ -58,12 +58,12 @@
 <div class="process-toolbar">
 <label class="process-search">⌕ <input type="search" id="processSearch" placeholder="Search app, executable or PID…" autocomplete="off"></label>
 <label class="process-select-label">SORT BY<select id="processSort"><option value="name">App name</option><option value="cpu">CPU usage</option><option value="memory">Memory usage</option><option value="runtime">Running time</option></select></label>
-<label class="process-toggle"><input type="checkbox" id="processAutoRefresh"> Auto-refresh · 5 sec</label>
+
 <label class="process-toggle"><input type="checkbox" id="processGroupApps" checked> Group by app</label>
 <button type="button" class="button" id="refreshProcesses">↻ Refresh</button>
 </div>
-<p class="process-note">CPU readings update over time and may initially show 0%. Restart launches the app executable without its original command-line arguments; some apps may not restart correctly.</p>
-<details class="process-section" open><summary class="process-section-heading"><div><span class="process-category-dot user-dot"></span><h3>User activity</h3></div><span id="userProcessCount">0 processes</span></summary><p>Applications running under your Windows user account.</p><div id="userProcesses" class="process-list"></div></details>
+<p class="process-note">CPU readings update over time and may initially show 0%. Use the window icons to minimize or maximize an app. End task and Force stop run immediately without confirmation.</p>
+<details class="process-section"><summary class="process-section-heading"><div><span class="process-category-dot user-dot"></span><h3>User activity</h3></div><span id="userProcessCount">0 processes</span></summary><p>Applications running under your Windows user account.</p><div id="userProcesses" class="process-list"></div></details>
 <details class="process-section" open><summary class="process-section-heading"><div><span class="process-category-dot system-dot"></span><h3>Windows system activity</h3></div><span id="systemProcessCount">0 processes</span></summary><p>Windows components and services. Critical processes are protected from termination.</p><div id="systemProcesses" class="process-list"></div></details>
 <details class="process-section" open><summary class="process-section-heading"><div><span class="process-category-dot background-dot"></span><h3>Other background activity</h3></div><span id="backgroundProcessCount">0 processes</span></summary><p>Processes that could not be confidently classified as user apps or Windows components.</p><div id="backgroundProcesses" class="process-list"></div></details>
 </div>
