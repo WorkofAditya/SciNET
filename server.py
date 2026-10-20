@@ -438,8 +438,11 @@ def _check_process_request(request):
         return JSONResponse({"error": "Could not identify this device"}, status_code=400)
     try:
         remote_ip = ipaddress.ip_address(client.host)
-        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
-            return JSONResponse({"error": "Process management is only available on a private local network"}, status_code=403)
+        # Tailscale commonly assigns 100.64.0.0/10 addresses, which Python's
+        # ipaddress module does not classify as RFC1918 private addresses.
+        tailscale_range = ipaddress.ip_network("100.64.0.0/10")
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local or remote_ip in tailscale_range):
+            return JSONResponse({"error": "Process management is only available on a private local network or Tailscale"}, status_code=403)
     except ValueError:
         return JSONResponse({"error": "Invalid client address"}, status_code=400)
     if platform.system() != "Windows":
