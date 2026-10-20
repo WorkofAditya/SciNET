@@ -498,10 +498,10 @@ async def process_action(request: Request):
                              close_fds=True)
             log_event(f"Application restart requested: {record['name']} (PID {pid})", "control")
             return {"ok": True, "message": f"Launch requested for {record['name']}. Some apps require sign-in or launch arguments."}
-        proc.terminate()
         if action == "force-stop":
             proc.kill()
         else:
+            proc.terminate()
             try:
                 proc.wait(timeout=3)
             except psutil.TimeoutExpired:
