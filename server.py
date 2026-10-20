@@ -359,7 +359,7 @@ _PROCESS_PROTECTED_NAMES = {
     "services.exe", "lsass.exe", "svchost.exe", "fontdrvhost.exe", "dwm.exe",
     "secure system", "memory compression", "explorer.exe", "spoolsv.exe",
 }
-_PROCESS_ACTIONS = {"stop", "force-stop", "restart"}
+_PROCESS_ACTIONS = {"stop", "force-stop", "minimize", "maximize"}
 
 
 def _process_is_protected(proc, name, exe):
@@ -492,15 +492,23 @@ async def process_action(request: Request):
             return JSONResponse({"error": "That process is no longer running. Refresh the list."}, status_code=404)
         if record["protected"]:
             return JSONResponse({"error": "This process is protected because it is critical to Windows or SciNET."}, status_code=403)
-        if action == "restart":
-            if not record["can_restart"] or not record["exe"]:
-                return JSONResponse({"error": "Only eligible user applications with a known executable can be restarted."}, status_code=403)
-            executable = record["exe"]
-            subprocess.Popen([executable], cwd=str(Path(executable).parent),
-                             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-                             close_fds=True)
-            log_event(f"Application restart requested: {record['name']} (PID {pid})", "control")
-            return {"ok": True, "message": f"Launch requested for {record['name']}. Some apps require sign-in or launch arguments."}
+        if action in {"minimize", "maximize"}:
+            user32 = ctypes.windll.user32
+            windows = []
+            enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            def collect_window(hwnd, _lparam):
+                window_pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+                if window_pid.value == pid and user32.IsWindowVisible(hwnd):
+                    windows.append(hwnd)
+                return True
+            callback = enum_proc_type(collect_window)
+            user32.EnumWindows(callback, 0)
+            if not windows:
+                return JSONResponse({"error": "No visible window was found for this process."}, status_code=404)
+            user32.ShowWindow(windows[0], 6 if action == "minimize" else 3)
+            log_event(f"Process window {action}: {record['name']} (PID {pid})", "control")
+            return {"ok": True, "message": f"{record['name']} window {action}d."}
         if action == "force-stop":
             proc.kill()
         else:
