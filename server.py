@@ -478,23 +478,43 @@ def _check_process_request(request):
     return None
 
 
-@app.get("/api/processes")
-async def list_processes(request: Request):
+# This event is disabled at startup. Process enumeration only runs while the UI explicitly enables it.
+_process_monitoring_enabled = threading.Event()
+
+
+@app.post("/api/processes/monitor")
+async def set_process_monitoring(request: Request):
     denied = _check_process_request(request)
     if denied:
         return denied
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid monitoring request"}, status_code=400)
+    if bool(data.get("enabled")):
+        _process_monitoring_enabled.set()
+        return {"ok": True, "enabled": True}
+    _process_monitoring_enabled.clear()
+    return {"ok": True, "enabled": False}
+
+
+def _collect_process_snapshot():
     records = []
     window_titles = _visible_process_windows()
     for proc in psutil.process_iter():
+        # Hiding the UI clears this event; stop collecting as soon as practical.
+        if not _process_monitoring_enabled.is_set():
+            return None
         record = _process_record(proc)
         if record is not None:
             record["window_title"] = window_titles.get(record["pid"], "")
             record["app_name"] = Path(record["exe"]).stem if record["exe"] else record["name"]
             records.append(record)
+    if not _process_monitoring_enabled.is_set():
+        return None
     records.sort(key=lambda item: (item["category"], item["name"].lower(), item["pid"]))
     memory = psutil.virtual_memory()
     cpu_total = psutil.cpu_percent(interval=None)
-    log_event("Process list viewed from Control page", "control")
     return {
         "ok": True, "processes": records, "total": len(records),
         "cpu_percent": round(cpu_total, 1), "memory_total": int(memory.total),
@@ -502,6 +522,20 @@ async def list_processes(request: Request):
         "current_user": getpass.getuser(),
     }
 
+
+@app.get("/api/processes")
+async def list_processes(request: Request):
+    denied = _check_process_request(request)
+    if denied:
+        return denied
+    if not _process_monitoring_enabled.is_set():
+        return JSONResponse({"error": "Process monitoring is not enabled"}, status_code=409)
+    # Keep synchronous Windows/psutil enumeration off SciNET's asyncio event loop.
+    result = await asyncio.to_thread(_collect_process_snapshot)
+    if result is None or not _process_monitoring_enabled.is_set():
+        return JSONResponse({"error": "Process monitoring was stopped"}, status_code=409)
+    log_event("Process list viewed from Control page", "control")
+    return result
 
 @app.post("/api/processes/action")
 async def process_action(request: Request):
