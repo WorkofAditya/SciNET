@@ -290,3 +290,110 @@ async function applyLiveScreenSettings(){
 $('screenResolution').addEventListener('change',applyLiveScreenSettings);
 $('screenFps').addEventListener('change',applyLiveScreenSettings);
 window.addEventListener('pagehide',()=>{screenActive=false;if(screenPeer)screenPeer.close();if(screenStream)screenStream.getTracks().forEach(track=>track.stop());});
+
+
+/* Process Manager — no process enumeration occurs until the user requests it. */
+const processResults=$('processResults');
+const processLoadStatus=$('processLoadStatus');
+const processDisplayButton=$('displayProcesses');
+let processSnapshot=[];
+let processHasLoaded=false;
+let processRefreshTimer=null;
+let processFetchBusy=false;
+function processEscape(value){
+ return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function processBytes(value){
+ const n=Number(value)||0;
+ if(n<1024)return n+' B';
+ const units=['KB','MB','GB','TB'];let v=n/1024,i=0;
+ while(v>=1024&&i<units.length-1){v/=1024;i++}
+ return v.toFixed(v>=100?0:v>=10?1:2)+' '+units[i];
+}
+function processRuntime(created){
+ if(!created)return 'Unknown';
+ const seconds=Math.max(0,Math.floor(Date.now()/1000-created));
+ const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600),minutes=Math.floor(seconds%3600/60);
+ return days?days+'d '+hours+'h':hours?hours+'h '+minutes+'m':minutes+'m';
+}
+function processFilteredSorted(){
+ const q=$('processSearch').value.trim().toLowerCase(),sort=$('processSort').value;
+ return processSnapshot.filter(p=>[p.name,p.pid,p.exe,p.username,p.status].some(v=>String(v??'').toLowerCase().includes(q)))
+ .sort((a,b)=>sort==='cpu'?(b.cpu_percent-a.cpu_percent||a.name.localeCompare(b.name)):sort==='memory'?(b.memory_bytes-a.memory_bytes||a.name.localeCompare(b.name)):sort==='runtime'?((b.created_at||0)-(a.created_at||0)||a.name.localeCompare(b.name)):a.name.localeCompare(b.name));
+}
+function processActionButtons(p){
+ const disabled=p.protected?' disabled title="Protected process"':'';
+ return '<div class="process-actions"><button class="button process-action" data-process-action="stop" data-pid="'+p.pid+'"'+disabled+'>End task</button><button class="button process-action process-danger" data-process-action="force-stop" data-pid="'+p.pid+'"'+disabled+'>Force stop</button><button class="button process-action" data-process-action="restart" data-pid="'+p.pid+'"'+(disabled||!p.can_restart?' disabled title="Restart is available only for eligible user apps"':'')+'>Restart</button></div>';
+}
+function processCard(p){
+ return '<article class="process-row"><div class="process-app-icon">'+processEscape(p.name.slice(0,1).toUpperCase())+'</div><div class="process-main"><div class="process-title-row"><strong>'+processEscape(p.name)+'</strong><span class="process-pid">PID '+p.pid+'</span>'+(p.protected?'<span class="process-protected">PROTECTED</span>':'')+'</div><div class="process-meta"><span>CPU '+Number(p.cpu_percent||0).toFixed(1)+'%</span><span>RAM '+processBytes(p.memory_bytes)+'</span><span>Running '+processRuntime(p.created_at)+'</span><span>'+processEscape(p.status)+'</span></div><details class="process-details"><summary>Details</summary><dl><dt>Executable</dt><dd>'+processEscape(p.exe||'Path unavailable')+'</dd><dt>Account</dt><dd>'+processEscape(p.username)+'</dd><dt>PID</dt><dd>'+p.pid+'</dd></dl></details>'+processActionButtons(p)+'</div></article>';
+}
+function processRenderCategory(category,targetId,countId){
+ const target=$(targetId),items=processFilteredSorted().filter(p=>p.category===category);
+ $(countId).textContent=items.length+' process'+(items.length===1?'':'es');
+ if(!items.length){target.innerHTML='<div class="process-empty">No matching processes in this section.</div>';return}
+ if(!$('processGroupApps').checked){target.innerHTML=items.map(processCard).join('');return}
+ const groups=new Map();
+ items.forEach(p=>{const key=p.name.toLowerCase();if(!groups.has(key))groups.set(key,[]);groups.get(key).push(p)});
+ target.innerHTML=[...groups.values()].map(group=>'<details class="process-group"><summary><span>'+processEscape(group[0].name)+'</span><span class="process-group-count">'+group.length+' process'+(group.length===1?'':'es')+'</span></summary><div>'+group.map(processCard).join('')+'</div></details>').join('');
+}
+function renderProcessManager(){
+ const filtered=processFilteredSorted();
+ $('processTotal').textContent=filtered.length.toLocaleString();
+ processRenderCategory('user','userProcesses','userProcessCount');
+ processRenderCategory('system','systemProcesses','systemProcessCount');
+ processRenderCategory('background','backgroundProcesses','backgroundProcessCount');
+}
+async function loadCurrentProcesses(){
+ if(processFetchBusy)return;
+ processFetchBusy=true;processDisplayButton.disabled=true;$('refreshProcesses').disabled=true;
+ processLoadStatus.textContent='Reading process list…';
+ try{
+  const response=await fetch('/api/processes',{cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok)throw Error(data.error||'Could not read processes');
+  processSnapshot=data.processes||[];processHasLoaded=true;
+  $('processCpu').textContent=Number(data.cpu_percent||0).toFixed(1)+'%';
+  $('processMemory').textContent=Number(data.memory_percent||0).toFixed(1)+'%';
+  $('processMemoryDetail').textContent=processBytes(data.memory_used)+' of '+processBytes(data.memory_total);
+  $('processTotal').textContent=processSnapshot.length.toLocaleString();
+  processLoadStatus.textContent='Updated '+new Date().toLocaleTimeString()+' · '+processSnapshot.length+' processes';
+  renderProcessManager();
+ }catch(error){processLoadStatus.textContent=error.message;showMessage('Process list: '+error.message,true)}
+ finally{processFetchBusy=false;processDisplayButton.disabled=false;$('refreshProcesses').disabled=false}
+}
+function configureProcessAutoRefresh(){
+ if(processRefreshTimer!==null){clearInterval(processRefreshTimer);processRefreshTimer=null}
+ if(processHasLoaded&&$('processAutoRefresh').checked)processRefreshTimer=setInterval(loadCurrentProcesses,5000);
+}
+processDisplayButton.addEventListener('click',async()=>{
+ processResults.hidden=false;
+ if(!processHasLoaded)await loadCurrentProcesses();else await loadCurrentProcesses();
+ configureProcessAutoRefresh();
+});
+$('refreshProcesses').addEventListener('click',loadCurrentProcesses);
+$('processSearch').addEventListener('input',()=>{if(processHasLoaded)renderProcessManager()});
+$('processSort').addEventListener('change',()=>{if(processHasLoaded)renderProcessManager()});
+$('processGroupApps').addEventListener('change',()=>{if(processHasLoaded)renderProcessManager()});
+$('processAutoRefresh').addEventListener('change',configureProcessAutoRefresh);
+$('processManager').addEventListener('click',async event=>{
+ const button=event.target.closest('[data-process-action]');
+ if(!button||button.disabled)return;
+ const pid=Number(button.dataset.pid),action=button.dataset.processAction;
+ const proc=processSnapshot.find(p=>p.pid===pid);
+ if(!proc)return;
+ let warning='End '+proc.name+' (PID '+pid+')? Unsaved work may be lost.';
+ if(action==='force-stop')warning='FORCE STOP '+proc.name+' (PID '+pid+')?\n\nThis terminates the process immediately and may lose unsaved work or corrupt files. Continue only if you accept this risk.';
+ if(action==='restart')warning='Close and relaunch '+proc.name+'?\n\nSciNET will launch its executable without the original command-line arguments. Unsaved work may be lost.';
+ if(!confirm(warning))return;
+ button.disabled=true;processLoadStatus.textContent=(action==='force-stop'?'Force stopping':action==='restart'?'Restarting':'Ending')+' '+proc.name+'…';
+ try{
+  const response=await fetch('/api/processes/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid,action})});
+  const data=await response.json();
+  if(!response.ok)throw Error(data.error||'Process action failed');
+  showMessage(data.message||'Process action completed');
+  await loadCurrentProcesses();
+ }catch(error){showMessage(error.message,true);processLoadStatus.textContent=error.message}
+ finally{button.disabled=false}
+});
+window.addEventListener('pagehide',()=>{if(processRefreshTimer!==null)clearInterval(processRefreshTimer)});
