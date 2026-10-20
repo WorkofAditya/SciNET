@@ -105,6 +105,27 @@ document.querySelectorAll('[data-key]').forEach(button=>button.addEventListener(
  const key=button.dataset.key;sendKey(key,consumeModifiers());
 }));
 const trackpad=$('trackpad');let pointer=null,moved=false,lastX=0,lastY=0,startX=0,startY=0;
+// Never flood the host with one HTTP request per pointer event. Keep a single
+// mouse request in flight and combine movement while it is pending. This gives
+// mouse input a short, bounded queue instead of letting stale moves pile up.
+let pendingMouseDx=0,pendingMouseDy=0,mouseMoveSending=false;
+function queueMouseMove(dx,dy){
+ pendingMouseDx=Math.max(-2400,Math.min(2400,pendingMouseDx+dx));
+ pendingMouseDy=Math.max(-2400,Math.min(2400,pendingMouseDy+dy));
+ if(mouseMoveSending)return;
+ mouseMoveSending=true;
+ (async()=>{
+  try{
+   while(pendingMouseDx||pendingMouseDy){
+    const nextX=Math.max(-1200,Math.min(1200,pendingMouseDx));
+    const nextY=Math.max(-1200,Math.min(1200,pendingMouseDy));
+    pendingMouseDx-=nextX;pendingMouseDy-=nextY;
+    const result=await requestControl({action:'mouse-move',dx:nextX,dy:nextY},true);
+    if(!result){pendingMouseDx=0;pendingMouseDy=0;break}
+   }
+  }finally{mouseMoveSending=false}
+ })();
+}
 trackpad.addEventListener('pointerdown',event=>{
  if(event.pointerType==='mouse'&&event.button!==0)return;
  trackpad.setPointerCapture(event.pointerId);pointer=event.pointerId;moved=false;lastX=startX=event.clientX;lastY=startY=event.clientY;
@@ -113,7 +134,7 @@ trackpad.addEventListener('pointermove',event=>{
  if(pointer!==event.pointerId)return;
  const dx=event.clientX-lastX,dy=event.clientY-lastY;lastX=event.clientX;lastY=event.clientY;
  if(Math.hypot(event.clientX-startX,event.clientY-startY)>5)moved=true;
- if(dx||dy){const scale=window.innerWidth<600?3.0:2.0;requestControl({action:'mouse-move',dx:Math.round(dx*scale),dy:Math.round(dy*scale)},true)}
+ if(dx||dy){const scale=window.innerWidth<600?3.0:2.0;queueMouseMove(Math.round(dx*scale),Math.round(dy*scale))}
 });
 async function finishPad(event){
  if(pointer!==event.pointerId)return;
@@ -251,11 +272,13 @@ function queueRemotePosition(position){
  if(positionSending)return;
  positionSending=true;
  (async()=>{
-  while(lastRemotePosition){
-   const next=lastRemotePosition;lastRemotePosition=null;
-   await requestControl({action:'mouse-position',x:next.x,y:next.y},true);
-  }
-  positionSending=false;
+  try{
+   while(lastRemotePosition){
+    const next=lastRemotePosition;lastRemotePosition=null;
+    const result=await requestControl({action:'mouse-position',x:next.x,y:next.y},true);
+    if(!result){lastRemotePosition=null;break}
+   }
+  }finally{positionSending=false}
  })();
 }
 screenViewer.addEventListener('pointerdown',event=>{
