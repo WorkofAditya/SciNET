@@ -168,3 +168,6 @@
 }
 @media(max-width:390px){.process-overview{grid-template-columns:1fr}.process-stat{display:grid;grid-template-columns:1fr auto;align-items:center}.process-stat small{grid-column:1/-1}.process-title-row{gap:5px}}
 .process-manager-card [hidden]{display:none!important}
+
+.process-icon-action{display:inline-grid;place-items:center;width:32px;min-width:32px;padding:5px!important}
+.process-icon-action svg{display:block;width:16px;height:16px}
