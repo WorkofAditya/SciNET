@@ -432,6 +432,34 @@ def _process_record(proc):
         return None
 
 
+def _visible_process_windows():
+    """Return one useful visible top-level window title for each process."""
+    if platform.system() != "Windows":
+        return {}
+    windows = {}
+    user32 = ctypes.windll.user32
+    enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def collect_window(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        title_buffer = ctypes.create_unicode_buffer(min(length + 1, 1024))
+        user32.GetWindowTextW(hwnd, title_buffer, len(title_buffer))
+        title = title_buffer.value.strip()
+        if not title:
+            return True
+        window_pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+        if window_pid.value and window_pid.value not in windows:
+            windows[window_pid.value] = title
+        return True
+    callback = enum_proc_type(collect_window)
+    user32.EnumWindows(callback, 0)
+    return windows
+
+
 def _check_process_request(request):
     client = request.client
     if not client:
@@ -456,9 +484,12 @@ async def list_processes(request: Request):
     if denied:
         return denied
     records = []
+    window_titles = _visible_process_windows()
     for proc in psutil.process_iter():
         record = _process_record(proc)
         if record is not None:
+            record["window_title"] = window_titles.get(record["pid"], "")
+            record["app_name"] = Path(record["exe"]).stem if record["exe"] else record["name"]
             records.append(record)
     records.sort(key=lambda item: (item["category"], item["name"].lower(), item["pid"]))
     memory = psutil.virtual_memory()
