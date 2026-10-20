@@ -348,9 +348,10 @@ async function loadCurrentProcesses(){
  if(processFetchBusy)return;
  processFetchBusy=true;processDisplayButton.disabled=true;$('refreshProcesses').disabled=true;
  processLoadStatus.textContent='Reading process list…';
+ processDisplayButton.textContent='Loading processes…';
  try{
   const response=await fetch('/api/processes',{cache:'no-store'});
-  const data=await response.json();
+  const data=await response.json().catch(()=>({error:'The server returned an unreadable response'}));
   if(!response.ok)throw Error(data.error||'Could not read processes');
   processSnapshot=data.processes||[];processHasLoaded=true;
   $('processCpu').textContent=Number(data.cpu_percent||0).toFixed(1)+'%';
@@ -360,7 +361,7 @@ async function loadCurrentProcesses(){
   processLoadStatus.textContent='Updated '+new Date().toLocaleTimeString()+' · '+processSnapshot.length+' processes';
   renderProcessManager();
  }catch(error){processLoadStatus.textContent=error.message;showMessage('Process list: '+error.message,true)}
- finally{processFetchBusy=false;processDisplayButton.disabled=false;$('refreshProcesses').disabled=false}
+ finally{processFetchBusy=false;processDisplayButton.disabled=false;processDisplayButton.textContent='▤ Display current processes';$('refreshProcesses').disabled=false}
 }
 function configureProcessAutoRefresh(){
  if(processRefreshTimer!==null){clearInterval(processRefreshTimer);processRefreshTimer=null}
