@@ -216,6 +216,26 @@ class DesktopVideoTrack(VideoStreamTrack):
         self._next_frame_time = 0.0
         self._closed = False
 
+    def _make_frame(self, shot):
+        image = Image.frombytes("RGB", shot.size, shot.rgb)
+        # Preserve the monitor aspect ratio while resizing to the selected quality tier.
+        scale = min(self.width / shot.width, self.height / shot.height)
+        output_w = max(2, int(shot.width * scale) // 2 * 2)
+        output_h = max(2, int(shot.height * scale) // 2 * 2)
+        if image.size != (output_w, output_h):
+            image = image.resize((output_w, output_h), Image.Resampling.BILINEAR)
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+        point = POINT()
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+            px = int((point.x - self._monitor["left"]) * image.width / shot.width)
+            py = int((point.y - self._monitor["top"]) * image.height / shot.height)
+            draw = ImageDraw.Draw(image)
+            cursor = [(px, py), (px, py + 22), (px + 5, py + 17), (px + 9, py + 25),
+                      (px + 13, py + 23), (px + 9, py + 15), (px + 17, py + 15)]
+            draw.polygon(cursor, fill="white", outline="black", width=2)
+        return av.VideoFrame.from_image(image)
+
     async def recv(self):
         if self._closed:
             raise asyncio.CancelledError
@@ -227,31 +247,10 @@ class DesktopVideoTrack(VideoStreamTrack):
             self._capture = mss.mss()
             self._monitor = self._capture.monitors[1]
         shot = await asyncio.to_thread(self._capture.grab, self._monitor)
-        image = Image.frombytes("RGB", shot.size, shot.rgb)
-        # Resolution is a maximum quality tier, not a forced 16:9 canvas. Preserve
-        # the source monitor aspect ratio so 1080p does not add oversized letterboxes.
-        scale = min(self.width / shot.width, self.height / shot.height)
-        output_w = max(2, int(shot.width * scale) // 2 * 2)
-        output_h = max(2, int(shot.height * scale) // 2 * 2)
-        if image.size != (output_w, output_h):
-            image = image.resize((output_w, output_h), Image.Resampling.BILINEAR)
-        class POINT(ctypes.Structure):
-            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-        point = POINT()
-        if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
-            px = point.x - self._monitor["left"]
-            py = point.y - self._monitor["top"]
-            screen_w, screen_h = shot.size
-            # The output frame now uses the monitor's aspect ratio with no padding.
-            scale_x = image.width / screen_w
-            scale_y = image.height / screen_h
-            px = int(px * scale_x)
-            py = int(py * scale_y)
-            draw = ImageDraw.Draw(image)
-            cursor = [(px, py), (px, py + 22), (px + 5, py + 17), (px + 9, py + 25),
-                      (px + 13, py + 23), (px + 9, py + 15), (px + 17, py + 15)]
-            draw.polygon(cursor, fill="white", outline="black", width=2)
-        frame = av.VideoFrame.from_image(image)
+        # Keep PIL conversion, resizing, and cursor composition off the asyncio
+        # event loop. The same loop services high-priority remote mouse/keyboard
+        # requests and WebRTC signalling, so frame processing must not stall it.
+        frame = await asyncio.to_thread(self._make_frame, shot)
         frame.pts = self._next_pts
         frame.time_base = Fraction(1, 90000)
         self._next_pts += self._frame_step
