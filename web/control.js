@@ -347,7 +347,7 @@ function renderProcessManager(){
 async function loadCurrentProcesses(){
  if(processFetchBusy)return;
  processFetchBusy=true;processDisplayButton.disabled=true;$('refreshProcesses').disabled=true;
- processLoadStatus.textContent='Reading process list…';
+ if(processLoadStatus)processLoadStatus.textContent='Reading process list…';
  processDisplayButton.textContent='Loading processes…';
  try{
   const response=await fetch('/api/processes',{cache:'no-store'});
@@ -358,18 +358,28 @@ async function loadCurrentProcesses(){
   $('processMemory').textContent=Number(data.memory_percent||0).toFixed(1)+'%';
   $('processMemoryDetail').textContent=processBytes(data.memory_used)+' of '+processBytes(data.memory_total);
   $('processTotal').textContent=processSnapshot.length.toLocaleString();
-  processLoadStatus.textContent='Updated '+new Date().toLocaleTimeString()+' · '+processSnapshot.length+' processes';
+  if(processLoadStatus)processLoadStatus.textContent='Updated '+new Date().toLocaleTimeString()+' · '+processSnapshot.length+' processes';
   renderProcessManager();
- }catch(error){processLoadStatus.textContent=error.message;showMessage('Process list: '+error.message,true)}
- finally{processFetchBusy=false;processDisplayButton.disabled=false;processDisplayButton.textContent='▤ Display current processes';$('refreshProcesses').disabled=false}
+ }catch(error){if(processLoadStatus)processLoadStatus.textContent=error.message;showMessage('Process list: '+error.message,true)}
+ finally{processFetchBusy=false;processDisplayButton.disabled=false;processDisplayButton.textContent=processResults.hidden?'▤ Display current processes':'▤ Hide current processes';processDisplayButton.setAttribute('aria-expanded',String(!processResults.hidden));$('refreshProcesses').disabled=false}
 }
 function configureProcessAutoRefresh(){
  if(processRefreshTimer!==null){clearInterval(processRefreshTimer);processRefreshTimer=null}
  if(processHasLoaded&&$('processAutoRefresh').checked)processRefreshTimer=setInterval(loadCurrentProcesses,5000);
 }
 processDisplayButton.addEventListener('click',async()=>{
+ if(!processResults.hidden){
+  processResults.hidden=true;
+  processDisplayButton.textContent='▤ Display current processes';
+  processDisplayButton.setAttribute('aria-expanded','false');
+  if($('processAutoRefresh').checked){$('processAutoRefresh').checked=false}
+  configureProcessAutoRefresh();
+  return;
+ }
  processResults.hidden=false;
- if(!processHasLoaded)await loadCurrentProcesses();else await loadCurrentProcesses();
+ processDisplayButton.textContent='Loading processes…';
+ processDisplayButton.setAttribute('aria-expanded','true');
+ await loadCurrentProcesses();
  configureProcessAutoRefresh();
 });
 $('refreshProcesses').addEventListener('click',loadCurrentProcesses);
@@ -387,14 +397,14 @@ $('processManager').addEventListener('click',async event=>{
  if(action==='force-stop')warning='FORCE STOP '+proc.name+' (PID '+pid+')?\n\nThis terminates the process immediately and may lose unsaved work or corrupt files. Continue only if you accept this risk.';
  if(action==='restart')warning='Close and relaunch '+proc.name+'?\n\nSciNET will launch its executable without the original command-line arguments. Unsaved work may be lost.';
  if(!confirm(warning))return;
- button.disabled=true;processLoadStatus.textContent=(action==='force-stop'?'Force stopping':action==='restart'?'Restarting':'Ending')+' '+proc.name+'…';
+ button.disabled=true;if(processLoadStatus)processLoadStatus.textContent=(action==='force-stop'?'Force stopping':action==='restart'?'Restarting':'Ending')+' '+proc.name+'…';
  try{
   const response=await fetch('/api/processes/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pid,action})});
   const data=await response.json();
   if(!response.ok)throw Error(data.error||'Process action failed');
   showMessage(data.message||'Process action completed');
   await loadCurrentProcesses();
- }catch(error){showMessage(error.message,true);processLoadStatus.textContent=error.message}
+ }catch(error){showMessage(error.message,true);if(processLoadStatus)processLoadStatus.textContent=error.message}
  finally{button.disabled=false}
 });
 window.addEventListener('pagehide',()=>{if(processRefreshTimer!==null)clearInterval(processRefreshTimer)});
