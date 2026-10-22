@@ -42,6 +42,11 @@ The application runs on the Windows host. Other devices open it in a browser—n
 
 ### Remote PC control
 The dedicated **PC Control** page includes:
+- An on-demand process manager, shown only after selecting **Display current processes**.
+- Separate sections for user applications, Windows system activity, and other background processes.
+- Process search, sorting by name/CPU/memory/runtime, app grouping by default, manual refresh, and live one-second refresh only while the process list is visible.
+- Per-process memory, CPU, PID, account, status, executable path, and runtime details where Windows permissions allow.
+- Immediate End task and Force stop actions without confirmation, plus minimize/maximize window controls. Critical Windows and SciNET processes remain protected.
 - Media playback controls and Windows media-volume keys.
 - A touchpad for pointer movement and left/right mouse clicks.
 - Text input from the phone keyboard, plus Ctrl, Alt, Shift, and Windows modifiers.
@@ -109,6 +114,15 @@ Open **Files** from the navigation or visit `/files`. The file manager works ins
 
 ### PC Control
 Open **PC Control** from the dashboard navigation or visit `/control`. The page is designed for use from a phone as well as a desktop browser. For keyboard shortcuts, select a modifier and then tap or type the key combination. Power actions affect the Windows host itself; a sleep, restart, or shutdown will interrupt the connection until the host becomes available again.
+
+#### Process Manager
+Process enumeration is deliberately **on-demand**. Press **Display current processes** before the list or system resource summary is fetched or shown. User apps, Windows system activity, and other background activity are shown in separate sections. Search and sorting work across the visible sections; app grouping is enabled by default. While the list is visible, process data refreshes every second. Hiding the list immediately stops polling and clears the displayed snapshot; no process enumeration occurs while the list is hidden.
+
+- **End task** requests a normal process termination and waits briefly.
+- **Force stop** immediately kills the selected process. It can cause loss of unsaved work or data corruption.
+- **Minimize / Maximize** controls the selected process window when Windows exposes a visible top-level window for it.
+- Critical Windows processes and the SciNET server are protected by conservative checks. Windows may still deny access to other processes depending on the account running SciNET.
+- Process access is restricted to private/local clients, but the app does not have user authentication. Only use it on a trusted network and do not expose it to the public internet.
 
 ### Clipboard
 Keep SciNET-Link open in the browsers you want to synchronize. Clipboard synchronization uses the application's live connection; browser clipboard permissions and platform restrictions may affect copying or pasting.

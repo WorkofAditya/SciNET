@@ -45,11 +45,35 @@
 <details class="function-key-panel"><summary>Function keys <span>F1–F12</span></summary><div class="function-keys"><button type="button" data-key="f1">F1</button><button type="button" data-key="f2">F2</button><button type="button" data-key="f3">F3</button><button type="button" data-key="f4">F4</button><button type="button" data-key="f5">F5</button><button type="button" data-key="f6">F6</button><button type="button" data-key="f7">F7</button><button type="button" data-key="f8">F8</button><button type="button" data-key="f9">F9</button><button type="button" data-key="f10">F10</button><button type="button" data-key="f11">F11</button><button type="button" data-key="f12">F12</button></div></details>
 <p class="control-note">Tap a modifier once, then type or tap a key. The modifier applies to the next key and resets automatically. Phone keyboard Backspace erases on the PC.</p>
 </div></section>
+<section class="card control-card process-manager-card" id="processManager">
+<div class="section-head"><div><div class="label">PROCESS MANAGER</div><h2>Running apps &amp; processes</h2></div><span class="pill">ON-DEMAND</span></div>
+<p class="control-note">Process information is fetched only while this list is visible and refreshes live. Hide the list to stop all process monitoring. Ending apps may discard unsaved work. Windows-critical and SciNET processes are protected.</p>
+<div class="process-launch-row"><button type="button" class="button primary-action" id="displayProcesses" aria-expanded="false">▤ Display current processes</button><span id="processLoadStatus" class="process-muted" role="status" hidden></span></div>
+<div id="processResults" hidden>
+<div class="process-overview" id="processOverview">
+<div class="process-stat"><span>RUNNING PROCESSES</span><strong id="processTotal">—</strong></div>
+<div class="process-stat"><span>CPU USAGE</span><strong id="processCpu">—</strong></div>
+<div class="process-stat"><span>MEMORY USAGE</span><strong id="processMemory">—</strong><small id="processMemoryDetail"></small></div>
+</div>
+<div class="process-toolbar">
+<label class="process-search">⌕ <input type="search" id="processSearch" placeholder="Search app, executable or PID…" autocomplete="off"></label>
+<label class="process-select-label">SORT BY<select id="processSort"><option value="name">App name</option><option value="cpu">CPU usage</option><option value="memory">Memory usage</option><option value="runtime">Running time</option></select></label>
+
+<label class="process-toggle"><input type="checkbox" id="processGroupApps" checked> Group by app</label>
+
+</div>
+<p class="process-note">CPU readings update over time and may initially show 0%. Apps are grouped by executable; window titles help identify visible app windows. Use the window icons to minimize or maximize an app.</p>
+<details class="process-section"><summary class="process-section-heading"><div><span class="process-category-dot user-dot"></span><h3>User activity</h3></div><span id="userProcessCount">0 processes</span></summary><p>Applications running under your Windows user account.</p><div id="userProcesses" class="process-list"></div></details>
+<details class="process-section"><summary class="process-section-heading"><div><span class="process-category-dot system-dot"></span><h3>Windows system activity</h3></div><span id="systemProcessCount">0 processes</span></summary><p>Windows components and services. Critical processes are protected from termination.</p><div id="systemProcesses" class="process-list"></div></details>
+<details class="process-section"><summary class="process-section-heading"><div><span class="process-category-dot background-dot"></span><h3>Other background activity</h3></div><span id="backgroundProcessCount">0 processes</span></summary><p>Processes that could not be confidently classified as user apps or Windows components.</p><div id="backgroundProcesses" class="process-list"></div></details>
+</div>
+</section>
 <section class="card control-card">
 <div class="section-head"><div><div class="label">POWER</div><h2>Power options</h2></div><span class="pill">HOST PC</span></div>
 <div class="power-controls"><button class="power-button" data-action="lock"><span class="power-icon">▣</span><span><strong>Lock PC</strong><small>Lock the Windows session</small></span><b>→</b></button><button class="power-button" data-action="sleep"><span class="power-icon">☾</span><span><strong>Sleep</strong><small>Put the host PC to sleep</small></span><b>→</b></button><button class="power-button" data-action="restart"><span class="power-icon">↻</span><span><strong>Restart</strong><small>Restart the host PC</small></span><b>→</b></button><button class="power-button danger" data-action="shutdown"><span class="power-icon">⏻</span><span><strong>Shut down</strong><small>Power off the host PC</small></span><b>→</b></button></div>
 <p class="control-note">Sleep and shutdown disconnect SciNET until the host wakes or starts again.</p>
 </section>
+
 <div class="control-toast" id="controlToast" role="status" aria-live="polite"></div>
 </main><footer>SCINET · REMOTE CONTROL</footer></div>
 <script src="/static/control.js"></script></body></html>

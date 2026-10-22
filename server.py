@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 import ctypes
 import ipaddress
+import getpass
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -347,6 +349,247 @@ async def screen_stop(request: Request):
         finally:
             screen_peers.discard(pc)
     return {"ok": True}
+
+
+
+
+# Process Manager: process data is queried only when the user explicitly requests it.
+_PROCESS_PROTECTED_NAMES = {
+    "system", "registry", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
+    "services.exe", "lsass.exe", "svchost.exe", "fontdrvhost.exe", "dwm.exe",
+    "secure system", "memory compression", "explorer.exe", "spoolsv.exe",
+}
+_PROCESS_ACTIONS = {"stop", "force-stop", "minimize", "maximize"}
+
+
+def _process_is_protected(proc, name, exe):
+    """Conservative guardrail: never terminate SciNET itself or core Windows processes."""
+    if proc.pid in {os.getpid(), os.getppid(), 0, 4} or name.lower() in _PROCESS_PROTECTED_NAMES:
+        return True
+    try:
+        command = " ".join(proc.cmdline()).lower()
+        if "server.py" in command and ("uvicorn" in command or "python" in name.lower()):
+            return True
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        pass
+    windows_root = os.environ.get("WINDIR", r"C:\Windows").rstrip("\\/").lower()
+    if exe and (exe.lower() == windows_root or exe.lower().startswith(windows_root + "\\")):
+        return True
+    return False
+
+
+def _process_record(proc):
+    try:
+        with proc.oneshot():
+            name = proc.name() or "Unknown process"
+            exe = ""
+            username = ""
+            try:
+                exe = proc.exe() or ""
+            except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
+                pass
+            try:
+                username = proc.username() or ""
+            except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
+                pass
+            try:
+                memory = proc.memory_info().rss
+            except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                memory = 0
+            try:
+                cpu = proc.cpu_percent(interval=None)
+            except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                cpu = 0.0
+            try:
+                created = proc.create_time()
+            except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                created = None
+            try:
+                status = proc.status()
+            except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                status = "unknown"
+        current_user = getpass.getuser().lower()
+        user_short = username.rsplit("\\", 1)[-1].lower()
+        name_lower = name.lower()
+        windows_root = os.environ.get("WINDIR", r"C:\Windows").rstrip("\\/").lower()
+        is_windows_path = bool(exe and (exe.lower().startswith(windows_root + "\\") or exe.lower() == windows_root))
+        system_accounts = {"system", "local service", "network service", "nt authority\\system",
+                           "nt authority\\local service", "nt authority\\network service"}
+        if user_short == current_user and not is_windows_path:
+            category = "user"
+        elif username.lower() in system_accounts or user_short in {"system", "local service", "network service"} or is_windows_path:
+            category = "system"
+        else:
+            category = "background"
+        protected = _process_is_protected(proc, name, exe)
+        return {
+            "pid": proc.pid, "name": name, "exe": exe, "username": username or "Unavailable",
+            "category": category, "status": status, "cpu_percent": round(max(0.0, float(cpu)), 1),
+            "memory_bytes": int(memory), "created_at": created, "protected": protected,
+            "can_restart": category == "user" and bool(exe) and not protected,
+        }
+    except (psutil.NoSuchProcess, psutil.ZombieProcess, OSError):
+        return None
+
+
+def _visible_process_windows():
+    """Return one useful visible top-level window title for each process."""
+    if platform.system() != "Windows":
+        return {}
+    windows = {}
+    user32 = ctypes.windll.user32
+    enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def collect_window(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        title_buffer = ctypes.create_unicode_buffer(min(length + 1, 1024))
+        user32.GetWindowTextW(hwnd, title_buffer, len(title_buffer))
+        title = title_buffer.value.strip()
+        if not title:
+            return True
+        window_pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+        if window_pid.value and window_pid.value not in windows:
+            windows[window_pid.value] = title
+        return True
+    callback = enum_proc_type(collect_window)
+    user32.EnumWindows(callback, 0)
+    return windows
+
+
+def _check_process_request(request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        # Tailscale commonly assigns 100.64.0.0/10 addresses, which Python's
+        # ipaddress module does not classify as RFC1918 private addresses.
+        tailscale_range = ipaddress.ip_network("100.64.0.0/10")
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local or remote_ip in tailscale_range):
+            return JSONResponse({"error": "Process management is only available on a private local network or Tailscale"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    if platform.system() != "Windows":
+        return JSONResponse({"error": "Process management is supported on Windows hosts only"}, status_code=501)
+    return None
+
+
+# This event is disabled at startup. Process enumeration only runs while the UI explicitly enables it.
+_process_monitoring_enabled = threading.Event()
+
+
+@app.post("/api/processes/monitor")
+async def set_process_monitoring(request: Request):
+    denied = _check_process_request(request)
+    if denied:
+        return denied
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid monitoring request"}, status_code=400)
+    if bool(data.get("enabled")):
+        _process_monitoring_enabled.set()
+        return {"ok": True, "enabled": True}
+    _process_monitoring_enabled.clear()
+    return {"ok": True, "enabled": False}
+
+
+def _collect_process_snapshot():
+    records = []
+    window_titles = _visible_process_windows()
+    for proc in psutil.process_iter():
+        # Hiding the UI clears this event; stop collecting as soon as practical.
+        if not _process_monitoring_enabled.is_set():
+            return None
+        record = _process_record(proc)
+        if record is not None:
+            record["window_title"] = window_titles.get(record["pid"], "")
+            record["app_name"] = Path(record["exe"]).stem if record["exe"] else record["name"]
+            records.append(record)
+    if not _process_monitoring_enabled.is_set():
+        return None
+    records.sort(key=lambda item: (item["category"], item["name"].lower(), item["pid"]))
+    memory = psutil.virtual_memory()
+    cpu_total = psutil.cpu_percent(interval=None)
+    return {
+        "ok": True, "processes": records, "total": len(records),
+        "cpu_percent": round(cpu_total, 1), "memory_total": int(memory.total),
+        "memory_used": int(memory.used), "memory_percent": round(memory.percent, 1),
+        "current_user": getpass.getuser(),
+    }
+
+
+@app.get("/api/processes")
+async def list_processes(request: Request):
+    denied = _check_process_request(request)
+    if denied:
+        return denied
+    if not _process_monitoring_enabled.is_set():
+        return JSONResponse({"error": "Process monitoring is not enabled"}, status_code=409)
+    # Keep synchronous Windows/psutil enumeration off SciNET's asyncio event loop.
+    result = await asyncio.to_thread(_collect_process_snapshot)
+    if result is None or not _process_monitoring_enabled.is_set():
+        return JSONResponse({"error": "Process monitoring was stopped"}, status_code=409)
+    log_event("Process list viewed from Control page", "control")
+    return result
+
+@app.post("/api/processes/action")
+async def process_action(request: Request):
+    denied = _check_process_request(request)
+    if denied:
+        return denied
+    try:
+        data = await request.json()
+        pid = int(data.get("pid"))
+        action = str(data.get("action") or "").strip().lower()
+    except (ValueError, TypeError, AttributeError):
+        return JSONResponse({"error": "Provide a valid process ID and action"}, status_code=400)
+    if pid <= 0 or action not in _PROCESS_ACTIONS:
+        return JSONResponse({"error": "Invalid process ID or action"}, status_code=400)
+    try:
+        proc = psutil.Process(pid)
+        record = _process_record(proc)
+        if record is None:
+            return JSONResponse({"error": "That process is no longer running. Refresh the list."}, status_code=404)
+        if record["protected"]:
+            return JSONResponse({"error": "This process is protected because it is critical to Windows or SciNET."}, status_code=403)
+        if action in {"minimize", "maximize"}:
+            user32 = ctypes.windll.user32
+            windows = []
+            enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            def collect_window(hwnd, _lparam):
+                window_pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+                if window_pid.value == pid and user32.IsWindowVisible(hwnd):
+                    windows.append(hwnd)
+                return True
+            callback = enum_proc_type(collect_window)
+            user32.EnumWindows(callback, 0)
+            if not windows:
+                return JSONResponse({"error": "No visible window was found for this process."}, status_code=404)
+            user32.ShowWindow(windows[0], 6 if action == "minimize" else 3)
+            log_event(f"Process window {action}: {record['name']} (PID {pid})", "control")
+            return {"ok": True, "message": f"{record['name']} window {action}d."}
+        if action == "force-stop":
+            proc.kill()
+        else:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except psutil.TimeoutExpired:
+                return JSONResponse({"error": "The app did not exit within 3 seconds. Use Force stop if you accept the risk of losing unsaved work."}, status_code=409)
+        log_event(f"Process {action}: {record['name']} (PID {pid})", "control")
+        return {"ok": True, "message": f"{record['name']} (PID {pid}) stopped."}
+    except psutil.NoSuchProcess:
+        return JSONResponse({"error": "That process has already exited. Refresh the list."}, status_code=404)
+    except psutil.AccessDenied:
+        return JSONResponse({"error": "Windows denied access to this process. Try running SciNET with appropriate permissions only if you trust the request."}, status_code=403)
+    except (OSError, psutil.Error) as exc:
+        return JSONResponse({"error": f"Could not complete process action: {type(exc).__name__}"}, status_code=500)
 
 
 @app.get("/manifest.webmanifest")
