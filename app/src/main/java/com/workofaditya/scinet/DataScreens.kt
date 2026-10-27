@@ -385,7 +385,15 @@ internal fun ProcessScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                 PanelCard {
                     SectionHeading(title, group.size.toString() + " processes")
                     if (group.isEmpty()) EmptyText("No matching processes.")
-                    group.take(80).forEach { proc ->
+                    val visible = group.take(80)
+                    val processBuckets: Map<String, List<JSONObject>> = if (groupApps) {
+                        visible.groupBy { it.optString("app_name", it.optString("name")) }
+                    } else {
+                        visible.associateBy { it.optInt("pid").toString() }.mapValues { listOf(it.value) }
+                    }
+                    processBuckets.forEach { (appTitle, instances) ->
+                        if (groupApps && instances.size > 1) Text(appTitle + " · " + instances.size + " instances", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                        instances.forEach { proc ->
                         Column(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             Text(proc.optString("app_name", proc.optString("name")), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             Text(proc.optString("name") + " · PID " + proc.optInt("pid"), color = Muted, fontSize = 9.sp)
@@ -401,6 +409,7 @@ internal fun ProcessScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                             } else Text("PROTECTED PROCESS", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
                         }
                         HorizontalDivider(color = Edge)
+                        }
                     }
                 }
             }
