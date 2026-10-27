@@ -685,12 +685,17 @@ async def control_host(request: Request):
                 user32.keybd_event(code, 0, flags, 0)
                 temporary.append((code, flags))
         code = key_codes[key_name]
-        user32.keybd_event(code, 0, 0, 0)
-        user32.keybd_event(code, 0, 2, 0)
+        try:
+            repeat_count = max(1, min(100, int(data.get("repeat", 1))))
+        except (TypeError, ValueError):
+            repeat_count = 1
+        for _ in range(repeat_count):
+            user32.keybd_event(code, 0, 0, 0)
+            user32.keybd_event(code, 0, 2, 0)
         for code, flags in reversed(temporary):
             user32.keybd_event(code, 0, flags | 0x0002, 0)
         log_event(f"Remote key: {key_name}", "control")
-        return {"ok": True, "action": key_name}
+        return {"ok": True, "action": key_name, "repeat": repeat_count}
     if action == "key-hold":
         key_name = str(data.get("key") or "").lower()
         if key_name not in key_codes:
