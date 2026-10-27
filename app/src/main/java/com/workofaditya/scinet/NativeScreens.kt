@@ -68,7 +68,7 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
     var downloadRate by remember { mutableStateOf(0L) }
     var uploadRate by remember { mutableStateOf(0L) }
     var trafficHistory by remember { mutableStateOf(listOf(0f)) }
-    LaunchedEffect(network.optLong("received"), network.optLong("sent")) {
+    LaunchedEffect(data) {
         val now = System.currentTimeMillis()
         val received = network.optLong("received")
         val sent = network.optLong("sent")
