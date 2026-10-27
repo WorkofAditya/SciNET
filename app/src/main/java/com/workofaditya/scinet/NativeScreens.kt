@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,6 +20,8 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
@@ -37,7 +40,7 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: String, onRefresh: () -> Unit, onRename: (String) -> Unit, onClearEvents: () -> Unit) {
+internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: String, onRefresh: () -> Unit, onRename: (String) -> Unit, onClearEvents: () -> Unit, onLogout: () -> Unit) {
     val memory = data.optJSONObject("memory") ?: JSONObject()
     val disk = data.optJSONObject("disk") ?: JSONObject()
     val network = data.optJSONObject("network") ?: JSONObject()
@@ -62,6 +65,7 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
     var previousSample by remember { mutableStateOf(0L) }
     var downloadRate by remember { mutableStateOf(0L) }
     var uploadRate by remember { mutableStateOf(0L) }
+    var trafficHistory by remember { mutableStateOf(listOf(0f)) }
     LaunchedEffect(network.optLong("received"), network.optLong("sent")) {
         val now = System.currentTimeMillis()
         val received = network.optLong("received")
@@ -70,6 +74,9 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
             val seconds = ((now - previousSample).coerceAtLeast(1L)) / 1000.0
             downloadRate = ((received - previousReceived).coerceAtLeast(0L) / seconds).toLong()
             uploadRate = ((sent - previousSent).coerceAtLeast(0L) / seconds).toLong()
+        }
+        if (previousReceived >= 0 && previousSent >= 0 && previousSample > 0) {
+            trafficHistory = (trafficHistory + (downloadRate + uploadRate).toFloat()).takeLast(40)
         }
         previousReceived = received
         previousSent = sent
@@ -98,20 +105,43 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
             Box(Modifier.weight(1f)) { StatCard("UPTIME", formatUptime(data.optLong("uptime")), "Current session") }
         }
         PanelCard {
-            SectionHeading("NETWORK", "Traffic totals")
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("RECEIVED", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
-                    Text(formatBytes(network.optLong("received")), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Text("↓ " + formatBytes(downloadRate) + "/s", color = Muted, fontSize = 9.sp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                SectionHeading("NETWORK", "Traffic")
+                Text("LIVE", color = Good, fontSize = 9.sp, letterSpacing = 1.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.weight(1f).background(Bg, RoundedCornerShape(7.dp)).padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("DOWNLOAD", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
+                    Text(formatBytes(downloadRate) + "/s", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("SENT", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
-                    Text(formatBytes(network.optLong("sent")), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Text("↑ " + formatBytes(uploadRate) + "/s", color = Muted, fontSize = 9.sp)
+                Column(Modifier.weight(1f).background(Bg, RoundedCornerShape(7.dp)).padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("UPLOAD", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
+                    Text(formatBytes(uploadRate) + "/s", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
-            Text("Updates automatically while the dashboard is open.", color = Muted, fontSize = 10.sp)
+            Canvas(Modifier.fillMaxWidth().height(105.dp).background(Bg, RoundedCornerShape(7.dp)).padding(horizontal = 3.dp, vertical = 5.dp)) {
+                val values = trafficHistory
+                val maxValue = (values.maxOrNull() ?: 1f).coerceAtLeast(1f)
+                val points = values.mapIndexed { index, value ->
+                    androidx.compose.ui.geometry.Offset(
+                        if (values.size <= 1) 0f else size.width * index / (values.size - 1),
+                        size.height - (value / maxValue) * (size.height * .82f) - size.height * .08f
+                    )
+                }
+                for (line in 1..3) {
+                    val y = size.height * line / 4f
+                    drawLine(Edge, androidx.compose.ui.geometry.Offset(0f, y), androidx.compose.ui.geometry.Offset(size.width, y), 1.dp.toPx())
+                }
+                if (points.size > 1) {
+                    val path = Path().apply { moveTo(points.first().x, points.first().y); points.drop(1).forEach { lineTo(it.x, it.y) } }
+                    drawPath(path, Accent, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("RECEIVED  " + formatBytes(network.optLong("received")), color = Muted, fontSize = 9.sp)
+                Text("SENT  " + formatBytes(network.optLong("sent")), color = Muted, fontSize = 9.sp)
+            }
+            Text("Live traffic history · sampled every second.", color = Muted, fontSize = 10.sp)
         }
         PanelCard {
             SectionHeading("CONNECTION", "Scan to open SciNET")
@@ -156,16 +186,21 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
                 TextButton(onClick = onClearEvents, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("CLEAR", color = Muted, fontSize = 9.sp) }
             }
             if (events.isEmpty()) EmptyText("No activity yet.")
-            events.take(12).forEach { event ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(event.optString("kind", "info").uppercase(), color = Accent, fontSize = 8.sp, letterSpacing = 1.sp)
-                        Text(event.optString("message"), fontSize = 11.sp, lineHeight = 16.sp)
+            Column(Modifier.fillMaxWidth().heightIn(max = 230.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                events.take(30).forEach { event ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                        Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date((event.optDouble("time") * 1000).toLong())), color = Muted, fontSize = 9.sp, modifier = Modifier.width(52.dp))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(event.optString("kind", "info").uppercase(), color = Accent, fontSize = 8.sp, letterSpacing = 1.sp)
+                            Text(event.optString("message"), fontSize = 11.sp, lineHeight = 15.sp, softWrap = true)
+                        }
                     }
-                    Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date((event.optDouble("time") * 1000).toLong())), color = Muted, fontSize = 9.sp)
+                    HorizontalDivider(color = Edge)
                 }
-                HorizontalDivider(color = Edge)
             }
+        }
+        OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth(), border = androidx.compose.foundation.BorderStroke(1.dp, Edge), shape = RoundedCornerShape(8.dp)) {
+            Text("LOG OUT / CHANGE PC", color = Ink, fontSize = 10.sp, letterSpacing = 1.sp)
         }
     }
     if (renameOpen) AlertDialog(
@@ -242,12 +277,23 @@ internal fun ControlScreen(onAction: (String, Map<String, Any?>) -> Unit) {
         }
         PanelCard {
             SectionHeading("TEXT INPUT", "Keyboard")
-            OutlinedTextField(value = typedText, onValueChange = { typedText = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Type text to send to the PC…") }, minLines = 2, colors = fieldColors())
-            PrimaryButton("SEND TEXT TO PC", enabled = typedText.isNotEmpty()) {
-                onAction("type", mapOf("text" to typedText.take(4000)))
-                typedText = ""
+            var lastSentText by remember { mutableStateOf("") }
+            OutlinedTextField(value = typedText, onValueChange = { typedText = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Type here. Text is sent live…") }, minLines = 2, colors = fieldColors())
+            LaunchedEffect(typedText) {
+                kotlinx.coroutines.delay(160)
+                val old = lastSentText
+                val next = typedText.take(4000)
+                if (next != old) {
+                    var common = 0
+                    while (common < old.length && common < next.length && old[common] == next[common]) common++
+                    val removed = old.length - common
+                    repeat(removed.coerceAtMost(100)) { onAction("key", mapOf("key" to "backspace", "modifiers" to emptyList<String>())) }
+                    val added = next.substring(common)
+                    if (added.isNotEmpty()) onAction("type", mapOf("text" to added))
+                    lastSentText = next
+                }
             }
-            Text("Select modifiers, then tap a key. They reset after sending.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+            Text("Text is sent automatically as you type. Select modifiers, then tap a special key.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 listOf("ctrl" to "CTRL", "alt" to "ALT", "shift" to "SHIFT", "meta" to "WIN").forEach { (key, label) ->
                     val active = modifiers.contains(key)
