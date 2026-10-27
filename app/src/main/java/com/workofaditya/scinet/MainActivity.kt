@@ -112,7 +112,7 @@ private fun SciNETApp() {
             } catch (e: Exception) {
                 if (page == "HOME") notify("Host connection interrupted. Retrying…", true)
             }
-            delay(if (page == "HOME") 1800 else 5000)
+            delay(if (page == "HOME") 1000 else 5000)
         }
     }
     LaunchedEffect(page, connected, host) {
