@@ -397,7 +397,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 contentAlignment = Alignment.Center
             ) {
                 androidx.compose.ui.viewinterop.AndroidView(
-                    factory = { view -> session.initialize(); view },
+                    factory = { _ -> session.initialize(); renderer },
                     modifier = Modifier.fillMaxSize()
                 )
                 if (!active) {
