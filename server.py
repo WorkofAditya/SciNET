@@ -38,7 +38,7 @@ try:
     device_names = json.loads(DEVICE_NAMES_FILE.read_text(encoding="utf-8")) if DEVICE_NAMES_FILE.exists() else {}
 except (OSError, ValueError):
     device_names = {}
-WEB_DIR = BASE_DIR / "web"
+WEB_DIR = BASE_DIR / "legacy-web"
 STORAGE_DIR.mkdir(exist_ok=True)
 started_at = time.time()
 mdns = None
