@@ -70,6 +70,7 @@ private fun SciNETApp() {
     }
     fun connect() {
         if (host.isBlank()) { notify("Enter your PC's SciNET address first.", true); return }
+        if (busy) return
         busy = true
         scope.launch {
             try {
@@ -83,6 +84,20 @@ private fun SciNETApp() {
             } catch (e: Exception) { notify(e.message ?: "Connection failed.", true) }
             finally { busy = false }
         }
+    }
+
+    LaunchedEffect(Unit) {
+        if (host.isNotBlank()) connect()
+    }
+
+    fun logout() {
+        connected = false
+        page = "HOME"
+        host = ""
+        prefs.edit().remove("host").apply()
+        system = JSONObject()
+        events = emptyList()
+        notify("Logged out. Enter another SciNET PC address.")
     }
 
     LaunchedEffect(connected, host, page) {
@@ -165,10 +180,9 @@ private fun SciNETApp() {
                                 try { SciNETApi.delete(host, "/api/events"); events = emptyList(); notify("Activity cleared") }
                                 catch (e: Exception) { notify(e.message ?: "Could not clear activity", true) }
                             }
-                        })
-                        "CONTROL" -> ControlScreen(onAction = { action, extra -> control(action, extra) })
+                        }, onLogout = { logout() })
+                        "CONTROL" -> ControlScreen(host = host, onAction = { action, extra -> control(action, extra) }, onMessage = { text, bad -> notify(text, bad) })
                         "FILES" -> FilesScreen(host, onMessage = { text, bad -> notify(text, bad) })
-                        "CLIPBOARD" -> ClipboardScreen(host, onMessage = { text, bad -> notify(text, bad) })
                         "PROCESSES" -> ProcessScreen(host, onMessage = { text, bad -> notify(text, bad) })
                         "CONTROLLER" -> ControllerScreen(onAction = { action, extra -> control(action, extra) })
                         else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) })
@@ -176,7 +190,7 @@ private fun SciNETApp() {
                     if (notice.isNotBlank()) Text(notice, color = if (noticeBad) Bad else Good, fontSize = 11.sp, modifier = Modifier.fillMaxWidth().background(if (noticeBad) Color(0xFF1B1111) else Color(0xFF101A13), RoundedCornerShape(8.dp)).padding(11.dp))
                 }
                 Row(Modifier.fillMaxWidth().background(Color(0xFF0C0F13)).padding(horizontal = 3.dp, vertical = 5.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                    listOf("HOME" to "⌂", "CONTROL" to "⌁", "FILES" to "▤", "CLIPBOARD" to "▣", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
+                    listOf("HOME" to "⌂", "CONTROL" to "⌁", "FILES" to "▤", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
                         Column(Modifier.weight(1f).background(if (page == key) Raised else Color.Transparent, RoundedCornerShape(7.dp)).padding(vertical = 7.dp).pointerInput(key) { detectTapGestures { page = key } }, horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(symbol, color = if (page == key) Accent else Muted, fontSize = 17.sp)
                             Text(key, color = if (page == key) Ink else Muted, fontSize = 6.sp, maxLines = 1)
