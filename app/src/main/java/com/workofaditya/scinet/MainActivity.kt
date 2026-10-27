@@ -87,8 +87,9 @@ private fun SciNETApp() {
         if (!connected) return@LaunchedEffect
         while (true) {
             try {
+                val snapshot = SciNETApi.get(host, "/api/system")
                 if (page == "HOME") {
-                    system = SciNETApi.get(host, "/api/system")
+                    system = snapshot
                     events = SciNETApi.get(host, "/api/events").optJSONArray("events").objects()
                 }
             } catch (e: Exception) {
