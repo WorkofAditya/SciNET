@@ -104,7 +104,17 @@ if(textInput){
 document.querySelectorAll('[data-key]').forEach(button=>button.addEventListener('click',()=>{
  const key=button.dataset.key;sendKey(key,consumeModifiers());
 }));
-const trackpad=$('trackpad');let pointer=null,moved=false,lastX=0,lastY=0,startX=0,startY=0;
+const trackpad=$('trackpad'),scrollModeToggle=$('scrollModeToggle');let pointer=null,moved=false,lastX=0,lastY=0,startX=0,startY=0,scrollMode=false;
+function setScrollMode(enabled){
+ scrollMode=enabled;
+ scrollModeToggle.setAttribute('aria-pressed',String(enabled));
+ scrollModeToggle.classList.toggle('active',enabled);
+ scrollModeToggle.querySelector('.scroll-mode-state').textContent=enabled?'ON':'OFF';
+ trackpad.classList.toggle('scroll-mode',enabled);
+ trackpad.querySelector('.trackpad-hint').textContent=enabled?'SCROLL MODE · SWIPE UP / DOWN':'TOUCH & DRAG TO MOVE';
+ showMessage(enabled?'Scrolling mode enabled':'Scrolling mode disabled');
+}
+scrollModeToggle.addEventListener('click',()=>setScrollMode(!scrollMode));
 trackpad.addEventListener('pointerdown',event=>{
  if(event.pointerType==='mouse'&&event.button!==0)return;
  trackpad.setPointerCapture(event.pointerId);pointer=event.pointerId;moved=false;lastX=startX=event.clientX;lastY=startY=event.clientY;
@@ -113,17 +123,22 @@ trackpad.addEventListener('pointermove',event=>{
  if(pointer!==event.pointerId)return;
  const dx=event.clientX-lastX,dy=event.clientY-lastY;lastX=event.clientX;lastY=event.clientY;
  if(Math.hypot(event.clientX-startX,event.clientY-startY)>5)moved=true;
- if(dx||dy){const scale=window.innerWidth<600?3.0:2.0;requestControl({action:'mouse-move',dx:Math.round(dx*scale),dy:Math.round(dy*scale)},true)}
+ if(scrollMode){
+  if(dy)requestControl({action:'mouse-scroll',delta:Math.max(-1200,Math.min(1200,Math.round(-dy*6)))},true);
+ }else if(dx||dy){
+  const scale=window.innerWidth<600?3.0:2.0;
+  requestControl({action:'mouse-move',dx:Math.round(dx*scale),dy:Math.round(dy*scale)},true);
+ }
 });
 async function finishPad(event){
  if(pointer!==event.pointerId)return;
  const wasMoved=moved;pointer=null;
- if(!wasMoved)await requestControl({action:'mouse-click',button:'left'},true);
+ if(!scrollMode&&!wasMoved)await requestControl({action:'mouse-click',button:'left'},true);
 }
 trackpad.addEventListener('pointerup',finishPad);trackpad.addEventListener('pointercancel',()=>{pointer=null});
 document.querySelectorAll('[data-mouse-click]').forEach(button=>button.addEventListener('click',async()=>{
  const result=await requestControl({action:'mouse-click',button:button.dataset.mouseClick},true);
- if(result)showMessage(button.dataset.mouseClick==='right'?'Right click sent':'Left click sent');else showMessage('Mouse click failed',true);
+ if(result)showMessage('Right click sent');else showMessage('Mouse click failed',true);
 }));
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installApp').hidden=false});
 $('installApp').addEventListener('click',async()=>{if(!installPrompt){showMessage('Use your browser menu to install SciNET when available.',true);return}installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installApp').hidden=true});
