@@ -711,6 +711,14 @@ async def control_host(request: Request):
         if user32.GetCursorPos(ctypes.byref(point)):
             user32.SetCursorPos(point.x + dx, point.y + dy)
         return {"ok": True, "action": "mouse-move"}
+    if action == "mouse-scroll":
+        try:
+            delta = max(-1200, min(1200, int(data.get("delta", 0))))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "Invalid scroll amount"}, status_code=400)
+        if delta:
+            user32.mouse_event(0x0800, 0, 0, delta, 0)  # MOUSEEVENTF_WHEEL
+        return {"ok": True, "action": "mouse-scroll"}
     if action == "mouse-click":
         button = str(data.get("button") or "left").lower()
         click_flags = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
