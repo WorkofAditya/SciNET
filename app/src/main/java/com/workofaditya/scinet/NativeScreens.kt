@@ -25,11 +25,14 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: String, onRefresh: () -> Unit) {
+internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: String, onRefresh: () -> Unit, onRename: (String) -> Unit) {
     val memory = data.optJSONObject("memory") ?: JSONObject()
     val disk = data.optJSONObject("disk") ?: JSONObject()
     val network = data.optJSONObject("network") ?: JSONObject()
     val devices = data.optJSONArray("devices").objects()
+    val selfId = data.optString("self_device_id")
+    var renameOpen by remember { mutableStateOf(false) }
+    var renameValue by remember { mutableStateOf(devices.firstOrNull { it.optString("id") == selfId }?.optString("name", "Android device") ?: "Android device") }
     Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -75,7 +78,10 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
                         Text(device.optString("name", device.optString("agent", "Device")), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         Text(device.optString("ip", "unknown") + ":" + device.optInt("port"), color = Muted, fontSize = 10.sp)
                     }
-                    Text(device.optString("type").uppercase(), color = Muted, fontSize = 8.sp)
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(device.optString("type").uppercase(), color = Muted, fontSize = 8.sp)
+                        if (selfId.isNotBlank() && device.optString("id") == selfId) TextButton(onClick = { renameOpen = true }, contentPadding = PaddingValues(0.dp)) { Text("RENAME", color = Accent, fontSize = 8.sp) }
+                    }
                 }
                 HorizontalDivider(color = Edge)
             }
@@ -97,6 +103,14 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
             }
         }
     }
+    if (renameOpen) AlertDialog(
+        onDismissRequest = { renameOpen = false },
+        title = { Text("Rename this device") },
+        text = { OutlinedTextField(value = renameValue, onValueChange = { renameValue = it.take(40) }, label = { Text("Device name") }, singleLine = true, colors = fieldColors()) },
+        confirmButton = { TextButton(onClick = { val clean = renameValue.trim(); if (clean.isNotEmpty()) { renameOpen = false; onRename(clean) } }) { Text("SAVE", color = Accent) } },
+        dismissButton = { TextButton(onClick = { renameOpen = false }) { Text("CANCEL") } },
+        containerColor = Panel
+    )
 }
 
 @Composable
