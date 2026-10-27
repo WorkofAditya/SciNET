@@ -631,7 +631,8 @@ async def control_host(request: Request):
     modifier_codes = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "meta": 0x5B}
     key_codes = {
         "esc": 0x1B, "tab": 0x09, "enter": 0x0D, "backspace": 0x08,
-        "delete": 0x2E, "space": 0x20, "up": 0x26, "down": 0x28, "left": 0x25,
+        "delete": 0x2E, "space": 0x20, "shift": 0x10, "ctrl": 0x11, "alt": 0x12, "meta": 0x5B,
+        "up": 0x26, "down": 0x28, "left": 0x25,
         "right": 0x27, "home": 0x24, "end": 0x23,
         **{f"f{i}": 0x70 + i - 1 for i in range(1, 13)},
         **{chr(i): i - 32 for i in range(ord("a"), ord("z") + 1)},
@@ -1009,7 +1010,12 @@ async def get_clipboard():
 @app.post("/api/clipboard")
 async def set_clipboard(request: Request):
     data=await request.json(); text=str(data.get("text") or "")
-    with clipboard_lock: clipboard.update({"text":text,"updated":time.time(),"source":str(data.get("source") or "SciNET")})
+    with clipboard_lock: clipboard.update({"text":text,"updated":time.time(),"source":str(data.get("source") or "SciNET")}); payload=dict(clipboard)
+    stale=[]
+    for client in tuple(clipboard_clients):
+        try: await client.send_json(payload)
+        except Exception: stale.append(client)
+    for client in stale: clipboard_clients.discard(client)
     log_event("Clipboard updated","system"); return {"ok":True}
 
 @app.websocket("/ws/clipboard")
