@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -56,16 +58,21 @@ private fun SciNETApp() {
     var notice by remember { mutableStateOf("") }
     var noticeBad by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val keyboardMutex = remember { Mutex() }
 
     fun notify(text: String, bad: Boolean = false) { notice = text; noticeBad = bad }
     fun control(action: String, extra: Map<String, Any?> = emptyMap()) {
         scope.launch {
-            try {
-                val body = JSONObject().put("action", action)
-                extra.forEach { (key, value) -> body.put(key, value) }
-                SciNETApi.post(host, "/api/control", body)
-                notify("Sent: " + action.replace('-', ' '))
-            } catch (e: Exception) { notify(e.message ?: "Could not reach the PC.", true) }
+            suspend fun sendRequest() {
+                try {
+                    val body = JSONObject().put("action", action)
+                    extra.forEach { (key, value) -> body.put(key, value) }
+                    SciNETApi.post(host, "/api/control", body)
+                    notify("Sent: " + action.replace('-', ' '))
+                } catch (e: Exception) { notify(e.message ?: "Could not reach the PC.", true) }
+            }
+            if (action == "type" || action == "key") keyboardMutex.withLock { sendRequest() }
+            else sendRequest()
         }
     }
     fun connect() {
