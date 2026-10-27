@@ -163,7 +163,7 @@ private fun SciNETApp() {
                         "CLIPBOARD" -> ClipboardScreen(host, onMessage = { text, bad -> notify(text, bad) })
                         "PROCESSES" -> ProcessScreen(host, onMessage = { text, bad -> notify(text, bad) })
                         "CONTROLLER" -> ControllerScreen(onAction = { action, extra -> control(action, extra) })
-                        else -> ScreenMirrorScreen(onMessage = { text, bad -> notify(text, bad) })
+                        else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) })
                     }
                     if (notice.isNotBlank()) Text(notice, color = if (noticeBad) Bad else Good, fontSize = 11.sp, modifier = Modifier.fillMaxWidth().background(if (noticeBad) Color(0xFF1B1111) else Color(0xFF101A13), RoundedCornerShape(8.dp)).padding(11.dp))
                 }
