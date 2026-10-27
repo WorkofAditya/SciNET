@@ -1,5 +1,11 @@
 package com.workofaditya.scinet
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -13,21 +19,42 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 
 @Composable
-internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: String, onRefresh: () -> Unit, onRename: (String) -> Unit) {
+internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: String, onRefresh: () -> Unit, onRename: (String) -> Unit, onClearEvents: () -> Unit) {
     val memory = data.optJSONObject("memory") ?: JSONObject()
     val disk = data.optJSONObject("disk") ?: JSONObject()
     val network = data.optJSONObject("network") ?: JSONObject()
+    val context = LocalContext.current
+    var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(host) {
+        qrBitmap = withContext(Dispatchers.IO) {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = (URL(SciNETApi.normalizeHost(host) + "/api/qr").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 5000
+                    readTimeout = 8000
+                    setRequestProperty("User-Agent", "SciNET Android/0.1")
+                }
+                connection.inputStream.use { BitmapFactory.decodeStream(it) }
+            } catch (_: Exception) { null } finally { connection?.disconnect() }
+        }
+    }
     val devices = data.optJSONArray("devices").objects()
     var previousReceived by remember { mutableStateOf(-1L) }
     var previousSent by remember { mutableStateOf(-1L) }
@@ -86,6 +113,21 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
             Text("Updates automatically while the dashboard is open.", color = Muted, fontSize = 10.sp)
         }
         PanelCard {
+            SectionHeading("CONNECTION", "Scan to open SciNET")
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (qrBitmap != null) Image(bitmap = qrBitmap!!.asImageBitmap(), contentDescription = "SciNET connection QR code", modifier = Modifier.size(124.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text(host, fontSize = 10.sp, lineHeight = 15.sp)
+                    OutlinedButton(onClick = {
+                        val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        manager.setPrimaryClip(ClipData.newPlainText("SciNET address", host))
+                    }, border = androidx.compose.foundation.BorderStroke(1.dp, Edge), contentPadding = PaddingValues(horizontal = 9.dp, vertical = 5.dp)) { Text("COPY ADDRESS", fontSize = 9.sp) }
+                    Text("FTP: " + runCatching { URL(host).host }.getOrDefault(host) + ":2121", color = Muted, fontSize = 9.sp)
+                    Text("User scinet · password scinet", color = Muted, fontSize = 9.sp)
+                }
+            }
+        }
+        PanelCard {
             SectionHeading("NETWORK", "Connected devices · " + devices.size)
             if (devices.isEmpty()) EmptyText("Waiting for devices…")
             devices.forEach { device ->
@@ -108,7 +150,10 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
             Text(host, fontSize = 11.sp)
         }
         PanelCard {
-            SectionHeading("ACTIVITY", "Recent events")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                SectionHeading("ACTIVITY", "Recent events")
+                TextButton(onClick = onClearEvents, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("CLEAR", color = Muted, fontSize = 9.sp) }
+            }
             if (events.isEmpty()) EmptyText("No activity yet.")
             events.take(12).forEach { event ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
