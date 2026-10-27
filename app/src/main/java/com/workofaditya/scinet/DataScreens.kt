@@ -267,11 +267,13 @@ internal fun LiveClipboardPanel(host: String, onMessage: (String, Boolean) -> Un
                 val data = SciNETApi.get(host, "/api/clipboard")
                 val updated = data.optDouble("updated", 0.0)
                 val incoming = data.optString("text")
-                if (updated > lastUpdated && incoming != lastSentText && System.currentTimeMillis() - localEditAt > 900) {
-                    lastUpdated = updated
-                    lastSentText = incoming
-                    text = incoming
-                    if (incoming.isNotEmpty()) manager.setPrimaryClip(ClipData.newPlainText("SciNET shared clipboard", incoming))
+                if (updated > lastUpdated && incoming != lastSentText) {
+                    if (System.currentTimeMillis() - localEditAt > 900) {
+                        lastUpdated = updated
+                        lastSentText = incoming
+                        text = incoming
+                        if (incoming.isNotEmpty()) manager.setPrimaryClip(ClipData.newPlainText("SciNET shared clipboard", incoming))
+                    }
                 } else if (updated > lastUpdated) lastUpdated = updated
             } catch (_: Exception) { }
             delay(500)
