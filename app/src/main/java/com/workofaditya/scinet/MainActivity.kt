@@ -30,7 +30,7 @@ internal val Raised = Color(0xFF15191E)
 internal val Edge = Color(0xFF292F37)
 internal val Ink = Color(0xFFE7E9ED)
 internal val Muted = Color(0xFF858D98)
-internal val Accent = Color(0xFFB8F36B)
+internal val Accent = Color(0xFFE1E5EA)
 internal val Good = Color(0xFF79B98B)
 internal val Bad = Color(0xFFE78F87)
 
