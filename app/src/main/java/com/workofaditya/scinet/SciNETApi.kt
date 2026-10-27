@@ -47,6 +47,7 @@ internal object SciNETApi {
             connectTimeout = 5000
             readTimeout = 10000
             setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "SciNET Android/0.1")
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -76,6 +77,7 @@ internal object SciNETApi {
                 doOutput = true
                 setChunkedStreamingMode(64 * 1024)
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                setRequestProperty("User-Agent", "SciNET Android/0.1")
             }
             try {
                 connection.outputStream.use { output ->
@@ -109,6 +111,7 @@ internal object SciNETApi {
             val connection = (URL(normalizeHost(host) + urlPath).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 10000
                 readTimeout = 120000
+                setRequestProperty("User-Agent", "SciNET Android/0.1")
             }
             try {
                 val code = connection.responseCode
