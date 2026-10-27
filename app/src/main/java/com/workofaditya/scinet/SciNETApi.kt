@@ -115,7 +115,7 @@ internal object SciNETApi {
             try {
                 val code = connection.responseCode
                 if (code !in 200..299) {
-                    val message = connection.errorStream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
+                    val message = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
                     throw IllegalStateException(try { JSONObject(message).optString("error") } catch (_: Exception) { "Download failed (HTTP $code)." })
                 }
                 context.contentResolver.openOutputStream(destination)?.use { output ->
