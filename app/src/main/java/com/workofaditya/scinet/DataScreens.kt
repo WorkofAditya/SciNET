@@ -8,6 +8,9 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -20,15 +23,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.util.Locale
+import java.net.HttpURLConnection
+import java.net.URL
 
 @Composable
 internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
@@ -107,44 +115,47 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
             Text(if (loading) "Loading…" else items.size.toString() + " items", color = Muted, fontSize = 10.sp)
         }
         if (items.isEmpty() && !loading) PanelCard { EmptyText("This folder is empty.") }
-        items.filter { it.optString("name").contains(search, ignoreCase = true) }.forEach { item ->
-            val name = item.optString("name")
-            val path = item.optString("path")
-            val isFolder = item.optString("type") == "folder"
-            PanelCard {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(Modifier.size(38.dp).background(Raised, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-                        Text(if (isFolder) "▰" else fileGlyph(name), color = if (isFolder) Accent else Ink, fontSize = 18.sp)
-                    }
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        Text(if (isFolder) "FOLDER" else formatBytes(item.optLong("size")), color = Muted, fontSize = 9.sp)
-                    }
-                    TextButton(onClick = {
-                        if (isFolder) folder = path
-                        else if (isEditableText(name)) {
-                            scope.launch {
-                                try {
-                                    val data = SciNETApi.get(host, "/api/files/content?path=" + SciNETApi.encode(path))
-                                    editPath = path
-                                    editName = name
-                                    editText = data.optString("content")
-                                    originalText = editText
-                                    editorOpen = true
-                                } catch (e: Exception) { onMessage(e.message ?: "Could not open text file.", true) }
+        items.filter { it.optString("name").contains(search, ignoreCase = true) }.chunked(2).forEach { pair ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.Top) {
+                pair.forEach { item ->
+                    Box(Modifier.weight(1f)) {
+                        val name = item.optString("name")
+                        val path = item.optString("path")
+                        val isFolder = item.optString("type") == "folder"
+                        PanelCard {
+                            FileThumbnail(host, path, name, isFolder)
+                            Text(name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, lineHeight = 14.sp, softWrap = true)
+                            Text(if (isFolder) "FOLDER" else formatBytes(item.optLong("size")), color = Muted, fontSize = 9.sp)
+                            OutlinedButton(onClick = {
+                                if (isFolder) folder = path
+                                else if (isEditableText(name)) {
+                                    scope.launch {
+                                        try {
+                                            val data = SciNETApi.get(host, "/api/files/content?path=" + SciNETApi.encode(path))
+                                            editPath = path
+                                            editName = name
+                                            editText = data.optString("content")
+                                            originalText = editText
+                                            editorOpen = true
+                                        } catch (e: Exception) { onMessage(e.message ?: "Could not open text file.", true) }
+                                    }
+                                } else {
+                                    val url = SciNETApi.normalizeHost(host) + "/api/files/preview?path=" + SciNETApi.encode(path)
+                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                                    catch (_: Exception) { pendingDownload = path; downloadLauncher.launch(name) }
+                                }
+                            }, modifier = Modifier.fillMaxWidth(), border = androidx.compose.foundation.BorderStroke(1.dp, Edge), contentPadding = PaddingValues(horizontal = 2.dp, vertical = 5.dp)) {
+                                Text(if (isFolder) "OPEN" else if (isEditableText(name)) "EDIT" else "PREVIEW", fontSize = 9.sp, color = Accent)
                             }
-                        } else {
-                            val url = SciNETApi.normalizeHost(host) + "/api/files/preview?path=" + SciNETApi.encode(path)
-                            try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                            catch (_: Exception) { pendingDownload = path; downloadLauncher.launch(name) }
+                            if (!isFolder) TextButton(onClick = { pendingDownload = path; downloadLauncher.launch(name) }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(0.dp)) { Text("↓ DOWNLOAD", fontSize = 8.sp) }
+                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                TextButton(onClick = { renameItem = item; renameName = name }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) { Text("RENAME", fontSize = 8.sp) }
+                                TextButton(onClick = { deleteItem = item }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) { Text("DELETE", fontSize = 8.sp, color = Bad) }
+                            }
                         }
-                    }) { Text(if (isFolder) "OPEN" else if (isEditableText(name)) "EDIT" else "PREVIEW", fontSize = 9.sp, color = Accent) }
+                    }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (!isFolder) TextButton(onClick = { pendingDownload = path; downloadLauncher.launch(name) }) { Text("DOWNLOAD", fontSize = 8.sp) }
-                    TextButton(onClick = { renameItem = item; renameName = name }) { Text("RENAME", fontSize = 8.sp) }
-                    TextButton(onClick = { deleteItem = item }) { Text("DELETE", fontSize = 8.sp, color = Bad) }
-                }
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
     }
@@ -240,46 +251,91 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
 }
 
 @Composable
-internal fun ClipboardScreen(host: String, onMessage: (String, Boolean) -> Unit) {
+internal fun ClipboardScreen(host: String, onMessage: (String, Boolean) -> Unit) = LiveClipboardPanel(host, onMessage)
+
+@Composable
+internal fun LiveClipboardPanel(host: String, onMessage: (String, Boolean) -> Unit) {
     var text by remember { mutableStateOf("") }
-    var dirty by remember { mutableStateOf(false) }
     var lastUpdated by remember { mutableStateOf(0.0) }
-    val scope = rememberCoroutineScope()
+    var lastSentText by remember { mutableStateOf("") }
+    var localEditAt by remember { mutableStateOf(0L) }
     val context = LocalContext.current
+    val manager = remember(context) { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
     LaunchedEffect(host) {
         while (true) {
             try {
                 val data = SciNETApi.get(host, "/api/clipboard")
                 val updated = data.optDouble("updated", 0.0)
-                if (!dirty && updated != lastUpdated) {
-                    text = data.optString("text")
+                val incoming = data.optString("text")
+                if (updated > lastUpdated && incoming != lastSentText && System.currentTimeMillis() - localEditAt > 900) {
                     lastUpdated = updated
-                }
+                    lastSentText = incoming
+                    text = incoming
+                    if (incoming.isNotEmpty()) manager.setPrimaryClip(ClipData.newPlainText("SciNET shared clipboard", incoming))
+                } else if (updated > lastUpdated) lastUpdated = updated
             } catch (_: Exception) { }
-            delay(1600)
+            delay(500)
         }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PageHeading("SYNC", "Shared clipboard", "Text shared between native SciNET and connected web clients.")
-        PanelCard {
-            SectionHeading("LIVE CLIPBOARD", "Text content")
-            OutlinedTextField(value = text, onValueChange = { text = it; dirty = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp), minLines = 7, placeholder = { Text("Type or paste text to share…") }, colors = fieldColors())
-            PrimaryButton("PUSH TO SHARED CLIPBOARD", enabled = dirty || text.isNotEmpty()) {
-                scope.launch {
-                    try {
-                        val data = SciNETApi.post(host, "/api/clipboard", JSONObject().put("text", text).put("source", "SciNET Android"))
-                        dirty = false
-                        lastUpdated = System.currentTimeMillis() / 1000.0
-                        onMessage("Clipboard shared with connected clients.", false)
-                    } catch (e: Exception) { onMessage(e.message ?: "Clipboard sync failed.", true) }
-                }
+    LaunchedEffect(text) {
+        delay(260)
+        if (text != lastSentText) {
+            try {
+                SciNETApi.post(host, "/api/clipboard", JSONObject().put("text", text.take(20000)).put("source", "SciNET Android"))
+                lastSentText = text.take(20000)
+                lastUpdated = System.currentTimeMillis() / 1000.0
+            } catch (e: Exception) { onMessage(e.message ?: "Clipboard sync failed.", true) }
+        }
+    }
+    DisposableEffect(manager, host) {
+        val listener = ClipboardManager.OnPrimaryClipChangedListener {
+            val clip = manager.primaryClip
+            val clipText = if (clip != null && clip.itemCount > 0) runCatching { clip.getItemAt(0).coerceToText(context).toString() }.getOrDefault("") else ""
+            if (clipText.isNotBlank() && clipText != lastSentText) {
+                localEditAt = System.currentTimeMillis()
+                text = clipText
             }
-            OutlinedButton(onClick = {
-                val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        }
+        manager.addPrimaryClipChangedListener(listener)
+        onDispose { manager.removePrimaryClipChangedListener(listener) }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionHeading("LIVE CLIPBOARD", "Shared text")
+        OutlinedTextField(value = text, onValueChange = { text = it; localEditAt = System.currentTimeMillis() }, modifier = Modifier.fillMaxWidth().heightIn(min = 145.dp), minLines = 5, placeholder = { Text("Type or paste text. It syncs automatically…") }, colors = fieldColors())
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Box(Modifier.size(7.dp).background(Good, RoundedCornerShape(50)))
+            Text("AUTO-SYNC ON", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = {
                 manager.setPrimaryClip(ClipData.newPlainText("SciNET", text))
-                onMessage("Copied to this phone's clipboard.", false)
-            }, modifier = Modifier.fillMaxWidth(), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) { Text("COPY TO PHONE CLIPBOARD") }
-            Text("Android limits background clipboard access. Copy to the phone clipboard only when you tap the button.", color = Muted, fontSize = 10.sp, lineHeight = 16.sp)
+                onMessage("Copied to phone clipboard.", false)
+            }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("COPY TO PHONE", fontSize = 9.sp, color = Accent) }
+        }
+        Text("Incoming shared text also updates the phone clipboard while SciNET is open.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+    }
+}
+
+@Composable
+private fun FileThumbnail(host: String, path: String, name: String, isFolder: Boolean) {
+    var bitmap by remember(host, path) { mutableStateOf<Bitmap?>(null) }
+    val imageFile = !isFolder && name.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "avif")
+    LaunchedEffect(host, path, imageFile) {
+        bitmap = if (imageFile) withContext(Dispatchers.IO) {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = (URL(SciNETApi.normalizeHost(host) + "/api/files/preview?path=" + SciNETApi.encode(path)).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 5000
+                    readTimeout = 10000
+                    setRequestProperty("User-Agent", "SciNET Android/0.1")
+                }
+                connection.inputStream.use { BitmapFactory.decodeStream(it) }
+            } catch (_: Exception) { null } finally { connection?.disconnect() }
+        } else null
+    }
+    Box(Modifier.fillMaxWidth().height(100.dp).background(Color(0xFF0B0E12), RoundedCornerShape(8.dp)).border(1.dp, Edge, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+        if (bitmap != null) Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = name, modifier = Modifier.fillMaxSize().padding(2.dp))
+        else {
+            Text(if (isFolder) "📁" else name.substringAfterLast('.', "FILE").uppercase(Locale.ROOT).take(5), color = if (isFolder) Accent else Ink, fontSize = if (isFolder) 34.sp else 16.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
