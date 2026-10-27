@@ -285,15 +285,102 @@ private fun HoldKey(label: String, key: String, onAction: (String, Map<String, A
 }
 
 @Composable
-internal fun ScreenMirrorScreen(onMessage: (String, Boolean) -> Unit) {
+internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    val renderer = remember { org.webrtc.SurfaceViewRenderer(context) }
+    val session = remember { NativeWebRtcSession(context, renderer) }
+    var active by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var resolution by remember { mutableStateOf("720p") }
+    var fps by remember { mutableStateOf(30) }
+    var streamError by remember { mutableStateOf("") }
+
+    androidx.compose.runtime.DisposableEffect(session, host) {
+        onDispose {
+            session.close()
+            scope.launch { try { SciNETApi.post(host, "/api/screen/stop", org.json.JSONObject()) } catch (_: Exception) { } }
+        }
+    }
+
+    fun startStream() {
+        if (busy) return
+        busy = true
+        streamError = ""
+        scope.launch {
+            try {
+                session.start(host, resolution, fps)
+                active = true
+                onMessage("Native desktop stream connected.", false)
+            } catch (e: Exception) {
+                active = false
+                streamError = e.message ?: "Could not start the WebRTC stream."
+                onMessage(streamError, true)
+            } finally { busy = false }
+        }
+    }
+    fun stopStream() {
+        active = false
+        busy = true
+        scope.launch {
+            try { session.stop(host) } finally { busy = false }
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PageHeading("LIVE DESKTOP", "Screen mirroring", "SciNET uses WebRTC for real-time desktop video.")
+        PageHeading("LIVE DESKTOP", "Screen mirroring", "Real-time WebRTC video from the Windows host.")
         PanelCard {
-            SectionHeading("NATIVE STREAM", "WebRTC receiver")
-            Text("The existing browser client has a WebRTC receiver. A native Android receiver needs its own WebRTC SDK and connection lifecycle, so it cannot be replaced faithfully with screenshot polling.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
-            Text("For now, use the existing PC Control page in your phone browser for live screen viewing. The native receiver is still a separate implementation task.", color = Ink, fontSize = 11.sp, lineHeight = 18.sp)
-            OutlinedButton(onClick = { onMessage("Native WebRTC receiver is not implemented yet.", true) }, modifier = Modifier.fillMaxWidth()) {
-                Text("NATIVE STREAM NOT YET AVAILABLE", fontSize = 10.sp)
+            SectionHeading("STREAM OPTIONS", if (active) "LIVE" else "OFF")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { resolution = when (resolution) { "480p" -> "720p"; "720p" -> "1080p"; else -> "480p" }; if (active) { stopStream(); startStream() } }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) {
+                    Text(resolution + " · RESOLUTION", fontSize = 9.sp)
+                }
+                OutlinedButton(onClick = { fps = when (fps) { 15 -> 24; 24 -> 30; else -> 15 }; if (active) { stopStream(); startStream() } }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) {
+                    Text(fps.toString() + " FPS", fontSize = 9.sp)
+                }
+            }
+            Box(
+                Modifier.fillMaxWidth().height(230.dp).background(Color.Black, RoundedCornerShape(8.dp))
+                    .border(1.dp, Edge, RoundedCornerShape(8.dp))
+                    .pointerInput(active, host) {
+                        androidx.compose.foundation.gestures.detectTapGestures { tap ->
+                            if (active) scope.launch {
+                                try { SciNETApi.post(host, "/api/control", org.json.JSONObject().put("action", "mouse-click").put("button", "left")) }
+                                catch (e: Exception) { onMessage(e.message ?: "Click failed.", true) }
+                            }
+                        }
+                    }
+                    .pointerInput(active, host) {
+                        androidx.compose.foundation.gestures.detectDragGestures { change, _ ->
+                            change.consume()
+                            if (active && size.width > 0 && size.height > 0) {
+                                val nx = (change.position.x / size.width).coerceIn(0f, 1f)
+                                val ny = (change.position.y / size.height).coerceIn(0f, 1f)
+                                scope.launch {
+                                    try { SciNETApi.post(host, "/api/control", org.json.JSONObject().put("action", "mouse-position").put("x", nx).put("y", ny)) }
+                                    catch (_: Exception) { }
+                                }
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                androidx.compose.ui.viewinterop.AndroidView(
+                    factory = { view -> session.initialize(); view },
+                    modifier = Modifier.fillMaxSize()
+                )
+                if (!active) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.background(Color(0xEE0C0F13), RoundedCornerShape(8.dp)).padding(18.dp)) {
+                        Text("▱", color = Accent, fontSize = 26.sp)
+                        Text(if (busy) "CONNECTING TO DESKTOP…" else "DESKTOP STREAM IS OFF", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Video starts only when requested.", color = Muted, fontSize = 9.sp)
+                    }
+                }
+            }
+            Text("Tap the view to click. Drag to move the Windows pointer. Use a lower resolution or frame rate for less network load.", color = Muted, fontSize = 10.sp, lineHeight = 16.sp)
+            if (streamError.isNotBlank()) Text(streamError, color = Bad, fontSize = 10.sp, lineHeight = 15.sp)
+            PrimaryButton(if (busy) "PLEASE WAIT…" else if (active) "STOP VIEWING" else "START VIEWING", !busy) {
+                if (active) stopStream() else startStream()
             }
         }
     }
