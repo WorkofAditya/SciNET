@@ -631,7 +631,7 @@ async def control_host(request: Request):
     modifier_codes = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "meta": 0x5B}
     key_codes = {
         "esc": 0x1B, "tab": 0x09, "enter": 0x0D, "backspace": 0x08,
-        "delete": 0x2E, "up": 0x26, "down": 0x28, "left": 0x25,
+        "delete": 0x2E, "space": 0x20, "up": 0x26, "down": 0x28, "left": 0x25,
         "right": 0x27, "home": 0x24, "end": 0x23,
         **{f"f{i}": 0x70 + i - 1 for i in range(1, 13)},
         **{chr(i): i - 32 for i in range(ord("a"), ord("z") + 1)},
@@ -672,6 +672,13 @@ async def control_host(request: Request):
             user32.keybd_event(code, 0, flags | 0x0002, 0)
         log_event(f"Remote key: {key_name}", "control")
         return {"ok": True, "action": key_name}
+    if action == "key-hold":
+        key_name = str(data.get("key") or "").lower()
+        if key_name not in key_codes:
+            return JSONResponse({"error": "Unsupported held key"}, status_code=400)
+        down = bool(data.get("down"))
+        user32.keybd_event(key_codes[key_name], 0, 0 if down else 0x0002, 0)
+        return {"ok": True, "action": f"{key_name}-{'down' if down else 'up'}"}
     if action == "type":
         text_to_type = str(data.get("text") or "")[:4000]
         # KEYEVENTF_UNICODE sends text without relying on the host keyboard layout.
