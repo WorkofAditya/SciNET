@@ -364,7 +364,7 @@ internal fun ProcessScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                     Switch(checked = groupApps, onCheckedChange = { groupApps = it }, colors = SwitchDefaults.colors(checkedThumbColor = Accent, checkedTrackColor = Color(0xFF3A4A2B)))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("name", "cpu", "memory").forEach { value ->
+                    listOf("name", "cpu", "memory", "runtime").forEach { value ->
                         FilterChip(selected = sort == value, onClick = { sort = value }, label = { Text(value.uppercase(), fontSize = 9.sp) })
                     }
                 }
@@ -377,6 +377,7 @@ internal fun ProcessScreen(host: String, onMessage: (String, Boolean) -> Unit) {
             }.sortedWith(when (sort) {
                 "cpu" -> compareByDescending<JSONObject> { it.optDouble("cpu_percent") }
                 "memory" -> compareByDescending<JSONObject> { it.optLong("memory_bytes") }
+                "runtime" -> compareBy<JSONObject> { it.optDouble("created_at", Double.MAX_VALUE) }
                 else -> compareBy<JSONObject> { it.optString("app_name", it.optString("name")).lowercase(Locale.getDefault()) }
             })
             val categories = listOf("user" to "USER ACTIVITY", "system" to "WINDOWS SYSTEM ACTIVITY", "background" to "OTHER BACKGROUND ACTIVITY")
