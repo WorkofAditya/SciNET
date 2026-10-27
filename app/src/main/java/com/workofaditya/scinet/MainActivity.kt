@@ -158,6 +158,11 @@ private fun SciNETApp() {
                                 try { SciNETApi.put(host, "/api/device-name", JSONObject().put("name", name)); system = SciNETApi.get(host, "/api/system"); notify("Device name saved") }
                                 catch (e: Exception) { notify(e.message ?: "Could not rename device", true) }
                             }
+                        }, onClearEvents = {
+                            scope.launch {
+                                try { SciNETApi.delete(host, "/api/events"); events = emptyList(); notify("Activity cleared") }
+                                catch (e: Exception) { notify(e.message ?: "Could not clear activity", true) }
+                            }
                         })
                         "CONTROL" -> ControlScreen(onAction = { action, extra -> control(action, extra) })
                         "FILES" -> FilesScreen(host, onMessage = { text, bad -> notify(text, bad) })
