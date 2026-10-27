@@ -95,7 +95,7 @@ internal object SciNETApi {
                 }
                 val code = connection.responseCode
                 val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-                val text = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
+                val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
                 val json = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
                 if (code !in 200..299) throw IllegalStateException(json.optString("error").ifBlank { "Upload failed (HTTP $code)." })
                 json
