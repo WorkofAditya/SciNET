@@ -198,25 +198,29 @@ SciNET-Link can read, modify, transfer, and delete files in its shared directory
 
 ```text
 SciNET-Link/
-├── server.py                 # FastAPI application, APIs, FTP and system integrations
-├── requirements.txt          # Python dependencies
-├── start.bat                 # Hidden Windows launcher and dependency setup
-├── stop.bat                  # Stops this project's server processes
-├── shared_files/             # User-shared files (created automatically)
-├── device_names.json         # Saved display names for connected devices (created as needed)
-├── scinet.log                # Startup and runtime log (created at launch)
-└── web/
-    ├── index.html            # Main dashboard
-    ├── files.html            # Browser file manager
-    ├── control.html          # Dedicated PC control page
-    ├── app.js                # Dashboard behavior
-    ├── files.js              # File manager behavior
-    ├── control.js            # Remote control and keyboard behavior
-    ├── style.css             # Shared application styling
-    ├── files.css              # File manager styling
-    ├── manifest.webmanifest  # PWA metadata
-    ├── sw.js                 # Service worker
-    └── icon.svg              # Application icon
+├── app/                       # Native Android app (Kotlin + Jetpack Compose)
+├── legacy-web/                # Browser UI and PWA assets
+│   ├── index.html             # System dashboard
+│   ├── files.html             # Browser file manager
+│   ├── control.html           # Remote control, keyboard and process manager
+│   ├── app.js                 # Dashboard behavior
+│   ├── files.js               # File manager behavior
+│   ├── control.js             # Remote control and keyboard behavior
+│   ├── style.css              # Shared dark styling
+│   ├── files.css              # File manager styling
+│   ├── manifest.webmanifest   # PWA metadata
+│   ├── sw.js                  # Service worker
+│   └── icon.svg               # Application icon
+├── server.py                  # FastAPI APIs, FTP, system and input integration
+├── settings.gradle.kts        # Android Gradle project
+├── build.gradle.kts
+├── app/build.gradle.kts
+├── requirements.txt           # Python dependencies
+├── start.bat                  # Windows server launcher
+├── stop.bat                   # Stops this project's server processes
+├── shared_files/              # User-shared files (created automatically)
+├── device_names.json          # Saved device names (created as needed)
+└── scinet.log                 # Runtime log (created at launch)
 ```
 
 Some runtime files and directories are generated automatically and may not exist in a fresh checkout.
