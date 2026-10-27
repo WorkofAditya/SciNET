@@ -7,3 +7,8 @@ storage/*
 # Keep transferred files out of version control
 shared_files/*
 !shared_files/.gitkeep
+.gradle/
+**/build/
+local.properties
+.idea/
+*.iml
