@@ -327,12 +327,29 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         }
     }
 
+    fun restartStream() {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try {
+                session.stop(host)
+                session.start(host, resolution, fps)
+                active = true
+                streamError = ""
+            } catch (e: Exception) {
+                active = false
+                streamError = e.message ?: "Could not restart the WebRTC stream."
+                onMessage(streamError, true)
+            } finally { busy = false }
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PageHeading("LIVE DESKTOP", "Screen mirroring", "Real-time WebRTC video from the Windows host.")
         PanelCard {
             SectionHeading("STREAM OPTIONS", if (active) "LIVE" else "OFF")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { resolution = when (resolution) { "480p" -> "720p"; "720p" -> "1080p"; else -> "480p" }; if (active) { stopStream(); startStream() } }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) {
+                OutlinedButton(onClick = { resolution = when (resolution) { "480p" -> "720p"; "720p" -> "1080p"; else -> "480p" }; if (active) restartStream() }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) {
                     Text(resolution + " · RESOLUTION", fontSize = 9.sp)
                 }
                 OutlinedButton(onClick = { fps = when (fps) { 15 -> 24; 24 -> 30; else -> 15 }; if (active) { stopStream(); startStream() } }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) {
