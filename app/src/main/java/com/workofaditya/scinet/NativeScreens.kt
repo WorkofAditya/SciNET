@@ -214,7 +214,7 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
 }
 
 @Composable
-internal fun ControlScreen(onAction: (String, Map<String, Any?>) -> Unit) {
+internal fun ControlScreen(host: String, onAction: (String, Map<String, Any?>) -> Unit, onMessage: (String, Boolean) -> Unit) {
     var scrollMode by remember { mutableStateOf(false) }
     var typedText by remember { mutableStateOf("") }
     val modifiers = remember { mutableStateListOf<String>() }
@@ -237,6 +237,9 @@ internal fun ControlScreen(onAction: (String, Map<String, Any?>) -> Unit) {
                 ControlTile("＋", "VOLUME UP", Modifier.weight(1f)) { onAction("volume-up", emptyMap()) }
             }
             Text("Uses standard Windows media keys.", color = Muted, fontSize = 10.sp)
+        }
+        PanelCard {
+            LiveClipboardPanel(host, onMessage)
         }
         PanelCard {
             SectionHeading("INPUT", "Touchpad")
