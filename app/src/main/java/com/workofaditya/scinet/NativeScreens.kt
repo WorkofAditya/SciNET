@@ -292,7 +292,7 @@ internal fun ControlScreen(host: String, onAction: (String, Map<String, Any?>) -
                     var common = 0
                     while (common < old.length && common < next.length && old[common] == next[common]) common++
                     val removed = old.length - common
-                    repeat(removed.coerceAtMost(100)) { onAction("key", mapOf("key" to "backspace", "modifiers" to emptyList<String>())) }
+                    if (removed > 0) onAction("key", mapOf("key" to "backspace", "repeat" to removed.coerceAtMost(100), "modifiers" to emptyList<String>()))
                     val added = next.substring(common)
                     if (added.isNotEmpty()) onAction("type", mapOf("text" to added))
                     lastSentText = next
