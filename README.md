@@ -1,8 +1,8 @@
 # SciNET-Link
 
-**SciNET-Link** is a lightweight, self-hosted web companion for a Windows PC and the phones or computers connected to the same trusted local network. It brings system monitoring, file sharing, clipboard synchronization, connected-device visibility, and remote PC controls into one browser-based interface.
+**SciNET-Link** is a lightweight, self-hosted companion for a Windows PC and the phones or computers connected to the same trusted local network. It brings system monitoring, file sharing, clipboard synchronization, connected-device visibility, and remote PC controls together.
 
-The application runs on the Windows host. Other devices open it in a browser—no separate mobile app is required. The control interface can also be installed as a Progressive Web App (PWA) on supported browsers.
+The Python server runs on the Windows host. Clients can use the responsive browser interface/PWA or the native Kotlin + Jetpack Compose Android app. Both clients use the same local SciNET API and shared storage.
 
 > **Network and security:** SciNET-Link is designed for a trusted private network, such as a personal phone hotspot or home LAN. It does not provide a full user-account or authentication layer. Do not expose its web server or FTP service directly to the public internet or an untrusted network.
 
@@ -54,6 +54,11 @@ The dedicated **PC Control** page includes:
 - Windows lock, sleep, restart, and shutdown actions.
 
 Restart and shutdown requests use Windows `shutdown.exe` with a zero-second timer. These are powerful actions: use them only when you intend to affect the host PC.
+
+### Native Android app
+- A separate Kotlin + Jetpack Compose application in `app/`, not a WebView wrapper.
+- Uses the same Windows-host API for dashboard metrics, remote input, shared files, clipboard, process management, and WebRTC screen streaming.
+- Includes a keyboard-mapped game controller for games that accept keyboard input; XInput gamepad emulation is not yet included.
 
 ### Installable web app
 - Web app manifest, app icon, and service-worker caching.
