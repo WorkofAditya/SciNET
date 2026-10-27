@@ -213,7 +213,10 @@ async def api_system(request: Request):
                 "id": device_id, "ip": client.host, "port": client.port,
                 "type": "Android", "agent": "SciNET Android", "connected": time.time()
             }
-    return system_info()
+    payload = system_info()
+    if client and request.headers.get("user-agent", "").startswith("SciNET Android"):
+        payload["self_device_id"] = device_id
+    return payload
 
 @app.get("/control", response_class=HTMLResponse)
 async def control_panel_page(): return (WEB_DIR / "control.html").read_text(encoding="utf-8")
