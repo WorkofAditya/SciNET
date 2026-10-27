@@ -29,6 +29,24 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
     val disk = data.optJSONObject("disk") ?: JSONObject()
     val network = data.optJSONObject("network") ?: JSONObject()
     val devices = data.optJSONArray("devices").objects()
+    var previousReceived by remember { mutableStateOf(-1L) }
+    var previousSent by remember { mutableStateOf(-1L) }
+    var previousSample by remember { mutableStateOf(0L) }
+    var downloadRate by remember { mutableStateOf(0L) }
+    var uploadRate by remember { mutableStateOf(0L) }
+    LaunchedEffect(network.optLong("received"), network.optLong("sent")) {
+        val now = System.currentTimeMillis()
+        val received = network.optLong("received")
+        val sent = network.optLong("sent")
+        if (previousReceived >= 0 && previousSent >= 0 && previousSample > 0) {
+            val seconds = ((now - previousSample).coerceAtLeast(1L)) / 1000.0
+            downloadRate = ((received - previousReceived).coerceAtLeast(0L) / seconds).toLong()
+            uploadRate = ((sent - previousSent).coerceAtLeast(0L) / seconds).toLong()
+        }
+        previousReceived = received
+        previousSent = sent
+        previousSample = now
+    }
     val selfId = data.optString("self_device_id")
     var renameOpen by remember { mutableStateOf(false) }
     var renameValue by remember { mutableStateOf(devices.firstOrNull { it.optString("id") == selfId }?.optString("name", "Android device") ?: "Android device") }
@@ -57,10 +75,12 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("RECEIVED", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
                     Text(formatBytes(network.optLong("received")), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text("↓ " + formatBytes(downloadRate) + "/s", color = Muted, fontSize = 9.sp)
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("SENT", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
                     Text(formatBytes(network.optLong("sent")), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text("↑ " + formatBytes(uploadRate) + "/s", color = Muted, fontSize = 9.sp)
                 }
             }
             Text("Updates automatically while the dashboard is open.", color = Muted, fontSize = 10.sp)
