@@ -173,3 +173,11 @@
 .process-icon-action svg{display:block;width:16px;height:16px}
 
 .process-group>summary>span:first-child{min-width:0;overflow-wrap:anywhere}
+
+/* Trackpad scrolling mode toggle */
+.scroll-mode-toggle{gap:7px;position:relative}
+.scroll-mode-toggle .scroll-mode-state{padding:3px 6px;border:1px solid #424b56;border-radius:4px;color:#8994a1;font-size:8px;letter-spacing:.08em}
+.scroll-mode-toggle.active{background:#17251c;border-color:#4d805c;color:#d5f0dc}
+.scroll-mode-toggle.active .scroll-mode-state{border-color:#4d805c;color:#b9e6c4}
+.trackpad.scroll-mode{cursor:ns-resize;border-color:#4d805c;background:radial-gradient(ellipse at center,#17251c 0,#0d1014 75%)}
+.trackpad.scroll-mode .trackpad-crosshair{color:#b9e6c4}
