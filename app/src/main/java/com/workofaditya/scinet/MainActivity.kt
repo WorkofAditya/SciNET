@@ -177,7 +177,7 @@ private fun SciNETApp() {
                 }
                 Row(Modifier.fillMaxWidth().background(Color(0xFF0C0F13)).padding(horizontal = 3.dp, vertical = 5.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
                     listOf("HOME" to "⌂", "CONTROL" to "⌁", "FILES" to "▤", "CLIPBOARD" to "▣", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
-                        Column(Modifier.weight(1f).background(if (page == key) Raised else Color.Transparent, RoundedCornerShape(7.dp)).padding(vertical = 7.dp).pointerInput(key) { androidx.compose.foundation.gestures.detectTapGestures { page = key } }, horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(Modifier.weight(1f).background(if (page == key) Raised else Color.Transparent, RoundedCornerShape(7.dp)).padding(vertical = 7.dp).pointerInput(key) { detectTapGestures { page = key } }, horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(symbol, color = if (page == key) Accent else Muted, fontSize = 17.sp)
                             Text(key, color = if (page == key) Ink else Muted, fontSize = 6.sp, maxLines = 1)
                         }
