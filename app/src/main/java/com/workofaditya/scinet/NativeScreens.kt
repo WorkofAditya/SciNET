@@ -22,7 +22,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -442,7 +441,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 Modifier.fillMaxWidth().height(230.dp).background(Color.Black, RoundedCornerShape(8.dp))
                     .border(1.dp, Edge, RoundedCornerShape(8.dp))
                     .pointerInput(active, host) {
-                        androidx.compose.foundation.gestures.detectTapGestures { tap ->
+                        detectTapGestures { tap ->
                             if (active) scope.launch {
                                 try { SciNETApi.post(host, "/api/control", org.json.JSONObject().put("action", "mouse-click").put("button", "left")) }
                                 catch (e: Exception) { onMessage(e.message ?: "Click failed.", true) }
@@ -450,7 +449,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                         }
                     }
                     .pointerInput(active, host) {
-                        androidx.compose.foundation.gestures.detectDragGestures { change, _ ->
+                        detectDragGestures { change, _ ->
                             change.consume()
                             if (active && size.width > 0 && size.height > 0) {
                                 val nx = (change.position.x / size.width).coerceIn(0f, 1f)
