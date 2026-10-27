@@ -155,7 +155,12 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 def system_info():
     memory = psutil.virtual_memory(); disk = psutil.disk_usage(str(BASE_DIR)); net = psutil.net_io_counters()
-    with connected_lock: clients = list(connected_devices.values())
+    now = time.time()
+    with connected_lock:
+        for device_id, device in list(connected_devices.items()):
+            if device.get("type") == "Android" and now - device.get("connected", now) > 12:
+                connected_devices.pop(device_id, None)
+        clients = list(connected_devices.values())
     unique = {}
     for device in clients:
         ip = device.get("ip", "unknown")
@@ -180,7 +185,8 @@ async def set_device_name(request: Request):
     client = request.client
     if not client:
         return JSONResponse({"error": "Could not identify this device"}, status_code=400)
-    device_id = f"web:{client.host}"
+    is_android = request.headers.get("user-agent", "").startswith("SciNET Android")
+    device_id = f"android:{client.host}" if is_android else f"web:{client.host}"
     data = await request.json()
     name = str(data.get("name") or "").strip()[:40]
     if not name:
@@ -198,7 +204,16 @@ async def set_device_name(request: Request):
     return {"ok": True, "name": name}
 
 @app.get("/api/system")
-async def api_system(): return system_info()
+async def api_system(request: Request):
+    client = request.client
+    if client and request.headers.get("user-agent", "").startswith("SciNET Android"):
+        device_id = f"android:{client.host}"
+        with connected_lock:
+            connected_devices[device_id] = {
+                "id": device_id, "ip": client.host, "port": client.port,
+                "type": "Android", "agent": "SciNET Android", "connected": time.time()
+            }
+    return system_info()
 
 @app.get("/control", response_class=HTMLResponse)
 async def control_panel_page(): return (WEB_DIR / "control.html").read_text(encoding="utf-8")
