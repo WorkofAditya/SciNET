@@ -326,6 +326,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 active = true
                 onMessage("Native desktop stream connected.", false)
             } catch (e: Exception) {
+                try { session.stop(host) } catch (_: Exception) { }
                 active = false
                 streamError = e.message ?: "Could not start the WebRTC stream."
                 onMessage(streamError, true)
@@ -350,6 +351,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 active = true
                 streamError = ""
             } catch (e: Exception) {
+                try { session.stop(host) } catch (_: Exception) { }
                 active = false
                 streamError = e.message ?: "Could not restart the WebRTC stream."
                 onMessage(streamError, true)
