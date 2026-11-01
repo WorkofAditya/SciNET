@@ -859,11 +859,10 @@ async def control_host(request: Request):
             dy = max(-1200, min(1200, int(data.get("dy", 0))))
         except (TypeError, ValueError):
             return JSONResponse({"error": "Invalid mouse movement"}, status_code=400)
-        class POINT(ctypes.Structure):
-            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-        point = POINT()
-        if user32.GetCursorPos(ctypes.byref(point)):
-            user32.SetCursorPos(point.x + dx, point.y + dy)
+        # Send relative motion so games receive camera input rather than an
+        # absolute desktop-cursor reposition.
+        if dx or dy:
+            user32.mouse_event(0x0001, dx, dy, 0, 0)  # MOUSEEVENTF_MOVE
         return {"ok": True, "action": "mouse-move"}
     if action == "mouse-scroll":
         try:
