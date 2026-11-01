@@ -10,6 +10,7 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -26,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
@@ -50,8 +52,13 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     var editMode by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var sensitivity by remember { mutableFloatStateOf(prefs.getFloat("camera_sensitivity", 3.0f).coerceIn(0.5f, 8.0f)) }
+    var movementMode by remember { mutableStateOf(prefs.getString("movement_mode", "wasd") ?: "wasd") }
+    var joystickOffset by remember { mutableStateOf(Offset.Zero) }
     val currentOnError by rememberUpdatedState(onError)
     val cameraClient = remember(host) { CameraInputClient(host) { message -> currentOnError(message) } }
+    val joystickClient = remember(host, movementMode) {
+        if (movementMode == "joystick") JoystickInputClient(host) { message -> currentOnError(message) } else null
+    }
     val activeSensitivity = rememberUpdatedState(sensitivity)
     val positions = remember {
         mutableStateMapOf<String, Offset>().apply {
@@ -73,10 +80,22 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     LaunchedEffect(sensitivity) {
         prefs.edit().putFloat("camera_sensitivity", sensitivity).apply()
     }
+    LaunchedEffect(movementMode) {
+        prefs.edit().putString("movement_mode", movementMode).apply()
+        joystickOffset = Offset.Zero
+    }
 
     DisposableEffect(cameraClient) {
         cameraClient.connect()
         onDispose { cameraClient.close() }
+    }
+
+    DisposableEffect(joystickClient) {
+        joystickClient?.connect()
+        onDispose {
+            joystickClient?.sendAxes(0f, 0f)
+            joystickClient?.close()
+        }
     }
 
     DisposableEffect(activity) {
@@ -139,7 +158,56 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     }
                 }
         )
-        buttons.forEach { button ->
+        if (movementMode == "joystick" && !editMode) {
+            val joystickSize = 148.dp
+            Box(
+                Modifier
+                    .offset(x = areaWidth * 0.13f - joystickSize / 2, y = areaHeight * 0.49f - joystickSize / 2)
+                    .size(joystickSize)
+                    .clip(CircleShape)
+                    .background(Color(0xAA18232D))
+                    .border(2.dp, Color(0xFF526675), CircleShape)
+                    .pointerInput(joystickClient, settingsOpen) {
+                        if (!settingsOpen && joystickClient != null) {
+                            detectDragGestures(
+                                onDragStart = { joystickOffset = Offset.Zero },
+                                onDragEnd = {
+                                    joystickOffset = Offset.Zero
+                                    joystickClient.sendAxes(0f, 0f)
+                                },
+                                onDragCancel = {
+                                    joystickOffset = Offset.Zero
+                                    joystickClient.sendAxes(0f, 0f)
+                                }
+                            ) { change, dragAmount ->
+                                change.consume()
+                                val maxTravel = size.width * 0.32f
+                                val raw = joystickOffset + dragAmount
+                                val distance = kotlin.math.sqrt(raw.x * raw.x + raw.y * raw.y)
+                                val next = if (distance > maxTravel && distance > 0f) raw * (maxTravel / distance) else raw
+                                joystickOffset = next
+                                joystickClient.sendAxes(
+                                    (next.x / maxTravel).coerceIn(-1f, 1f),
+                                    (-next.y / maxTravel).coerceIn(-1f, 1f)
+                                )
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Box(Modifier.size(86.dp).border(1.dp, Color(0x665F788B), CircleShape))
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
+                        .offset { IntOffset(joystickOffset.x.toInt(), joystickOffset.y.toInt()) }
+                        .size(54.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF91BBD2))
+                        .border(2.dp, Color(0xFFD9EFFB), CircleShape)
+                )
+            }
+        }
+        buttons.filterNot { movementMode == "joystick" && it.id in setOf("w", "a", "s", "d") }.forEach { button ->
             val pos = positions[button.id] ?: defaultPadPositions.getValue(button.id)
             val diameter = button.size.dp
             Box(
@@ -209,6 +277,13 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     verticalArrangement = Arrangement.spacedBy(9.dp)
                 ) {
                     Text("CONTROLLER SETTINGS", color = Color(0xFFEAF0F4), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                    HorizontalDivider(color = Color(0xFF34414C))
+                    Text("MOVEMENT INPUT", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = movementMode == "wasd", onClick = { movementMode = "wasd" }, label = { Text("WASD") })
+                        FilterChip(selected = movementMode == "joystick", onClick = { movementMode = "joystick" }, label = { Text("JOYSTICK") })
+                    }
+                    Text("Joystick mode sends a true analog Xbox stick to Windows.", color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 13.sp)
                     HorizontalDivider(color = Color(0xFF34414C))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("CAMERA SENSITIVITY", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
