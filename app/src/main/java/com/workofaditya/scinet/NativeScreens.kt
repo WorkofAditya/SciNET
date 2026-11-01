@@ -535,7 +535,23 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                       videoFrameSeen = true;
                       placeholder.style.display = 'none';
                       if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
-                      nativeStatus('video-frame', 'Desktop is rendering · ' + canvas.width + '×' + canvas.height);
+                      // Sample a tiny copy of the actual decoded image. This distinguishes a
+                      // compositor problem from a PC capture source that is itself black.
+                      const probe = document.createElement('canvas');
+                      probe.width = 16;
+                      probe.height = 9;
+                      const probeContext = probe.getContext('2d', { willReadFrequently: true });
+                      probeContext.drawImage(video, 0, 0, probe.width, probe.height);
+                      const pixels = probeContext.getImageData(0, 0, probe.width, probe.height).data;
+                      let visiblePixels = 0;
+                      for (let i = 0; i < pixels.length; i += 4) {
+                        if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 36) visiblePixels++;
+                      }
+                      nativeStatus(
+                        'video-frame',
+                        'Canvas frame ' + canvas.width + '×' + canvas.height +
+                          ' · image sample ' + visiblePixels + '/144 non-black pixels.'
+                      );
                     } else if (canvasFrames % 90 === 0) {
                       nativeStatus('canvas-frame', 'Canvas rendered ' + canvasFrames + ' live frames.');
                     }
