@@ -129,7 +129,7 @@ private fun SciNETApp() {
     }
 
     Surface(Modifier.fillMaxSize(), color = Bg) {
-        Column(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().statusBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 15.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(Modifier.size(36.dp).background(Raised, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) { Text("S", fontSize = 20.sp, fontWeight = FontWeight.Black) }
