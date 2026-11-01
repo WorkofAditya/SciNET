@@ -71,7 +71,7 @@ internal class NativeWebRtcSession(
         renderer.setMirror(false)
 
         // Explicit decoder setup is important on Android: decode the incoming VP8/H.264
-        // desktop track into continuously rendered frames for SurfaceViewRenderer.
+        // desktop track into continuously rendered frames for TextureViewRenderer.
         factory = PeerConnectionFactory.builder()
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglContext))
@@ -91,6 +91,7 @@ internal class NativeWebRtcSession(
             override fun onSignalingChange(state: PeerConnection.SignalingState?) = Unit
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
+                android.util.Log.i("SciNETMirror", "Native ICE state: $state")
                 when (state) {
                     PeerConnection.IceConnectionState.CONNECTED,
                     PeerConnection.IceConnectionState.COMPLETED -> connectionReady.complete(Unit)
@@ -228,6 +229,7 @@ internal class NativeWebRtcSession(
 
     private fun attachVideoTrack(track: VideoTrack?, ready: CompletableDeferred<Unit>) {
         if (track == null) return
+        android.util.Log.i("SciNETMirror", "Remote video track received: id=${track.id()}, enabled=${track.enabled()}")
         val newlyAttached = synchronized(attachedVideoTracks) { attachedVideoTracks.add(track) }
         if (newlyAttached) {
             track.setEnabled(true)
