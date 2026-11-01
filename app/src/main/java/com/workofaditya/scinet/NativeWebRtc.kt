@@ -20,7 +20,8 @@ import org.webrtc.RtpReceiver
 import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
-import org.webrtc.SurfaceViewRenderer
+import org.webrtc.RendererCommon
+import org.webrtc.TextureViewRenderer
 import org.webrtc.VideoTrack
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -34,13 +35,14 @@ import kotlin.coroutines.resumeWithException
  */
 internal class NativeWebRtcSession(
     private val context: Context,
-    private val renderer: SurfaceViewRenderer
+    private val renderer: TextureViewRenderer
 ) {
     private var egl: EglBase? = null
     private var factory: PeerConnectionFactory? = null
     private var peer: PeerConnection? = null
     private var initialized = false
     private val attachedVideoTracks = mutableSetOf<VideoTrack>()
+    @Volatile private var firstRenderedFrame: CompletableDeferred<Unit>? = null
 
     fun initialize() {
         if (initialized) return
@@ -51,8 +53,21 @@ internal class NativeWebRtcSession(
         )
         egl = EglBase.create()
         val eglContext = egl!!.eglBaseContext
-        renderer.init(eglContext, null)
-        renderer.setEnableHardwareScaler(true)
+        renderer.init(eglContext, object : RendererCommon.RendererEvents {
+            override fun onFirstFrameRendered() {
+                android.util.Log.i("SciNETMirror", "TextureViewRenderer rendered its first desktop frame.")
+                firstRenderedFrame?.complete(Unit)
+            }
+
+            override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
+                android.util.Log.i(
+                    "SciNETMirror",
+                    "Native renderer frame resolution: ${width}x${height}, rotation=$rotation"
+                )
+            }
+        })
+        renderer.setEnableHardwareScaler(false)
+        renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
         renderer.setMirror(false)
 
         // Explicit decoder setup is important on Android: decode the incoming VP8/H.264
@@ -70,6 +85,8 @@ internal class NativeWebRtcSession(
 
         val connectionReady = CompletableDeferred<Unit>()
         val videoTrackReady = CompletableDeferred<Unit>()
+        val renderedFrameReady = CompletableDeferred<Unit>()
+        firstRenderedFrame = renderedFrameReady
         val observer = object : PeerConnection.Observer {
             override fun onSignalingChange(state: PeerConnection.SignalingState?) = Unit
 
@@ -177,6 +194,16 @@ internal class NativeWebRtcSession(
         if (!receivedTrack) {
             throw IllegalStateException("The PC connected but did not send a desktop video track.")
         }
+
+        val rendered = withTimeoutOrNull(15000) {
+            renderedFrameReady.await()
+            true
+        } ?: false
+        if (!rendered) {
+            throw IllegalStateException(
+                "WebRTC received the desktop track, but Android's native TextureView renderer did not render a frame. Check the SciNETMirror Logcat entries."
+            )
+        }
     }
 
     suspend fun stop(host: String) {
@@ -218,6 +245,8 @@ internal class NativeWebRtcSession(
     }
 
     private fun stopPeerOnly() {
+        firstRenderedFrame?.cancel()
+        firstRenderedFrame = null
         val tracks = synchronized(attachedVideoTracks) {
             val copy = attachedVideoTracks.toList()
             attachedVideoTracks.clear()
@@ -226,6 +255,7 @@ internal class NativeWebRtcSession(
         tracks.forEach { track ->
             try { track.removeSink(renderer) } catch (_: Exception) { }
         }
+        try { renderer.clearImage() } catch (_: Exception) { }
         try { peer?.close() } catch (_: Exception) { }
         try { peer?.dispose() } catch (_: Exception) { }
         peer = null
