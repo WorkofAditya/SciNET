@@ -95,10 +95,10 @@ private fun SciNETApp() {
                     val body = JSONObject().put("action", action)
                     extra.forEach { (key, value) -> body.put(key, value) }
                     SciNETApi.post(host, "/api/control", body)
-                    notify("Sent: " + action.replace('-', ' '))
+                    if (action != "key-hold") notify("Sent: " + action.replace('-', ' '))
                 } catch (e: Exception) { notify(e.message ?: "Could not reach the PC.", true) }
             }
-            if (action == "type" || action == "key") keyboardMutex.withLock { sendRequest() }
+            if (action == "type" || action == "key" || action == "key-hold") keyboardMutex.withLock { sendRequest() }
             else sendRequest()
         }
     }
@@ -156,8 +156,8 @@ private fun SciNETApp() {
     }
 
     Surface(Modifier.fillMaxSize(), color = Bg) {
-        Column(Modifier.fillMaxSize().then(if (screenFullscreen) Modifier else Modifier.statusBarsPadding())) {
-            if (!screenFullscreen) {
+        Column(Modifier.fillMaxSize().then(if (screenFullscreen || page == "CONTROLLER") Modifier else Modifier.statusBarsPadding())) {
+            if (!screenFullscreen && page != "CONTROLLER") {
             Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 15.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(Modifier.size(36.dp).background(Raised, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) { Text("S", fontSize = 20.sp, fontWeight = FontWeight.Black) }
@@ -207,8 +207,8 @@ private fun SciNETApp() {
                 )
             } else {
                 Column(
-                    Modifier.weight(1f).fillMaxWidth().then(if (screenFullscreen) Modifier else Modifier.verticalScroll(rememberScrollState()).padding(15.dp)),
-                    verticalArrangement = if (screenFullscreen) Arrangement.Top else Arrangement.spacedBy(13.dp)
+                    Modifier.weight(1f).fillMaxWidth().then(if (screenFullscreen || page == "CONTROLLER") Modifier else Modifier.verticalScroll(rememberScrollState()).padding(15.dp)),
+                    verticalArrangement = if (screenFullscreen || page == "CONTROLLER") Arrangement.Top else Arrangement.spacedBy(13.dp)
                 ) {
                     when (page) {
                         "HOME" -> DashboardScreen(system, events, host, onRefresh = {
@@ -230,11 +230,11 @@ private fun SciNETApp() {
                         "CONTROL" -> ControlScreen(host = host, onAction = { action, extra -> control(action, extra) }, onMessage = { text, bad -> notify(text, bad) })
                         "FILES" -> FilesScreen(host, onMessage = { text, bad -> notify(text, bad) })
                         "PROCESSES" -> ProcessScreen(host, onMessage = { text, bad -> notify(text, bad) })
-                        "CONTROLLER" -> ControllerScreen(onAction = { action, extra -> control(action, extra) })
+                        "CONTROLLER" -> ControllerScreen(onAction = { action, extra -> control(action, extra) }, onExit = { page = "CONTROL" })
                         else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) }, fullscreen = screenFullscreen, onFullscreenChanged = { screenFullscreen = it })
                     }
                 }
-                if (!screenFullscreen) {
+                if (!screenFullscreen && page != "CONTROLLER") {
                 NotificationToast(
                     message = notice,
                     isError = noticeBad,
