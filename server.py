@@ -814,7 +814,8 @@ async def control_host(request: Request):
             return JSONResponse({"error": "Unsupported mouse button"}, status_code=400)
         down_flag, up_flag = flags[button]
         user32.mouse_event(down_flag if bool(data.get("down")) else up_flag, 0, 0, 0, 0)
-        return {"ok": True, "action": f"{button}-{"down" if bool(data.get("down")) else "up"}"}
+        state = "down" if bool(data.get("down")) else "up"
+        return {"ok": True, "action": f"{button}-{state}"}
     if action == "mouse-click":
         button = str(data.get("button") or "left").lower()
         click_flags = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
