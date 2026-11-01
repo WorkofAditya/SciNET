@@ -2,6 +2,9 @@ package com.workofaditya.scinet
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.net.InetAddress
+import java.net.Socket
+import javax.net.SocketFactory
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,7 +22,23 @@ internal class CameraInputClient(
     private val onError: (String) -> Unit
 ) {
     companion object {
+        private val lowLatencySocketFactory = object : SocketFactory() {
+            private val delegate = SocketFactory.getDefault()
+
+            private fun noDelay(socket: Socket): Socket = socket.apply { tcpNoDelay = true }
+
+            override fun createSocket(): Socket = noDelay(delegate.createSocket())
+            override fun createSocket(host: String, port: Int): Socket = noDelay(delegate.createSocket(host, port))
+            override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+                noDelay(delegate.createSocket(host, port, localHost, localPort))
+            override fun createSocket(host: InetAddress, port: Int): Socket =
+                noDelay(delegate.createSocket(host, port))
+            override fun createSocket(host: InetAddress, port: Int, localHost: InetAddress, localPort: Int): Socket =
+                noDelay(delegate.createSocket(host, port, localHost, localPort))
+        }
+
         private val client = OkHttpClient.Builder()
+            .socketFactory(lowLatencySocketFactory)
             .pingInterval(15, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
