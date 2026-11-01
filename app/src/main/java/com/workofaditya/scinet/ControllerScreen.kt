@@ -50,7 +50,6 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     var editMode by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var sensitivity by remember { mutableFloatStateOf(prefs.getFloat("camera_sensitivity", 3.0f).coerceIn(0.5f, 8.0f)) }
-    val currentSensitivity by rememberUpdatedState(sensitivity)
     val currentOnError by rememberUpdatedState(onError)
     val cameraClient = remember(host) { CameraInputClient(host) { message -> currentOnError(message) } }
     val activeSensitivity = rememberUpdatedState(sensitivity)
