@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,7 +30,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
@@ -46,11 +47,16 @@ private val defaultPadPositions = mapOf(
 )
 
 @Composable
-internal fun ControllerScreen(onAction: (String, Map<String, Any?>) -> Unit, onExit: () -> Unit) {
+internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>) -> Unit, onExit: () -> Unit, onError: (String) -> Unit) {
     val context = LocalContext.current
     val activity = context as? Activity
     val prefs = remember { context.getSharedPreferences("scinet-controller", Context.MODE_PRIVATE) }
     var editMode by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var sensitivity by remember { mutableFloatStateOf(prefs.getFloat("camera_sensitivity", 3.0f).coerceIn(0.5f, 8.0f)) }
+    val currentSensitivity by rememberUpdatedState(sensitivity)
+    val currentOnError by rememberUpdatedState(onError)
+    val cameraClient = remember(host) { CameraInputClient(host) { message -> currentOnError(message) } }
     val positions = remember {
         mutableStateMapOf<String, Offset>().apply {
             putAll(defaultPadPositions)
@@ -70,23 +76,35 @@ internal fun ControllerScreen(onAction: (String, Map<String, Any?>) -> Unit, onE
     val originalUi = remember(activity) { activity?.window?.decorView?.systemUiVisibility ?: 0 }
     val cameraDeltas = remember { Channel<Offset>(Channel.UNLIMITED) }
 
-    LaunchedEffect(cameraDeltas) {
+    LaunchedEffect(sensitivity) {
+        prefs.edit().putFloat("camera_sensitivity", sensitivity).apply()
+    }
+
+    DisposableEffect(cameraClient) {
+        cameraClient.connect()
+        onDispose { cameraClient.close() }
+    }
+
+    LaunchedEffect(cameraDeltas, cameraClient) {
+        var remainderX = 0f
+        var remainderY = 0f
         while (true) {
             val first = cameraDeltas.receiveCatching().getOrNull() ?: break
             var totalX = first.x
             var totalY = first.y
-            withTimeoutOrNull(16L) {
-                while (true) {
-                    val next = cameraDeltas.receive()
-                    totalX += next.x
-                    totalY += next.y
-                }
+            delay(8)
+            while (true) {
+                val next = cameraDeltas.tryReceive().getOrNull() ?: break
+                totalX += next.x
+                totalY += next.y
             }
-            val dx = totalX.roundToInt()
-            val dy = totalY.roundToInt()
-            if (dx != 0 || dy != 0) {
-                onAction("mouse-move", mapOf("dx" to dx, "dy" to dy))
-            }
+            remainderX += totalX * currentSensitivity
+            remainderY += totalY * currentSensitivity
+            val dx = remainderX.toInt()
+            val dy = remainderY.toInt()
+            remainderX -= dx
+            remainderY -= dy
+            cameraClient.sendDelta(dx, dy)
         }
     }
 
