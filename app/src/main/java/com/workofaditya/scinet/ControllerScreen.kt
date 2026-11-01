@@ -36,8 +36,8 @@ private val defaultPadPositions = mapOf(
     "s" to Offset(.13f, .66f), "d" to Offset(.185f, .49f),
     "space" to Offset(.78f, .28f), "shift" to Offset(.88f, .43f),
     "e" to Offset(.77f, .53f), "f" to Offset(.88f, .63f),
-    "r" to Offset(.68f, .68f), "q" to Offset(.98f, .25f),
-    "ctrl" to Offset(.98f, .79f), "mouse-left" to Offset(.66f, .34f),
+    "r" to Offset(.68f, .68f), "q" to Offset(.91f, .25f),
+    "ctrl" to Offset(.91f, .79f), "mouse-left" to Offset(.66f, .34f),
     "mouse-right" to Offset(.76f, .83f), "esc" to Offset(.91f, .17f)
 )
 
@@ -117,7 +117,9 @@ internal fun ControllerScreen(onAction: (String, Map<String, Any?>) -> Unit, onE
                         } else {
                             detectTapGestures(onPress = {
                                 if (button.id == "mouse-left" || button.id == "mouse-right") {
-                                    onAction("mouse-click", mapOf("button" to if (button.id == "mouse-left") "left" else "right"))
+                                    val mouseButton = if (button.id == "mouse-left") "left" else "right"
+                                    onAction("mouse-hold", mapOf("button" to mouseButton, "down" to true))
+                                    try { tryAwaitRelease() } finally { onAction("mouse-hold", mapOf("button" to mouseButton, "down" to false)) }
                                 } else {
                                     onAction("key-hold", mapOf("key" to button.key, "down" to true))
                                     try { tryAwaitRelease() } finally { onAction("key-hold", mapOf("key" to button.key, "down" to false)) }
