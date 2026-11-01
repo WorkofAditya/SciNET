@@ -813,7 +813,8 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         webView.settings.domStorageEnabled = true
         webView.settings.mediaPlaybackRequiresUserGesture = false
         webView.settings.allowContentAccess = false
-        webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+        // Keep the default hardware-accelerated WebView compositor. Forcing a separate
+        // hardware View layer can interfere with independently composed media surfaces.
         webView.setBackgroundColor(android.graphics.Color.BLACK)
         webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
         webView.webChromeClient = object : android.webkit.WebChromeClient() {
@@ -829,7 +830,13 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 mirrorStatus = "Ready · WebRTC support: checking…"
                 webView.evaluateJavascript(
                     "JSON.stringify({rtc:!!window.RTCPeerConnection,media:!!window.MediaStream,secure:window.isSecureContext})"
-                ) { result -> android.util.Log.d("SciNETMirror", "WebView capabilities: $result") }
+                ) { result ->
+                    android.util.Log.d("SciNETMirror", "WebView capabilities: $result")
+                    android.util.Log.d(
+                        "SciNETMirror",
+                        "View compositor: hardwareAccelerated=${webView.isHardwareAccelerated}, layerType=${webView.layerType}"
+                    )
+                }
             }
             override fun onReceivedError(
                 view: android.webkit.WebView?,
