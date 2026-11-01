@@ -458,17 +458,13 @@ private fun HoldKey(label: String, key: String, onAction: (String, Map<String, A
 }
 
 private class ScreenMirrorJavascriptBridge(
-    private val onState: (Boolean, String) -> Unit,
-    private val onVideoSize: (Int, Int) -> Unit
+    private val onMirrorState: (Boolean, String, String, Int, Int) -> Unit
 ) {
     @android.webkit.JavascriptInterface
-    fun onState(active: Boolean, message: String) {
-        android.os.Handler(android.os.Looper.getMainLooper()).post { onState(active, message) }
-    }
-
-    @android.webkit.JavascriptInterface
-    fun onVideoSize(width: Int, height: Int) {
-        android.os.Handler(android.os.Looper.getMainLooper()).post { onVideoSize(width, height) }
+    fun onMirrorState(active: Boolean, state: String, message: String, width: Int, height: Int) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            onMirrorState(active, state, message, width, height)
+        }
     }
 }
 
@@ -480,7 +476,7 @@ private fun mapViewerTouch(
     sourceHeight: Int
 ): androidx.compose.ui.geometry.Offset? {
     if (viewWidth <= 0f || viewHeight <= 0f || sourceWidth <= 0 || sourceHeight <= 0) return null
-    // Match object-fit: contain so letterbox margins never map to desktop coordinates.
+    // Match the original viewer's object-fit: contain mapping. Letterbox areas are not clickable.
     val scale = minOf(viewWidth / sourceWidth, viewHeight / sourceHeight)
     val renderedWidth = sourceWidth * scale
     val renderedHeight = sourceHeight * scale
@@ -510,175 +506,101 @@ internal fun ScreenMirrorScreen(
     var pageError by remember { mutableStateOf("") }
     var streamActive by remember { mutableStateOf(false) }
     var hasVideo by remember { mutableStateOf(false) }
+    var statusLabel by remember { mutableStateOf("OFF") }
     var statusMessage by remember { mutableStateOf("Screen stream is off") }
     var videoWidth by remember { mutableIntStateOf(0) }
     var videoHeight by remember { mutableIntStateOf(0) }
     var resolution by remember { mutableStateOf("720p") }
     var fps by remember { mutableIntStateOf(30) }
     var lastPointerSentAt by remember { mutableStateOf(0L) }
+    var lastReportedError by remember { mutableStateOf("") }
 
     val webView = remember(context, host) { android.webkit.WebView(context) }
     val bridge = remember(webView, host) {
-        ScreenMirrorJavascriptBridge(
-            onState = { active, message ->
-                streamActive = active
-                statusMessage = message
-                if (!active) {
-                    hasVideo = false
-                    videoWidth = 0
-                    videoHeight = 0
-                    if (message.contains("could not", true) ||
-                        message.contains("failed", true) ||
-                        message.contains("unavailable", true)
-                    ) onMessage(message, true)
-                }
-            },
-            onVideoSize = { width, height ->
-                if (width > 0 && height > 0) {
-                    videoWidth = width
-                    videoHeight = height
-                    hasVideo = true
-                    streamActive = true
-                    statusMessage = "Live desktop · " + width + " × " + height
-                }
+        ScreenMirrorJavascriptBridge { active, state, message, width, height ->
+            streamActive = active
+            statusLabel = state
+            statusMessage = message
+            if (width > 0 && height > 0) {
+                videoWidth = width
+                videoHeight = height
+                hasVideo = true
+            } else if (!active) {
+                videoWidth = 0
+                videoHeight = 0
+                hasVideo = false
             }
-        )
+            val isError = message.contains("could not", true) ||
+                message.contains("failed", true) ||
+                message.contains("connection lost", true)
+            if (isError && message != lastReportedError) {
+                lastReportedError = message
+                onMessage(message, true)
+            }
+            if (!isError) lastReportedError = ""
+        }
     }
 
-    // This local document contains only the video element and WebRTC signalling code.
-    // The complete screen-mirroring interface is rendered by native Jetpack Compose.
-    val mirrorHtml = remember {
-        """
-        <!doctype html>
-        <html><head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-          <style>
-            html, body { width:100%; height:100%; margin:0; padding:0; overflow:hidden; background:#05070a; }
-            video {
-              display:block; width:100%; height:100%; margin:0; padding:0;
-              background:#05070a; object-fit:contain; object-position:center center;
-              pointer-events:none;
-            }
-          </style>
-        </head><body>
-          <video id="desktop" autoplay playsinline muted></video>
-          <script>
-          (() => {
-            const video = document.getElementById('desktop');
-            let peer = null, mediaStream = null, active = false, generation = 0;
+    // Keep the exact legacy /control WebRTC client, which already negotiates and renders the stream.
+    // Only its video element is mounted here. All visible controls remain native Compose.
+    val nativeVideoSurfaceScript = """
+        (() => {
+          const viewer = document.getElementById('screenViewer');
+          const frame = document.getElementById('screenFrame');
+          const start = document.getElementById('screenStart');
+          const stop = document.getElementById('screenStop');
+          const resolution = document.getElementById('screenResolution');
+          const fps = document.getElementById('screenFps');
+          const state = document.getElementById('screenState');
+          const message = document.getElementById('screenMessage');
+          if (!viewer || !frame || !start || !stop || !resolution || !fps || !state || !message ||
+              typeof window.startScreenStream !== 'function' ||
+              typeof window.stopScreenStream !== 'function') return false;
 
-            function reportState(value, message) {
-              try { window.SciNETNative.onState(value, String(message || '')); } catch (_) {}
-            }
-            function reportSize() {
-              if (video.videoWidth > 0 && video.videoHeight > 0) {
-                try { window.SciNETNative.onVideoSize(video.videoWidth, video.videoHeight); } catch (_) {}
-              }
-            }
-            video.addEventListener('loadedmetadata', reportSize);
-            video.addEventListener('resize', reportSize);
+          let root = document.getElementById('scinet-native-video-root');
+          if (!root) {
+            root = document.createElement('div');
+            root.id = 'scinet-native-video-root';
+            if (viewer.parentNode) viewer.parentNode.removeChild(viewer);
+            document.body.appendChild(root);
+            root.appendChild(viewer);
+          }
 
-            function waitForIce(connection) {
-              return new Promise(resolve => {
-                if (connection.iceGatheringState === 'complete') return resolve();
-                let finished = false;
-                const check = () => {
-                  if (connection.iceGatheringState === 'complete') finish();
-                };
-                const finish = () => {
-                  if (finished) return;
-                  finished = true;
-                  clearTimeout(timeout);
-                  connection.removeEventListener('icegatheringstatechange', check);
-                  resolve();
-                };
-                const timeout = setTimeout(finish, 5000);
-                connection.addEventListener('icegatheringstatechange', check);
-              });
-            }
+          if (!document.getElementById('scinet-native-video-surface-style')) {
+            const css = document.createElement('style');
+            css.id = 'scinet-native-video-surface-style';
+            css.textContent =
+              'html,body{width:100%!important;height:100%!important;min-height:100%!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#05070a!important;}' +
+              'body>*:not(#scinet-native-video-root){display:none!important;}' +
+              '#scinet-native-video-root{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#05070a!important;}' +
+              '#scinet-native-video-root #screenViewer{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important;overflow:hidden!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:#05070a!important;}' +
+              '#scinet-native-video-root #screenFrame{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:contain!important;object-position:center center!important;background:#05070a!important;}' +
+              '#scinet-native-video-root #screenPlaceholder,#scinet-native-video-root #screenLiveIndicator,#scinet-native-video-root #screenTouchControls{display:none!important;}';
+            document.head.appendChild(css);
+          }
 
-            async function start(selectedResolution, selectedFps) {
-              if (active) return;
-              active = true;
-              const token = ++generation;
-              reportState(true, 'Negotiating a local video session…');
+          if (!window.__scinetNativeStatusTimer) {
+            window.__scinetNativeStatusTimer = setInterval(() => {
+              const currentState = document.getElementById('screenState');
+              const currentMessage = document.getElementById('screenMessage');
+              const currentFrame = document.getElementById('screenFrame');
+              if (!currentState || !currentMessage || !currentFrame) return;
+              const label = (currentState.textContent || 'OFF').trim();
+              const active = label.toUpperCase() === 'LIVE';
               try {
-                const connection = new RTCPeerConnection({ iceServers: [] });
-                peer = connection;
-                connection.addTransceiver('video', { direction: 'recvonly' });
-                connection.ontrack = event => {
-                  if (!active || token !== generation) return;
-                  mediaStream = event.streams[0] || new MediaStream([event.track]);
-                  video.srcObject = mediaStream;
-                  video.play().catch(error => reportState(true, 'Video ready · ' + error.message));
-                  reportState(true, 'Receiving desktop video…');
-                };
-                connection.onconnectionstatechange = () => {
-                  if (!active || token !== generation) return;
-                  if (connection.connectionState === 'connected') {
-                    reportState(true, 'Live desktop stream connected');
-                  } else if (connection.connectionState === 'failed' ||
-                             connection.connectionState === 'disconnected') {
-                    stop('Connection lost · press Start viewing to reconnect');
-                  }
-                };
-
-                const offer = await connection.createOffer();
-                await connection.setLocalDescription(offer);
-                await waitForIce(connection);
-                if (!active || token !== generation) { connection.close(); return; }
-
-                const response = await fetch('/api/screen/offer', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    sdp: connection.localDescription.sdp,
-                    type: connection.localDescription.type,
-                    resolution: selectedResolution,
-                    fps: Number(selectedFps)
-                  })
-                });
-                const answer = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(answer.error || 'Could not establish the desktop stream');
-                if (!active || token !== generation) { connection.close(); return; }
-                await connection.setRemoteDescription(answer);
-                reportState(true, 'Waiting for the first desktop frame…');
-              } catch (error) {
-                if (token === generation) {
-                  active = false;
-                  if (peer) { try { peer.close(); } catch (_) {} peer = null; }
-                  if (mediaStream) { mediaStream.getTracks().forEach(track => track.stop()); mediaStream = null; }
-                  video.pause();
-                  video.srcObject = null;
-                  reportState(false, 'Could not start screen stream: ' + (error.message || 'Unknown error'));
-                  fetch('/api/screen/stop', { method:'POST', keepalive:true }).catch(() => {});
-                }
-              }
-            }
-
-            async function stop(message) {
-              generation += 1;
-              active = false;
-              if (peer) { try { peer.ontrack = null; peer.close(); } catch (_) {} peer = null; }
-              if (mediaStream) { mediaStream.getTracks().forEach(track => track.stop()); mediaStream = null; }
-              video.pause();
-              video.srcObject = null;
-              reportState(false, message || 'Screen stream stopped');
-              fetch('/api/screen/stop', { method:'POST', keepalive:true }).catch(() => {});
-            }
-
-            async function configure(selectedResolution, selectedFps) {
-              const restart = active;
-              if (restart) await stop('Applying stream settings…');
-              if (restart) await start(selectedResolution, selectedFps);
-            }
-            window.SciNETMirror = { start, stop, configure };
-          })();
-          </script>
-        </body></html>
-        """.trimIndent()
-    }
+                window.SciNETNative.onMirrorState(
+                  active,
+                  label,
+                  (currentMessage.textContent || '').trim(),
+                  currentFrame.videoWidth || 0,
+                  currentFrame.videoHeight || 0
+                );
+              } catch (_) {}
+            }, 350);
+          }
+          return true;
+        })();
+    """.trimIndent()
 
     val originalOrientation = remember(activity) {
         activity?.requestedOrientation ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
@@ -721,46 +643,70 @@ internal fun ScreenMirrorScreen(
         onFullscreenChanged(false)
     }
 
-    androidx.compose.runtime.DisposableEffect(webView, host, bridge, mirrorHtml) {
+    androidx.compose.runtime.DisposableEffect(webView, host, bridge) {
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         webView.settings.mediaPlaybackRequiresUserGesture = false
+        webView.settings.allowContentAccess = false
         webView.settings.setSupportZoom(false)
         webView.settings.builtInZoomControls = false
         webView.settings.displayZoomControls = false
-        webView.settings.allowContentAccess = false
         webView.setBackgroundColor(android.graphics.Color.BLACK)
         webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
         webView.isVerticalScrollBarEnabled = false
         webView.isHorizontalScrollBarEnabled = false
         webView.addJavascriptInterface(bridge, "SciNETNative")
+        webView.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
+                android.util.Log.d(
+                    "SciNETMirrorWeb",
+                    "Control JS: " + message.message() + " (" + message.sourceId() + ":" + message.lineNumber() + ")"
+                )
+                return true
+            }
+        }
         webView.webViewClient = object : android.webkit.WebViewClient() {
             override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
-                webReady = true
-                pageError = ""
+                webView.evaluateJavascript(nativeVideoSurfaceScript) { result ->
+                    if (result == "true") {
+                        webReady = true
+                        pageError = ""
+                    } else {
+                        webReady = false
+                        pageError = "The PC control page did not initialise its original WebRTC screen viewer."
+                    }
+                }
             }
+
             override fun onReceivedError(
                 view: android.webkit.WebView?,
                 request: android.webkit.WebResourceRequest?,
                 error: android.webkit.WebResourceError?
             ) {
                 if (request?.isForMainFrame == true) {
-                    pageError = error?.description?.toString() ?: "Could not initialise the video surface."
+                    pageError = error?.description?.toString() ?: "Could not load the PC screen viewer."
+                    webReady = false
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: android.webkit.WebView?,
+                request: android.webkit.WebResourceRequest?,
+                errorResponse: android.webkit.WebResourceResponse?
+            ) {
+                if (request?.isForMainFrame == true) {
+                    pageError = "PC screen page returned HTTP " + (errorResponse?.statusCode ?: "error") + "."
                     webReady = false
                 }
             }
         }
-        webView.loadDataWithBaseURL(
-            SciNETApi.normalizeHost(host).trimEnd('/') + "/",
-            mirrorHtml,
-            "text/html",
-            "UTF-8",
-            null
-        )
+        webView.loadUrl(SciNETApi.normalizeHost(host).trimEnd('/') + "/control")
+
         onDispose {
             try {
                 webView.evaluateJavascript(
-                    "if (window.SciNETMirror) window.SciNETMirror.stop('Leaving screen view')",
+                    "if (typeof stopScreenStream === 'function') stopScreenStream('Leaving screen view');" +
+                        "if (window.__scinetNativeStatusTimer) clearInterval(window.__scinetNativeStatusTimer);",
                     null
                 )
                 webView.stopLoading()
@@ -774,27 +720,32 @@ internal fun ScreenMirrorScreen(
     fun startStream() {
         if (!webReady || streamActive) return
         pageError = ""
+        statusMessage = "Negotiating the PC screen stream…"
         webView.evaluateJavascript(
-            "if (window.SciNETMirror) window.SciNETMirror.start(" + JSONObject.quote(resolution) + ", " + fps + ")",
+            "if (typeof startScreenStream === 'function') document.getElementById('screenStart').click();",
             null
         )
     }
+
     fun stopStream() {
-        webView.evaluateJavascript("if (window.SciNETMirror) window.SciNETMirror.stop('Screen stream stopped')", null)
-    }
-    fun setResolution(value: String) {
-        if (resolution == value) return
-        resolution = value
         webView.evaluateJavascript(
-            "if (window.SciNETMirror) window.SciNETMirror.configure(" + JSONObject.quote(value) + ", " + fps + ")",
+            "if (typeof stopScreenStream === 'function') document.getElementById('screenStop').click();",
             null
         )
     }
-    fun setFrameRate(value: Int) {
-        if (fps == value) return
-        fps = value
+
+    fun applySettings(newResolution: String = resolution, newFps: Int = fps) {
+        resolution = newResolution
+        fps = newFps
         webView.evaluateJavascript(
-            "if (window.SciNETMirror) window.SciNETMirror.configure(" + JSONObject.quote(resolution) + ", " + value + ")",
+            "(() => {" +
+                "const r=document.getElementById('screenResolution');" +
+                "const f=document.getElementById('screenFps');" +
+                "if(!r||!f)return;" +
+                "r.value=" + JSONObject.quote(newResolution) + ";" +
+                "f.value=" + newFps + ";" +
+                "if(typeof applyLiveScreenSettings==='function')applyLiveScreenSettings();" +
+            "})()",
             null
         )
     }
@@ -806,6 +757,7 @@ internal fun ScreenMirrorScreen(
                 .put("x", point.x.toDouble()).put("y", point.y.toDouble())
         )
     }
+
     fun sendMouseClick(button: String) {
         scope.launch {
             try {
@@ -817,8 +769,11 @@ internal fun ScreenMirrorScreen(
     }
 
     val sourceAspect = if (videoWidth > 0 && videoHeight > 0) videoWidth.toFloat() / videoHeight else 16f / 9f
-    val statusLabel = if (hasVideo) "LIVE" else if (streamActive) "CONNECTING" else "OFF"
-    val statusColor = if (hasVideo) Good else if (streamActive) Color(0xFFE6B86A) else Muted
+    val statusColor = when {
+        hasVideo -> Good
+        streamActive -> Color(0xFFE6B86A)
+        else -> Muted
+    }
 
     Column(
         modifier = if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
@@ -840,7 +795,7 @@ internal fun ScreenMirrorScreen(
                         Text(statusLabel, color = if (hasVideo) Good else Ink, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     }
                 }
-                Text("The full desktop is fitted into the viewer. The image is never stretched or cropped.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+                Text("The entire PC display is fitted inside the viewer. No desktop edges are cropped.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
             }
         }
 
@@ -874,11 +829,18 @@ internal fun ScreenMirrorScreen(
                         when {
                             pageError.isNotBlank() -> pageError
                             streamActive -> statusMessage
-                            !webReady -> "Preparing the video receiver…"
+                            !webReady -> "Preparing the original PC video receiver…"
                             else -> "Start viewing to open a live stream from your PC."
                         },
                         color = Muted, fontSize = 10.sp, lineHeight = 15.sp
                     )
+                    if (pageError.isNotBlank()) {
+                        OutlinedButton(onClick = {
+                            webReady = false
+                            pageError = ""
+                            webView.reload()
+                        }) { Text("RELOAD VIEWER") }
+                    }
                 }
             }
 
@@ -965,13 +927,13 @@ internal fun ScreenMirrorScreen(
                 Text("RESOLUTION", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     listOf("480p", "720p", "1080p").forEach { value ->
-                        FilterChip(selected = resolution == value, onClick = { setResolution(value) }, label = { Text(value, fontSize = 11.sp) })
+                        FilterChip(selected = resolution == value, onClick = { applySettings(newResolution = value) }, label = { Text(value, fontSize = 11.sp) })
                     }
                 }
                 Text("FRAME RATE", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     listOf(15, 24, 30).forEach { value ->
-                        FilterChip(selected = fps == value, onClick = { setFrameRate(value) }, label = { Text("$value FPS", fontSize = 11.sp) })
+                        FilterChip(selected = fps == value, onClick = { applySettings(newFps = value) }, label = { Text(value.toString() + " FPS", fontSize = 11.sp) })
                     }
                 }
             }
