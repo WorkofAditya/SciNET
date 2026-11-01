@@ -4,14 +4,7 @@ import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -32,6 +25,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.unit.IntOffset
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -65,7 +61,6 @@ private fun SciNETApp() {
     var notice by remember { mutableStateOf("") }
     var noticeBad by remember { mutableStateOf(false) }
     var noticeVisible by remember { mutableStateOf(false) }
-    var noticeExpanded by remember { mutableStateOf(false) }
     var noticeVersion by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val keyboardMutex = remember { Mutex() }
@@ -73,15 +68,13 @@ private fun SciNETApp() {
     fun notify(text: String, bad: Boolean = false) {
         notice = text
         noticeBad = bad
-        noticeExpanded = false
         noticeVisible = true
         noticeVersion++
     }
-    LaunchedEffect(noticeVersion, noticeExpanded) {
+    LaunchedEffect(noticeVersion) {
         if (notice.isNotBlank()) {
-            delay(if (noticeExpanded) 8000 else if (noticeBad) 5000 else 2500)
+            delay(if (noticeBad) 5000 else 2500)
             noticeVisible = false
-            noticeExpanded = false
         }
     }
     fun control(action: String, extra: Map<String, Any?> = emptyMap()) {
@@ -195,8 +188,7 @@ private fun SciNETApp() {
                     message = notice,
                     isError = noticeBad,
                     visible = noticeVisible,
-                    expanded = noticeExpanded,
-                    onClick = { noticeExpanded = !noticeExpanded }
+                    connected = false
                 )
             } else {
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(15.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -228,8 +220,7 @@ private fun SciNETApp() {
                     message = notice,
                     isError = noticeBad,
                     visible = noticeVisible,
-                    expanded = noticeExpanded,
-                    onClick = { noticeExpanded = !noticeExpanded }
+                    connected = true
                 )
                 Row(Modifier.fillMaxWidth().background(Color(0xFF0C0F13)).padding(horizontal = 3.dp, vertical = 5.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
                     listOf("HOME" to "⌂", "CONTROL" to "⌁", "FILES" to "▤", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
@@ -249,55 +240,37 @@ private fun NotificationToast(
     message: String,
     isError: Boolean,
     visible: Boolean,
-    expanded: Boolean,
-    onClick: () -> Unit
+    connected: Boolean
 ) {
-    AnimatedVisibility(
-        visible = visible && message.isNotBlank(),
-        enter = fadeIn() + slideInVertically { it / 2 },
-        exit = fadeOut() + slideOutVertically { it / 2 }
-    ) {
-        // The full-width Box is transparent; only the compact pill paints a background.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.Transparent)
-                .padding(horizontal = 16.dp, vertical = 5.dp),
-            contentAlignment = Alignment.Center
+    if (visible && message.isNotBlank()) {
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        // Float above the bottom navigation; without reserving a full-width layout row.
+        Popup(
+            alignment = Alignment.BottomCenter,
+            offset = IntOffset(
+                0,
+                with(density) { (if (connected) (-88).dp else (-24).dp).roundToPx() }
+            ),
+            properties = PopupProperties(
+                focusable = false,
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
+            )
         ) {
             Surface(
-                modifier = Modifier
-                    .wrapContentWidth()
-                    .animateContentSize()
-                    .clickable(onClick = onClick),
+                modifier = Modifier.size(42.dp),
                 color = if (isError) Color(0xFF4A2024) else Color(0xFF173D29),
                 contentColor = Color(0xFFF2F7F3),
                 shape = RoundedCornerShape(50),
                 shadowElevation = 6.dp
             ) {
-                Row(
-                    modifier = Modifier
-                        .defaultMinSize(minWidth = 44.dp, minHeight = 42.dp)
-                        .padding(horizontal = if (expanded) 15.dp else 0.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
+                Box(contentAlignment = Alignment.Center) {
                     Text(
                         if (isError) "×" else "✓",
                         fontSize = 21.sp,
                         lineHeight = 22.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    if (expanded) {
-                        Spacer(Modifier.width(9.dp))
-                        Text(
-                            message,
-                            modifier = Modifier.widthIn(max = 260.dp),
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp,
-                            color = Color(0xFFF2F7F3)
-                        )
-                    }
                 }
             }
         }
