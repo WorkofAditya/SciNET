@@ -526,7 +526,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 OutlinedButton(onClick = { resolution = when (resolution) { "480p" -> "720p"; "720p" -> "1080p"; else -> "480p" }; if (active) restartStream() }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) {
                     Text(resolution + " · RESOLUTION", fontSize = 9.sp)
                 }
-                OutlinedButton(onClick = { fps = when (fps) { 15 -> 24; 24 -> 30; else -> 15 }; if (active) { stopStream(); startStream() } }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) {
+                OutlinedButton(onClick = { fps = when (fps) { 15 -> 24; 24 -> 30; else -> 15 }; if (active) restartStream() }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) {
                     Text(fps.toString() + " FPS", fontSize = 9.sp)
                 }
             }
