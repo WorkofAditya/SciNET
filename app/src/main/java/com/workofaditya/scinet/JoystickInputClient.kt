@@ -43,6 +43,8 @@ internal class JoystickInputClient(
     @Volatile private var closed = false
     @Volatile private var connected = false
     @Volatile private var socket: WebSocket? = null
+    @Volatile private var latestX = 0f
+    @Volatile private var latestY = 0f
 
     private val url: String = run {
         val base = SciNETApi.normalizeHost(host).trimEnd('/')
@@ -64,6 +66,7 @@ internal class JoystickInputClient(
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 connected = true
+                sendAxes(latestX, latestY)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -87,12 +90,15 @@ internal class JoystickInputClient(
     }
 
     /** Send normalized analog axes in the -1.0..1.0 range. */
+    @Synchronized
     fun sendAxes(x: Float, y: Float) {
+        latestX = x.coerceIn(-1f, 1f)
+        latestY = y.coerceIn(-1f, 1f)
         if (closed || !connected) return
         val payload = ByteBuffer.allocate(8)
             .order(ByteOrder.LITTLE_ENDIAN)
-            .putFloat(x.coerceIn(-1f, 1f))
-            .putFloat(y.coerceIn(-1f, 1f))
+            .putFloat(latestX)
+            .putFloat(latestY)
             .array()
         socket?.send(ByteString.of(*payload))
     }
