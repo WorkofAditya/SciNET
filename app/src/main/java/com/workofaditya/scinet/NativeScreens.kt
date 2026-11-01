@@ -569,7 +569,6 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 }
             }
             Text("Tap the view to click. Drag to move the Windows pointer. Use a lower resolution or frame rate for less network load.", color = Muted, fontSize = 10.sp, lineHeight = 16.sp)
-            if (streamError.isNotBlank()) Text(streamError, color = Bad, fontSize = 10.sp, lineHeight = 15.sp)
             PrimaryButton(if (busy) "PLEASE WAIT…" else if (active) "STOP VIEWING" else "START VIEWING", !busy) {
                 if (active) stopStream() else startStream()
             }
