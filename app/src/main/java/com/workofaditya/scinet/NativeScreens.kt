@@ -475,200 +475,270 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
     val webView = remember(context, host) { android.webkit.WebView(context) }
     val screenOnlyStyle = """
         (() => {
+          const existingCard = document.querySelector('.screen-card');
+          if (!existingCard) {
+            return JSON.stringify({ error: 'The PC page did not include its screen mirroring panel.' });
+          }
+
+          // Detach the existing, fully wired screen panel from the desktop site's constrained
+          // app-shell/main layout. Moving (not cloning) preserves all control.js event handlers.
+          const nativeRoot = document.createElement('div');
+          nativeRoot.id = 'scinet-native-screen-root';
+          existingCard.parentNode.removeChild(existingCard);
+          const oldShell = document.querySelector('.app-shell');
+          if (oldShell) oldShell.style.display = 'none';
+          document.body.appendChild(nativeRoot);
+          nativeRoot.appendChild(existingCard);
+
           const css = document.createElement('style');
           css.id = 'scinet-native-screen-only';
           css.textContent = `
-            html, body, .app-shell {
-              min-height: 0 !important;
+            *, *::before, *::after { box-sizing: border-box !important; }
+            html, body {
+              display: block !important;
+              width: 100% !important;
+              min-width: 0 !important;
               height: auto !important;
+              min-height: 100% !important;
               margin: 0 !important;
               padding: 0 !important;
               overflow-x: hidden !important;
               background: #0a0c0f !important;
             }
-            .topbar, .app-shell > footer {
-              display: none !important;
-            }
-            .control-page {
+            #scinet-native-screen-root {
               display: block !important;
+              position: relative !important;
               width: 100% !important;
               max-width: none !important;
               min-width: 0 !important;
-              min-height: 0 !important;
               margin: 0 !important;
-              padding: 0 14px 18px !important;
+              padding: 14px 14px 18px !important;
+              overflow: visible !important;
               box-sizing: border-box !important;
-              position: relative !important;
-              left: auto !important;
-              transform: none !important;
             }
-            .control-page > :not(.screen-card) {
-              display: none !important;
-            }
-            .screen-card {
+            #scinet-native-screen-root .screen-card {
               display: flex !important;
               flex-direction: column !important;
               align-items: stretch !important;
               width: 100% !important;
               max-width: none !important;
               min-width: 0 !important;
-              margin: 0 auto !important;
+              margin: 0 !important;
               padding: 16px !important;
-              border: 1px solid #29313b !important;
-              border-radius: 15px !important;
-              background: linear-gradient(155deg,#151b22 0%,#0e1217 62%,#0b0f13 100%) !important;
-              box-shadow: 0 14px 34px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.035) !important;
-              box-sizing: border-box !important;
               gap: 0 !important;
+              border: 1px solid #2b3540 !important;
+              border-radius: 16px !important;
+              background: linear-gradient(155deg,#151c24 0%,#10161d 55%,#0d1218 100%) !important;
+              box-shadow: 0 14px 36px rgba(0,0,0,.30), inset 0 1px rgba(255,255,255,.035) !important;
+              box-sizing: border-box !important;
             }
-            .screen-card > .section-head {
+            #scinet-native-screen-root .screen-card > .section-head {
               display: flex !important;
               align-items: center !important;
               justify-content: space-between !important;
               width: 100% !important;
-              margin: 0 0 16px !important;
+              min-width: 0 !important;
+              margin: 0 0 15px !important;
               padding: 0 0 13px !important;
-              border-bottom: 1px solid #27303a !important;
-              box-sizing: border-box !important;
+              border-bottom: 1px solid #2a3540 !important;
             }
-            .screen-card > .section-head .label {
-              color: #8e9aa8 !important;
+            #scinet-native-screen-root .screen-card > .section-head .label {
+              color: #94a3b3 !important;
               font-size: 9px !important;
               font-weight: 700 !important;
-              letter-spacing: .17em !important;
+              letter-spacing: .18em !important;
             }
-            .screen-card > .section-head h2 {
+            #scinet-native-screen-root .screen-card > .section-head h2 {
               margin: 5px 0 0 !important;
-              color: #f1f4f7 !important;
-              font-size: 21px !important;
+              color: #f3f6f9 !important;
+              font-size: 22px !important;
               font-weight: 700 !important;
               line-height: 1.2 !important;
-              letter-spacing: -.035em !important;
+              letter-spacing: -.04em !important;
             }
-            .screen-card #screenState {
+            #scinet-native-screen-root #screenState {
               flex: 0 0 auto !important;
               padding: 6px 10px !important;
-              border: 1px solid #39434e !important;
+              border: 1px solid #394653 !important;
               border-radius: 999px !important;
-              color: #aab4bf !important;
-              background: #171e26 !important;
+              color: #aab7c4 !important;
+              background: #1a232d !important;
               font-size: 9px !important;
               font-weight: 700 !important;
               letter-spacing: .12em !important;
             }
-            .screen-card #screenState.live {
-              border-color: #286b4b !important;
-              color: #8be0b0 !important;
-              background: #10291e !important;
+            #scinet-native-screen-root #screenState.live {
+              border-color: #286e4b !important;
+              color: #9aebba !important;
+              background: #112d20 !important;
             }
-            .screen-card > .control-note {
-              display: none !important;
-            }
-            .screen-stream-options {
+            #scinet-native-screen-root .screen-stream-options {
               display: grid !important;
+              grid-template-columns: repeat(2,minmax(0,1fr)) !important;
+              align-items: end !important;
+              gap: 10px !important;
               width: 100% !important;
               min-width: 0 !important;
-              grid-template-columns: repeat(2,minmax(0,1fr)) !important;
-              gap: 11px !important;
               margin: 0 0 14px !important;
-              box-sizing: border-box !important;
             }
-            .screen-stream-options label {
+            #scinet-native-screen-root .screen-stream-options label {
+              display: flex !important;
+              flex-direction: column !important;
               min-width: 0 !important;
-              gap: 5px !important;
-              color: #9ca8b5 !important;
+              gap: 6px !important;
+              color: #99a7b5 !important;
               font-size: 9px !important;
               font-weight: 700 !important;
-              letter-spacing: .11em !important;
+              letter-spacing: .10em !important;
             }
-            .screen-stream-options select {
-              min-width: 0 !important;
+            #scinet-native-screen-root .screen-stream-options select {
+              display: block !important;
               width: 100% !important;
+              min-width: 0 !important;
               min-height: 44px !important;
-              padding: 0 11px !important;
+              margin: 0 !important;
+              padding: 0 10px !important;
+              border: 1px solid #354452 !important;
               border-radius: 9px !important;
-              background: #0d131a !important;
-              border: 1px solid #34404c !important;
-              color: #e4eaf0 !important;
+              outline: none !important;
+              background: #0c131b !important;
+              color: #e7edf3 !important;
+              font-family: inherit !important;
               font-size: 12px !important;
             }
-            .screen-viewer {
+            #scinet-native-screen-root .screen-viewer {
+              position: relative !important;
+              display: grid !important;
+              place-items: center !important;
               width: 100% !important;
+              max-width: none !important;
+              min-width: 0 !important;
               min-height: 0 !important;
               height: auto !important;
               aspect-ratio: 16 / 9 !important;
+              margin: 0 !important;
               overflow: hidden !important;
-              width: 100% !important;
-              min-width: 0 !important;
-              border: 1px solid #35414e !important;
+              border: 1px solid #364553 !important;
               border-radius: 12px !important;
-              background: #05070a !important;
-              box-shadow: 0 10px 26px rgba(0,0,0,.3) !important;
-              box-sizing: border-box !important;
+              background: #05080c !important;
+              box-shadow: 0 10px 26px rgba(0,0,0,.28) !important;
             }
-            .screen-viewer video {
+            #scinet-native-screen-root .screen-viewer video {
               display: block !important;
               width: 100% !important;
               height: 100% !important;
               max-width: 100% !important;
               max-height: none !important;
               object-fit: contain !important;
-              background: #050607 !important;
+              background: #05080c !important;
             }
-            .screen-placeholder {
+            #scinet-native-screen-root .screen-placeholder {
+              display: flex !important;
+              align-items: center !important;
+              justify-content: center !important;
+              flex-direction: column !important;
+              gap: 9px !important;
+              width: 100% !important;
+              min-width: 0 !important;
               min-height: 100% !important;
               padding: 18px !important;
+              text-align: center !important;
             }
-            .screen-actions {
+            #scinet-native-screen-root .screen-placeholder[hidden] { display: none !important; }
+            #scinet-native-screen-root .screen-placeholder-icon {
               display: grid !important;
-              width: 100% !important;
+              place-items: center !important;
+              width: 48px !important;
+              height: 48px !important;
+              border: 1px solid #34414e !important;
+              border-radius: 13px !important;
+              background: #151e27 !important;
+              color: #c3cfda !important;
+              font-size: 23px !important;
+            }
+            #scinet-native-screen-root .screen-placeholder strong {
+              color: #d8e0e8 !important;
+              font-size: 12px !important;
+              font-weight: 600 !important;
+            }
+            #scinet-native-screen-root .screen-placeholder small {
+              max-width: 270px !important;
+              color: #82909e !important;
+              font-size: 10px !important;
+              line-height: 1.5 !important;
+            }
+            #scinet-native-screen-root .screen-live-indicator {
+              position: absolute !important;
+              top: 10px !important;
+              left: 10px !important;
+              z-index: 4 !important;
+              padding: 6px 9px !important;
+              border: 1px solid #256a48 !important;
+              border-radius: 7px !important;
+              background: rgba(12,35,24,.94) !important;
+              color: #a2efbe !important;
+              font-size: 9px !important;
+              font-weight: 800 !important;
+              letter-spacing: .12em !important;
+            }
+            #scinet-native-screen-root .screen-live-indicator[hidden] { display: none !important; }
+            #scinet-native-screen-root .screen-actions {
+              display: grid !important;
               grid-template-columns: minmax(0,1fr) minmax(0,1fr) !important;
+              align-items: stretch !important;
               gap: 9px !important;
+              width: 100% !important;
               margin: 14px 0 0 !important;
             }
-            .screen-actions .button {
+            #scinet-native-screen-root .screen-actions .button {
+              display: inline-flex !important;
+              align-items: center !important;
+              justify-content: center !important;
               width: 100% !important;
+              min-width: 0 !important;
               min-height: 46px !important;
               margin: 0 !important;
-              border: 1px solid #3a4653 !important;
+              padding: 0 10px !important;
+              border: 1px solid #394857 !important;
               border-radius: 10px !important;
-              background: #1a222c !important;
-              color: #e9eef3 !important;
+              background: #19232e !important;
+              color: #e7edf3 !important;
+              font-family: inherit !important;
               font-size: 11px !important;
               font-weight: 700 !important;
               letter-spacing: .01em !important;
             }
-            .screen-actions #screenStart {
+            #scinet-native-screen-root #screenStart {
               grid-column: 1 / -1 !important;
-              background: linear-gradient(135deg,#245b42,#173d2c) !important;
-              border-color: #347653 !important;
-              color: #c8f4dc !important;
+              border-color: #347c58 !important;
+              background: linear-gradient(135deg,#236344,#17452f) !important;
+              color: #d2f6e0 !important;
+              box-shadow: inset 0 1px rgba(255,255,255,.08), 0 5px 14px rgba(12,52,31,.28) !important;
             }
-            .screen-actions #screenStop {
+            #scinet-native-screen-root #screenStop {
               grid-column: 1 !important;
-              background: #291719 !important;
-              border-color: #613237 !important;
-              color: #f1b6b9 !important;
+              border-color: #713d43 !important;
+              background: #321d21 !important;
+              color: #ffd0d1 !important;
             }
-            .screen-actions #screenFullscreen {
+            #scinet-native-screen-root #screenFullscreen {
               grid-column: 2 !important;
               grid-row: 2 !important;
-              background: #18212b !important;
             }
-            .screen-fps {
+            #scinet-native-screen-root #screenFullscreen:disabled {
+              opacity: .45 !important;
+            }
+            #scinet-native-screen-root .screen-fps {
               grid-column: 1 / -1 !important;
               width: 100% !important;
               margin: 2px 0 0 !important;
-              padding: 3px 0 0 !important;
-              color: #8794a2 !important;
+              color: #91a0ae !important;
               font-size: 10px !important;
-              text-align: center !important;
               line-height: 1.5 !important;
+              text-align: left !important;
             }
-            .screen-live-indicator {
-              z-index: 3 !important;
-            }
-            .screen-viewer:fullscreen {
+            #scinet-native-screen-root .control-note { display: none !important; }
+            #scinet-native-screen-root .screen-viewer:fullscreen {
               position: fixed !important;
               inset: 0 !important;
               width: 100vw !important;
@@ -677,24 +747,29 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               max-width: none !important;
               max-height: none !important;
               aspect-ratio: auto !important;
+              margin: 0 !important;
               border: 0 !important;
               border-radius: 0 !important;
               background: #000 !important;
               z-index: 99999 !important;
             }
-            .screen-viewer:fullscreen video {
+            #scinet-native-screen-root .screen-viewer:fullscreen video {
               width: 100% !important;
               height: 100% !important;
               object-fit: contain !important;
             }
-            .screen-touch-controls {
-              z-index: 100000 !important;
-            }
+            #screenTouchControls { z-index: 100000 !important; }
           `;
           document.head.appendChild(css);
+
+          const rootRect = nativeRoot.getBoundingClientRect();
+          const cardRect = existingCard.getBoundingClientRect();
           window.scrollTo(0, 0);
           return JSON.stringify({
-            page: !!document.querySelector('.screen-card'),
+            page: !!document.querySelector('#scinet-native-screen-root .screen-card'),
+            rootWidth: Math.round(rootRect.width),
+            cardWidth: Math.round(cardRect.width),
+            viewportWidth: window.innerWidth,
             start: !!document.getElementById('screenStart'),
             fullscreen: !!document.getElementById('screenFullscreen'),
             video: !!document.getElementById('screenFrame'),
