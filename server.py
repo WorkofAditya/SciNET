@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import ctypes
 import ipaddress
+import math
 import getpass
 import os
 import platform
@@ -1301,6 +1302,69 @@ async def controller_socket(websocket: WebSocket):
         pass
     except Exception:
         pass
+
+
+@app.websocket("/ws/joystick")
+async def joystick_socket(websocket: WebSocket):
+    """Expose a real analog left stick through a virtual Xbox 360 controller."""
+    client = websocket.client
+    if not client:
+        await websocket.close(code=1008, reason="Could not identify this device")
+        return
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            await websocket.close(code=1008, reason="Joystick is available on a private local network only")
+            return
+    except ValueError:
+        await websocket.close(code=1008, reason="Invalid client address")
+        return
+    if platform.system() != "Windows":
+        await websocket.close(code=1011, reason="Virtual gamepad output is supported on Windows only")
+        return
+
+    await websocket.accept()
+    try:
+        import vgamepad as vg
+        gamepad = vg.VX360Gamepad()
+    except Exception:
+        await websocket.send_json({"error": "Joystick mode needs the ViGEmBus virtual gamepad driver installed on this PC. Install ViGEmBus, then restart SciNET."})
+        await websocket.close(code=1011, reason="Virtual Xbox controller unavailable")
+        return
+
+    try:
+        while True:
+            payload = await websocket.receive_bytes()
+            if len(payload) != 8:
+                await websocket.send_json({"error": "Invalid joystick input packet"})
+                continue
+            axis_x, axis_y = struct.unpack("<ff", payload)
+            if not (math.isfinite(axis_x) and math.isfinite(axis_y)):
+                axis_x = axis_y = 0.0
+            axis_x = max(-1.0, min(1.0, axis_x))
+            axis_y = max(-1.0, min(1.0, axis_y))
+            magnitude = math.hypot(axis_x, axis_y)
+            if magnitude < 0.06:
+                axis_x = axis_y = 0.0
+            elif magnitude > 0.0:
+                scaled = min(1.0, (magnitude - 0.06) / 0.94) / magnitude
+                axis_x *= scaled
+                axis_y *= scaled
+            gamepad.left_joystick(
+                x_value=round(axis_x * 32767),
+                y_value=round(axis_y * 32767)
+            )
+            gamepad.update()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        try:
+            gamepad.reset()
+            gamepad.update()
+        except Exception:
+            pass
 
 
 @app.websocket("/ws")
