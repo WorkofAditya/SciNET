@@ -164,81 +164,99 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                 Text(if (search.isBlank()) "Upload files or create a folder to get started." else "Try a different search term.", color = Muted, fontSize = 11.sp)
             }
         } else {
-            visibleItems.forEach { item ->
-                val name = item.optString("name")
-                val path = item.optString("path")
-                val isFolder = item.optString("type") == "folder"
-                var menuExpanded by remember(path) { mutableStateOf(false) }
-                Column(
-                    Modifier.fillMaxWidth()
-                        .background(Panel, RoundedCornerShape(10.dp))
-                        .border(1.dp, Edge, RoundedCornerShape(10.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        FileThumbnail(host, path, name, isFolder, Modifier.size(54.dp))
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, lineHeight = 16.sp)
-                            Text(
-                                if (isFolder) "FOLDER" else name.substringAfterLast('.', "FILE").uppercase(Locale.ROOT) + "  ·  " + formatBytes(item.optLong("size")),
-                                color = Muted, fontSize = 9.sp, letterSpacing = .4.sp
-                            )
-                        }
-                        Box {
-                            IconButton(onClick = { menuExpanded = true }) { Text("⋮", color = Muted, fontSize = 22.sp) }
-                            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("Rename") },
-                                    onClick = { menuExpanded = false; renameItem = item; renameName = name }
-                                )
-                                if (!isFolder) DropdownMenuItem(
-                                    text = { Text("Download") },
-                                    onClick = { menuExpanded = false; pendingDownload = path; downloadLauncher.launch(name) }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Delete", color = Bad) },
-                                    onClick = { menuExpanded = false; deleteItem = item }
-                                )
+            visibleItems.chunked(2).forEach { rowItems ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+                    rowItems.forEach { item ->
+                        Box(Modifier.weight(1f)) {
+                            val name = item.optString("name")
+                            val path = item.optString("path")
+                            val isFolder = item.optString("type") == "folder"
+                            var menuExpanded by remember(path) { mutableStateOf(false) }
+                            Column(
+                                Modifier.fillMaxWidth()
+                                    .aspectRatio(0.94f)
+                                    .background(Panel, RoundedCornerShape(11.dp))
+                                    .border(1.dp, Edge, RoundedCornerShape(11.dp))
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(7.dp)
+                            ) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                                ) {
+                                    FileThumbnail(host, path, name, isFolder, Modifier.size(48.dp))
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Text(name, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, lineHeight = 13.sp, softWrap = true)
+                                        Text(
+                                            if (isFolder) "FOLDER" else formatBytes(item.optLong("size")),
+                                            color = Muted, fontSize = 8.sp
+                                        )
+                                    }
+                                    Box {
+                                        IconButton(onClick = { menuExpanded = true }, modifier = Modifier.size(28.dp)) {
+                                            Text("⋮", color = Muted, fontSize = 19.sp)
+                                        }
+                                        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                                            DropdownMenuItem(
+                                                text = { Text("Rename") },
+                                                onClick = { menuExpanded = false; renameItem = item; renameName = name }
+                                            )
+                                            if (!isFolder) DropdownMenuItem(
+                                                text = { Text("Download") },
+                                                onClick = { menuExpanded = false; pendingDownload = path; downloadLauncher.launch(name) }
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("Delete", color = Bad) },
+                                                onClick = { menuExpanded = false; deleteItem = item }
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.weight(1f))
+                                Button(
+                                    onClick = {
+                                        if (isFolder) {
+                                            folder = path
+                                        } else if (isEditableText(name)) {
+                                            scope.launch {
+                                                try {
+                                                    val data = SciNETApi.get(host, "/api/files/content?path=" + SciNETApi.encode(path))
+                                                    editPath = path
+                                                    editName = name
+                                                    editText = data.optString("content")
+                                                    originalText = editText
+                                                    editorOpen = true
+                                                } catch (e: Exception) {
+                                                    onMessage(e.message ?: "Could not open text file.", true)
+                                                }
+                                            }
+                                        } else {
+                                            val url = SciNETApi.normalizeHost(host) + "/api/files/preview?path=" + SciNETApi.encode(path)
+                                            try {
+                                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                            } catch (_: Exception) {
+                                                pendingDownload = path
+                                                downloadLauncher.launch(name)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(34.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Raised, contentColor = Accent),
+                                    shape = RoundedCornerShape(7.dp),
+                                    contentPadding = PaddingValues(horizontal = 3.dp)
+                                ) {
+                                    Text(
+                                        if (isFolder) "OPEN" else if (isEditableText(name)) "EDIT" else "PREVIEW",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1
+                                    )
+                                }
                             }
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Button(
-                            onClick = {
-                                if (isFolder) folder = path
-                                else if (isEditableText(name)) {
-                                    scope.launch {
-                                        try {
-                                            val data = SciNETApi.get(host, "/api/files/content?path=" + SciNETApi.encode(path))
-                                            editPath = path
-                                            editName = name
-                                            editText = data.optString("content")
-                                            originalText = editText
-                                            editorOpen = true
-                                        } catch (e: Exception) { onMessage(e.message ?: "Could not open text file.", true) }
-                                    }
-                                } else {
-                                    val url = SciNETApi.normalizeHost(host) + "/api/files/preview?path=" + SciNETApi.encode(path)
-                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                                    catch (_: Exception) { pendingDownload = path; downloadLauncher.launch(name) }
-                                }
-                            },
-                            modifier = Modifier.weight(1f).height(38.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Raised, contentColor = Accent),
-                            shape = RoundedCornerShape(7.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp)
-                        ) { Text(if (isFolder) "OPEN FOLDER" else if (isEditableText(name)) "EDIT FILE" else "PREVIEW", fontSize = 9.sp, fontWeight = FontWeight.SemiBold) }
-                        if (!isFolder) {
-                            OutlinedButton(
-                                onClick = { pendingDownload = path; downloadLauncher.launch(name) },
-                                modifier = Modifier.height(38.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
-                                shape = RoundedCornerShape(7.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp)
-                            ) { Text("↓  SAVE", fontSize = 9.sp) }
-                        }
-                    }
+                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
         }
