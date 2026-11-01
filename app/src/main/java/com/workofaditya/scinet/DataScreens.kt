@@ -30,6 +30,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -100,33 +107,105 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PageHeading("STORAGE", "File manager", "Browse and manage files stored on the SciNET PC.")
         PanelCard {
-            SectionHeading("SHARED STORAGE", if (folder.isBlank()) "Shared files" else folder)
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                OutlinedButton(onClick = { uploadLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) { Text("↑ UPLOAD", fontSize = 10.sp) }
-                OutlinedButton(onClick = { newFolderName = ""; showNewFolder = true }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) { Text("+ NEW FOLDER", fontSize = 10.sp) }
-                OutlinedButton(onClick = { scope.launch { reload() } }, border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) { Text("↻", fontSize = 14.sp) }
-            }
-            if (folder.isNotBlank()) {
-                OutlinedButton(onClick = { folder = folder.substringBeforeLast('/', "") }, modifier = Modifier.fillMaxWidth(), border = androidx.compose.foundation.BorderStroke(1.dp, Edge)) {
-                    Text("← UP ONE FOLDER", fontSize = 10.sp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("SHARED STORAGE", color = Muted, fontSize = 9.sp, letterSpacing = 1.4.sp, fontWeight = FontWeight.Bold)
+                    Text(if (folder.isBlank()) "All files" else folder, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                }
+                IconButton(onClick = { scope.launch { reload() } }, enabled = !loading) {
+                    Text("↻", fontSize = 20.sp, color = Accent)
                 }
             }
-            OutlinedTextField(value = search, onValueChange = { search = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Search this folder…") }, colors = fieldColors())
-            Text(if (loading) "Loading…" else items.size.toString() + " items", color = Muted, fontSize = 10.sp)
+            if (folder.isNotBlank()) {
+                TextButton(onClick = { folder = folder.substringBeforeLast('/', "") }, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)) {
+                    Text("←  UP ONE LEVEL", color = Accent, fontSize = 9.sp, letterSpacing = .8.sp)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { uploadLauncher.launch(arrayOf("*/*")) },
+                    modifier = Modifier.weight(1f).height(44.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Bg),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp)
+                ) { Text("↑  UPLOAD FILES", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                OutlinedButton(
+                    onClick = { newFolderName = ""; showNewFolder = true },
+                    modifier = Modifier.weight(1f).height(44.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp)
+                ) { Text("+  NEW FOLDER", fontSize = 10.sp) }
+            }
+            OutlinedTextField(
+                value = search,
+                onValueChange = { search = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text("Search files and folders…") },
+                colors = fieldColors()
+            )
+            val visibleItems = items.filter { it.optString("name").contains(search.trim(), ignoreCase = true) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(if (loading) "SYNCING STORAGE…" else visibleItems.size.toString() + " ITEMS", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                if (search.isNotBlank()) Text("FILTERED", color = Accent, fontSize = 8.sp, letterSpacing = 1.sp)
+            }
         }
-        if (items.isEmpty() && !loading) PanelCard { EmptyText("This folder is empty.") }
-        items.filter { it.optString("name").contains(search, ignoreCase = true) }.chunked(2).forEach { pair ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.Top) {
-                pair.forEach { item ->
-                    Box(Modifier.weight(1f)) {
-                        val name = item.optString("name")
-                        val path = item.optString("path")
-                        val isFolder = item.optString("type") == "folder"
-                        PanelCard {
-                            FileThumbnail(host, path, name, isFolder)
-                            Text(name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, lineHeight = 14.sp, softWrap = true)
-                            Text(if (isFolder) "FOLDER" else formatBytes(item.optLong("size")), color = Muted, fontSize = 9.sp)
-                            OutlinedButton(onClick = {
+
+        val visibleItems = items.filter { it.optString("name").contains(search.trim(), ignoreCase = true) }
+        if (loading && items.isEmpty()) {
+            PanelCard { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Accent, strokeWidth = 2.dp)
+                Text("Loading shared storage…", color = Muted, fontSize = 11.sp)
+            } }
+        } else if (visibleItems.isEmpty()) {
+            PanelCard {
+                Text(if (search.isBlank()) "This folder is empty" else "No matching files", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(if (search.isBlank()) "Upload files or create a folder to get started." else "Try a different search term.", color = Muted, fontSize = 11.sp)
+            }
+        } else {
+            visibleItems.forEach { item ->
+                val name = item.optString("name")
+                val path = item.optString("path")
+                val isFolder = item.optString("type") == "folder"
+                var menuExpanded by remember(path) { mutableStateOf(false) }
+                Column(
+                    Modifier.fillMaxWidth()
+                        .background(Panel, RoundedCornerShape(10.dp))
+                        .border(1.dp, Edge, RoundedCornerShape(10.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        FileThumbnail(host, path, name, isFolder, Modifier.size(54.dp))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, lineHeight = 16.sp)
+                            Text(
+                                if (isFolder) "FOLDER" else name.substringAfterLast('.', "FILE").uppercase(Locale.ROOT) + "  ·  " + formatBytes(item.optLong("size")),
+                                color = Muted, fontSize = 9.sp, letterSpacing = .4.sp
+                            )
+                        }
+                        Box {
+                            IconButton(onClick = { menuExpanded = true }) { Text("⋮", color = Muted, fontSize = 22.sp) }
+                            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Rename") },
+                                    onClick = { menuExpanded = false; renameItem = item; renameName = name }
+                                )
+                                if (!isFolder) DropdownMenuItem(
+                                    text = { Text("Download") },
+                                    onClick = { menuExpanded = false; pendingDownload = path; downloadLauncher.launch(name) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete", color = Bad) },
+                                    onClick = { menuExpanded = false; deleteItem = item }
+                                )
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(
+                            onClick = {
                                 if (isFolder) folder = path
                                 else if (isEditableText(name)) {
                                     scope.launch {
@@ -144,18 +223,23 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                                     try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
                                     catch (_: Exception) { pendingDownload = path; downloadLauncher.launch(name) }
                                 }
-                            }, modifier = Modifier.fillMaxWidth(), border = androidx.compose.foundation.BorderStroke(1.dp, Edge), contentPadding = PaddingValues(horizontal = 2.dp, vertical = 5.dp)) {
-                                Text(if (isFolder) "OPEN" else if (isEditableText(name)) "EDIT" else "PREVIEW", fontSize = 9.sp, color = Accent)
-                            }
-                            if (!isFolder) TextButton(onClick = { pendingDownload = path; downloadLauncher.launch(name) }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(0.dp)) { Text("↓ DOWNLOAD", fontSize = 8.sp) }
-                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                TextButton(onClick = { renameItem = item; renameName = name }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) { Text("RENAME", fontSize = 8.sp) }
-                                TextButton(onClick = { deleteItem = item }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) { Text("DELETE", fontSize = 8.sp, color = Bad) }
-                            }
+                            },
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Raised, contentColor = Accent),
+                            shape = RoundedCornerShape(7.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) { Text(if (isFolder) "OPEN FOLDER" else if (isEditableText(name)) "EDIT FILE" else "PREVIEW", fontSize = 9.sp, fontWeight = FontWeight.SemiBold) }
+                        if (!isFolder) {
+                            OutlinedButton(
+                                onClick = { pendingDownload = path; downloadLauncher.launch(name) },
+                                modifier = Modifier.height(38.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
+                                shape = RoundedCornerShape(7.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) { Text("↓  SAVE", fontSize = 9.sp) }
                         }
                     }
                 }
-                if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
     }
@@ -259,66 +343,147 @@ internal fun LiveClipboardPanel(host: String, onMessage: (String, Boolean) -> Un
     var lastUpdated by remember { mutableStateOf(0.0) }
     var lastSentText by remember { mutableStateOf("") }
     var localEditAt by remember { mutableStateOf(0L) }
+    var socketConnected by remember { mutableStateOf(false) }
+    var socket by remember { mutableStateOf<WebSocket?>(null) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val manager = remember(context) { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
+    val client = remember { OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build() }
+
     LaunchedEffect(host) {
-        while (true) {
-            try {
-                val data = SciNETApi.get(host, "/api/clipboard")
-                val updated = data.optDouble("updated", 0.0)
-                val incoming = data.optString("text")
-                if (updated > lastUpdated && incoming != lastSentText) {
-                    if (System.currentTimeMillis() - localEditAt > 900) {
-                        lastUpdated = updated
-                        lastSentText = incoming
-                        text = incoming
-                        if (incoming.isNotEmpty()) manager.setPrimaryClip(ClipData.newPlainText("SciNET shared clipboard", incoming))
+        var reconnectDelay = 1000L
+        try {
+            while (true) {
+                val closed = CompletableDeferred<Unit>()
+                val base = SciNETApi.normalizeHost(host).trimEnd('/')
+                val socketBase = base.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
+                val request = Request.Builder().url("$socketBase/ws/clipboard").build()
+                val current = client.newWebSocket(request, object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        scope.launch {
+                            socket = webSocket
+                            socketConnected = true
+                        }
                     }
-                } else if (updated > lastUpdated) lastUpdated = updated
-            } catch (_: Exception) { }
-            delay(500)
+
+                    override fun onMessage(webSocket: WebSocket, textMessage: String) {
+                        val payload = runCatching { JSONObject(textMessage) }.getOrNull() ?: return
+                        scope.launch {
+                            val updated = payload.optDouble("updated", 0.0)
+                            val incoming = payload.optString("text")
+                            if (updated > lastUpdated && incoming != lastSentText) {
+                                if (System.currentTimeMillis() - localEditAt > 900) {
+                                    lastUpdated = updated
+                                    lastSentText = incoming
+                                    text = incoming
+                                    if (incoming.isNotEmpty()) {
+                                        manager.setPrimaryClip(ClipData.newPlainText("SciNET shared clipboard", incoming))
+                                    }
+                                }
+                            } else if (updated > lastUpdated) {
+                                lastUpdated = updated
+                            }
+                        }
+                    }
+
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        scope.launch {
+                            if (socket === webSocket) {
+                                socket = null
+                                socketConnected = false
+                            }
+                        }
+                        closed.complete(Unit)
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        scope.launch {
+                            if (socket === webSocket) {
+                                socket = null
+                                socketConnected = false
+                            }
+                        }
+                        closed.complete(Unit)
+                    }
+                })
+                socket = current
+                try {
+                    closed.await()
+                } finally {
+                    if (socket === current) socket = null
+                    socketConnected = false
+                    current.cancel()
+                }
+                delay(reconnectDelay)
+                reconnectDelay = (reconnectDelay * 2).coerceAtMost(15000L)
+            }
+        } finally {
+            socket?.close(1000, "Clipboard screen closed")
+            socket = null
+            socketConnected = false
         }
     }
-    LaunchedEffect(text) {
-        delay(260)
-        if (text != lastSentText) {
-            try {
-                SciNETApi.post(host, "/api/clipboard", JSONObject().put("text", text.take(20000)).put("source", "SciNET Android"))
-                lastSentText = text.take(20000)
+
+    LaunchedEffect(text, socketConnected) {
+        delay(180)
+        if (socketConnected && text != lastSentText) {
+            val outgoing = text.take(20000)
+            val payload = JSONObject().put("text", outgoing).put("source", "SciNET Android")
+            if (socket?.send(payload.toString()) == true) {
+                lastSentText = outgoing
                 lastUpdated = System.currentTimeMillis() / 1000.0
-            } catch (e: Exception) { onMessage(e.message ?: "Clipboard sync failed.", true) }
+            } else {
+                socketConnected = false
+            }
         }
     }
+
     DisposableEffect(manager, host) {
         val listener = ClipboardManager.OnPrimaryClipChangedListener {
             val clip = manager.primaryClip
-            val clipText = if (clip != null && clip.itemCount > 0) runCatching { clip.getItemAt(0).coerceToText(context).toString() }.getOrDefault("") else ""
+            val clipText = if (clip != null && clip.itemCount > 0) runCatching {
+                clip.getItemAt(0).coerceToText(context).toString()
+            }.getOrDefault("") else ""
             if (clipText.isNotBlank() && clipText != lastSentText) {
                 localEditAt = System.currentTimeMillis()
-                text = clipText
+                text = clipText.take(20000)
             }
         }
         manager.addPrimaryClipChangedListener(listener)
         onDispose { manager.removePrimaryClipChangedListener(listener) }
     }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SectionHeading("LIVE CLIPBOARD", "Shared text")
-        OutlinedTextField(value = text, onValueChange = { text = it; localEditAt = System.currentTimeMillis() }, modifier = Modifier.fillMaxWidth().heightIn(min = 145.dp), minLines = 5, placeholder = { Text("Type or paste text. It syncs automatically…") }, colors = fieldColors())
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            SectionHeading("LIVE CLIPBOARD", "Shared text")
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(Modifier.size(7.dp).background(if (socketConnected) Good else Muted, RoundedCornerShape(50)))
+                Text(if (socketConnected) "LIVE" else "CONNECTING", color = Muted, fontSize = 8.sp, letterSpacing = .8.sp)
+            }
+        }
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it.take(20000); localEditAt = System.currentTimeMillis() },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 145.dp),
+            minLines = 5,
+            placeholder = { Text("Type or paste text. It syncs automatically…") },
+            colors = fieldColors()
+        )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            Box(Modifier.size(7.dp).background(Good, RoundedCornerShape(50)))
-            Text("AUTO-SYNC ON", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
+            Box(Modifier.size(7.dp).background(if (socketConnected) Good else Muted, RoundedCornerShape(50)))
+            Text(if (socketConnected) "TWO-WAY AUTO-SYNC" else "RECONNECTING TO HOST", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
             Spacer(Modifier.weight(1f))
             TextButton(onClick = {
                 manager.setPrimaryClip(ClipData.newPlainText("SciNET", text))
                 onMessage("Copied to phone clipboard.", false)
             }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("COPY TO PHONE", fontSize = 9.sp, color = Accent) }
         }
-        Text("Incoming shared text also updates the phone clipboard while SciNET is open.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+        Text("Text typed here and copied on the phone is sent to the PC browser live. Incoming PC text also updates the phone clipboard.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
     }
 }
 
 @Composable
-private fun FileThumbnail(host: String, path: String, name: String, isFolder: Boolean) {
+private fun FileThumbnail(host: String, path: String, name: String, isFolder: Boolean, modifier: Modifier = Modifier) {
     var bitmap by remember(host, path) { mutableStateOf<Bitmap?>(null) }
     val imageFile = !isFolder && name.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "avif")
     LaunchedEffect(host, path, imageFile) {
@@ -334,10 +499,21 @@ private fun FileThumbnail(host: String, path: String, name: String, isFolder: Bo
             } catch (_: Exception) { null } finally { connection?.disconnect() }
         } else null
     }
-    Box(Modifier.fillMaxWidth().height(100.dp).background(Color(0xFF0B0E12), RoundedCornerShape(8.dp)).border(1.dp, Edge, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-        if (bitmap != null) Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = name, modifier = Modifier.fillMaxSize().padding(2.dp))
-        else {
-            Text(if (isFolder) "📁" else name.substringAfterLast('.', "FILE").uppercase(Locale.ROOT).take(5), color = if (isFolder) Accent else Ink, fontSize = if (isFolder) 34.sp else 16.sp, fontWeight = FontWeight.Bold)
+    Box(
+        modifier.background(Color(0xFF0B0E12), RoundedCornerShape(9.dp))
+            .border(1.dp, Edge, RoundedCornerShape(9.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (bitmap != null) {
+            Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = name, modifier = Modifier.fillMaxSize().padding(2.dp))
+        } else {
+            Text(
+                if (isFolder) "▰" else fileGlyph(name),
+                color = if (isFolder) Accent else Ink,
+                fontSize = if (isFolder) 23.sp else 10.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
         }
     }
 }
@@ -350,6 +526,7 @@ internal fun ProcessScreen(host: String, onMessage: (String, Boolean) -> Unit) {
     var search by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf("name") }
     var groupApps by remember { mutableStateOf(true) }
+    var expandedProcessGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
     var processes by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var overview by remember { mutableStateOf(JSONObject()) }
     var pendingForceStop by remember { mutableStateOf<JSONObject?>(null) }
@@ -435,7 +612,7 @@ internal fun ProcessScreen(host: String, onMessage: (String, Boolean) -> Unit) {
             }.sortedWith(when (sort) {
                 "cpu" -> compareByDescending<JSONObject> { it.optDouble("cpu_percent") }
                 "memory" -> compareByDescending<JSONObject> { it.optLong("memory_bytes") }
-                "runtime" -> compareBy<JSONObject> { it.optDouble("created_at", Double.MAX_VALUE) }
+                "runtime" -> compareByDescending<JSONObject> { it.optDouble("created_at") }
                 else -> compareBy<JSONObject> { it.optString("app_name", it.optString("name")).lowercase(Locale.getDefault()) }
             })
             val categories = listOf("user" to "USER ACTIVITY", "system" to "WINDOWS SYSTEM ACTIVITY", "background" to "OTHER BACKGROUND ACTIVITY")
@@ -446,28 +623,58 @@ internal fun ProcessScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                     if (group.isEmpty()) EmptyText("No matching processes.")
                     val visible = group.take(80)
                     val processBuckets: Map<String, List<JSONObject>> = if (groupApps) {
-                        visible.groupBy { it.optString("app_name", it.optString("name")) }
+                        visible.groupBy {
+                            it.optString("exe").ifBlank { it.optString("name") }.lowercase(Locale.ROOT)
+                        }
                     } else {
                         visible.associateBy { it.optInt("pid").toString() }.mapValues { listOf(it.value) }
                     }
-                    processBuckets.forEach { (appTitle, instances) ->
-                        if (groupApps && instances.size > 1) Text(appTitle + " · " + instances.size + " instances", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                        instances.forEach { proc ->
-                        Column(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Text(proc.optString("app_name", proc.optString("name")), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Text(proc.optString("name") + " · PID " + proc.optInt("pid"), color = Muted, fontSize = 9.sp)
-                            Text("CPU " + proc.optDouble("cpu_percent") + "%  ·  RAM " + formatBytes(proc.optLong("memory_bytes")), color = Muted, fontSize = 9.sp)
-                            if (proc.optString("window_title").isNotBlank()) Text(proc.optString("window_title"), color = Muted, fontSize = 9.sp, maxLines = 2)
-                            if (!proc.optBoolean("protected")) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    TextButton(onClick = { processAction(proc, "minimize") }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("MINIMIZE", fontSize = 8.sp) }
-                                    TextButton(onClick = { processAction(proc, "maximize") }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("MAXIMIZE", fontSize = 8.sp) }
-                                    TextButton(onClick = { processAction(proc, "stop") }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("END TASK", fontSize = 8.sp, color = Bad) }
-                                    TextButton(onClick = { pendingForceStop = proc }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("FORCE", fontSize = 8.sp, color = Bad) }
-                                }
-                            } else Text("PROTECTED PROCESS", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
+                    processBuckets.forEach { (appKey, instances) ->
+                        val representative = instances.firstOrNull { it.optString("window_title").isNotBlank() } ?: instances.first()
+                        val titleText = representative.optString("window_title").ifBlank {
+                            representative.optString("app_name", representative.optString("name"))
                         }
-                        HorizontalDivider(color = Edge)
+                        val expanded = !groupApps || appKey in expandedProcessGroups
+                        if (groupApps) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(top = 7.dp, bottom = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(titleText, color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                                    Text(
+                                        instances.size.toString() + " process" + (if (instances.size == 1) "" else "es") + " · " + representative.optString("app_name", representative.optString("name")),
+                                        color = Muted, fontSize = 8.sp
+                                    )
+                                }
+                                if (instances.size > 1) {
+                                    TextButton(
+                                        onClick = {
+                                            expandedProcessGroups = if (expanded) expandedProcessGroups - appKey else expandedProcessGroups + appKey
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)
+                                    ) { Text(if (expanded) "SHOW LESS" else "SHOW ALL", color = Accent, fontSize = 8.sp) }
+                                }
+                            }
+                        }
+                        val shownInstances = if (expanded) instances else listOf(representative)
+                        shownInstances.forEach { proc ->
+                            Column(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                if (!groupApps) Text(proc.optString("app_name", proc.optString("name")), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(proc.optString("name") + " · PID " + proc.optInt("pid"), color = Muted, fontSize = 9.sp)
+                                Text("CPU " + proc.optDouble("cpu_percent") + "%  ·  RAM " + formatBytes(proc.optLong("memory_bytes")), color = Muted, fontSize = 9.sp)
+                                if (proc.optString("window_title").isNotBlank()) Text(proc.optString("window_title"), color = Muted, fontSize = 9.sp, maxLines = 2)
+                                if (!proc.optBoolean("protected")) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        TextButton(onClick = { processAction(proc, "minimize") }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("MINIMIZE", fontSize = 8.sp) }
+                                        TextButton(onClick = { processAction(proc, "maximize") }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("MAXIMIZE", fontSize = 8.sp) }
+                                        TextButton(onClick = { processAction(proc, "stop") }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("END TASK", fontSize = 8.sp, color = Bad) }
+                                        TextButton(onClick = { pendingForceStop = proc }, contentPadding = PaddingValues(horizontal = 5.dp)) { Text("FORCE", fontSize = 8.sp, color = Bad) }
+                                    }
+                                } else Text("PROTECTED PROCESS", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
+                            }
+                            HorizontalDivider(color = Edge)
                         }
                     }
                 }
