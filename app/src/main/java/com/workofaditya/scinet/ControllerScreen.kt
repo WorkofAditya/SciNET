@@ -26,13 +26,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import org.json.JSONObject
-import kotlin.math.roundToInt
 
 private data class PadButton(val id: String, val label: String, val key: String, val size: Int = 56, val accent: Boolean = false)
 
