@@ -1,15 +1,18 @@
 package com.workofaditya.scinet
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import okhttp3.Response
+import okio.ByteString
 
 /**
- * Persistent low-latency channel for continuous camera movement.
- * One WebSocket avoids creating a new HTTP request for every finger movement.
+ * Persistent binary input channel for high-frequency relative camera movement.
+ * Each Android pointer sample is sent immediately without JSON encoding or timers.
  */
 internal class CameraInputClient(
     host: String,
@@ -22,10 +25,12 @@ internal class CameraInputClient(
             .build()
     }
 
-    @Volatile
-    private var closed = false
-    @Volatile
-    private var socket: WebSocket? = null
+    @Volatile private var closed = false
+    @Volatile private var connected = false
+    @Volatile private var socket: WebSocket? = null
+    private val movementLock = Any()
+    private var remainderX = 0f
+    private var remainderY = 0f
 
     private val url: String = run {
         val base = SciNETApi.normalizeHost(host).trimEnd('/')
@@ -45,13 +50,17 @@ internal class CameraInputClient(
             .header("User-Agent", "SciNET Android/0.1")
             .build()
         socket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                connected = true
+            }
+
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (!closed) {
-                    onError(t.message ?: "Camera input connection failed.")
-                }
+                connected = false
+                if (!closed) onError(t.message ?: "Camera input connection failed.")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                connected = false
                 if (!closed && code != 1000) {
                     onError(reason.ifBlank { "Camera input connection closed." })
                 }
@@ -67,16 +76,34 @@ internal class CameraInputClient(
         })
     }
 
-    fun sendDelta(dx: Int, dy: Int) {
-        if (closed || (dx == 0 && dy == 0)) return
-        val message = org.json.JSONObject()
-            .put("dx", dx.coerceIn(-1200, 1200))
-            .put("dy", dy.coerceIn(-1200, 1200))
-        socket?.send(message.toString())
+    /**
+     * Convert pointer pixels to integral Windows mouse counts while retaining
+     * sub-count remainders. Sending happens immediately on the existing socket.
+     */
+    fun sendDelta(deltaX: Float, deltaY: Float, sensitivity: Float) {
+        if (closed || !connected) return
+        synchronized(movementLock) {
+            if (closed || !connected) return
+            remainderX += deltaX * sensitivity
+            remainderY += deltaY * sensitivity
+            val dx = remainderX.toInt()
+            val dy = remainderY.toInt()
+            remainderX -= dx
+            remainderY -= dy
+            if (dx == 0 && dy == 0) return
+
+            val payload = ByteBuffer.allocate(8)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(dx.coerceIn(-1200, 1200))
+                .putInt(dy.coerceIn(-1200, 1200))
+                .array()
+            socket?.send(ByteString.of(*payload))
+        }
     }
 
     fun close() {
         closed = true
+        connected = false
         socket?.close(1000, "Controller closed")
         socket = null
     }
