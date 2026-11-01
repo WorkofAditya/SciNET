@@ -96,13 +96,7 @@ internal fun ControllerScreen(onAction: (String, Map<String, Any?>) -> Unit, onE
     BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF080B0F))) {
         val areaWidth = maxWidth
         val areaHeight = maxHeight
-        Box(Modifier.fillMaxSize().background(
-            androidx.compose.ui brush@ androidx.compose.ui.graphics.Brush.radialGradient(
-                colors = listOf(Color(0xFF18212A), Color(0xFF080B0F)),
-                center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f),
-                radius = size.maxDimension
-            )
-        ))
+        Box(Modifier.fillMaxSize().background(Color(0xFF0D131A)))
         buttons.forEach { button ->
             val pos = positions[button.id] ?: defaultPadPositions.getValue(button.id)
             val diameter = button.size.dp
