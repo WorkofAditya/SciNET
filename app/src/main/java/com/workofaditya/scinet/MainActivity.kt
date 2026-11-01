@@ -234,7 +234,7 @@ private fun SciNETApp() {
                         else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) }, fullscreen = screenFullscreen, onFullscreenChanged = { screenFullscreen = it })
                     }
                 }
-                if (!screenFullscreen && page != "CONTROLLER") {
+                if (!screenFullscreen) {
                 NotificationToast(
                     message = notice,
                     isError = noticeBad,
