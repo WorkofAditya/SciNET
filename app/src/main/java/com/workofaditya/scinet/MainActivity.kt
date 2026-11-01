@@ -95,7 +95,7 @@ private fun SciNETApp() {
                     val body = JSONObject().put("action", action)
                     extra.forEach { (key, value) -> body.put(key, value) }
                     SciNETApi.post(host, "/api/control", body)
-                    if (action != "key-hold" && action != "mouse-hold") notify("Sent: " + action.replace('-', ' '))
+                    if (action != "key-hold" && action != "mouse-hold" && action != "mouse-move") notify("Sent: " + action.replace('-', ' '))
                 } catch (e: Exception) { notify(e.message ?: "Could not reach the PC.", true) }
             }
             if (action == "type" || action == "key" || action == "key-hold" || action == "mouse-hold") keyboardMutex.withLock { sendRequest() }
@@ -234,7 +234,7 @@ private fun SciNETApp() {
                         else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) }, fullscreen = screenFullscreen, onFullscreenChanged = { screenFullscreen = it })
                     }
                 }
-                if (!screenFullscreen) {
+                if (!screenFullscreen && page != "CONTROLLER") {
                 NotificationToast(
                     message = notice,
                     isError = noticeBad,
