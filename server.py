@@ -676,56 +676,62 @@ async def service_worker():
     return FileResponse(WEB_DIR / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
 
 def _send_windows_mouse(dx, dy):
-    """Inject uncoalesced relative mouse movement using Windows SendInput."""
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    """Inject uncoalesced relative mouse movement using cached Windows SendInput types."""
+    if not hasattr(_send_windows_mouse, "_api"):
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
 
-    class KEYBDINPUT(ctypes.Structure):
-        _fields_ = [
-            ("wVk", ctypes.c_uint16),
-            ("wScan", ctypes.c_uint16),
-            ("dwFlags", ctypes.c_uint32),
-            ("time", ctypes.c_uint32),
-            ("dwExtraInfo", ctypes.c_size_t),
-        ]
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", ctypes.c_uint16),
+                ("wScan", ctypes.c_uint16),
+                ("dwFlags", ctypes.c_uint32),
+                ("time", ctypes.c_uint32),
+                ("dwExtraInfo", ctypes.c_size_t),
+            ]
 
-    class MOUSEINPUT(ctypes.Structure):
-        _fields_ = [
-            ("dx", ctypes.c_int32),
-            ("dy", ctypes.c_int32),
-            ("mouseData", ctypes.c_uint32),
-            ("dwFlags", ctypes.c_uint32),
-            ("time", ctypes.c_uint32),
-            ("dwExtraInfo", ctypes.c_size_t),
-        ]
+        class MOUSEINPUT(ctypes.Structure):
+            _fields_ = [
+                ("dx", ctypes.c_int32),
+                ("dy", ctypes.c_int32),
+                ("mouseData", ctypes.c_uint32),
+                ("dwFlags", ctypes.c_uint32),
+                ("time", ctypes.c_uint32),
+                ("dwExtraInfo", ctypes.c_size_t),
+            ]
 
-    class HARDWAREINPUT(ctypes.Structure):
-        _fields_ = [
-            ("uMsg", ctypes.c_uint32),
-            ("wParamL", ctypes.c_uint16),
-            ("wParamH", ctypes.c_uint16),
-        ]
+        class HARDWAREINPUT(ctypes.Structure):
+            _fields_ = [
+                ("uMsg", ctypes.c_uint32),
+                ("wParamL", ctypes.c_uint16),
+                ("wParamH", ctypes.c_uint16),
+            ]
 
-    class INPUTUNION(ctypes.Union):
-        _fields_ = [
-            ("ki", KEYBDINPUT),
-            ("mi", MOUSEINPUT),
-            ("hi", HARDWAREINPUT),
-        ]
+        class INPUTUNION(ctypes.Union):
+            _fields_ = [
+                ("ki", KEYBDINPUT),
+                ("mi", MOUSEINPUT),
+                ("hi", HARDWAREINPUT),
+            ]
 
-    class INPUT(ctypes.Structure):
-        _fields_ = [("type", ctypes.c_uint32), ("union", INPUTUNION)]
+        class INPUT(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_uint32), ("union", INPUTUNION)]
 
-    packet = INPUT()
+        user32.SendInput.argtypes = (ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int)
+        user32.SendInput.restype = ctypes.c_uint
+        _send_windows_mouse._api = user32
+        _send_windows_mouse._input_type = INPUT
+        _send_windows_mouse._mouse_type = MOUSEINPUT
+
+    packet = _send_windows_mouse._input_type()
     packet.type = 0  # INPUT_MOUSE
-    packet.union.mi = MOUSEINPUT(
+    packet.union.mi = _send_windows_mouse._mouse_type(
         int(dx), int(dy), 0,
         0x0001 | 0x2000,  # MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE
         0, 0
     )
-
-    user32.SendInput.argtypes = (ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int)
-    user32.SendInput.restype = ctypes.c_uint
-    sent = user32.SendInput(1, ctypes.byref(packet), ctypes.sizeof(INPUT))
+    sent = _send_windows_mouse._api.SendInput(
+        1, ctypes.byref(packet), ctypes.sizeof(packet)
+    )
     if sent != 1:
         error_code = ctypes.get_last_error()
         raise OSError(error_code, "Windows rejected the camera movement event.")
