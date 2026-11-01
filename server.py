@@ -325,11 +325,11 @@ async def screen_stream(request: Request, resolution: str = "720p", fps: int = 2
                 image.save(buffer, format="JPEG", quality=76, optimize=False)
                 jpeg = buffer.getvalue()
                 yield (
-                    b"--frame\\r\\n"
-                    b"Content-Type: image/jpeg\\r\\n"
-                    + f"Content-Length: {len(jpeg)}\\r\\n\\r\\n".encode("ascii")
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii")
                     + jpeg
-                    + b"\\r\\n"
+                    + b"\r\n"
                 )
         finally:
             await track.stop()
