@@ -50,7 +50,6 @@ internal fun ControllerScreen(onAction: (String, Map<String, Any?>) -> Unit, onE
     val context = LocalContext.current
     val activity = context as? Activity
     val prefs = remember { context.getSharedPreferences("scinet-controller", Context.MODE_PRIVATE) }
-    val scope = rememberCoroutineScope()
     var editMode by remember { mutableStateOf(false) }
     val positions = remember {
         mutableStateMapOf<String, Offset>().apply {
