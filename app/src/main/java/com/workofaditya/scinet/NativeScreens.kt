@@ -490,55 +490,107 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               display: none !important;
             }
             .control-page {
+              display: block !important;
               width: 100% !important;
               max-width: none !important;
+              min-width: 0 !important;
               min-height: 0 !important;
               margin: 0 !important;
-              padding: 0 !important;
-              display: block !important;
+              padding: 0 14px 18px !important;
+              box-sizing: border-box !important;
+              position: relative !important;
+              left: auto !important;
+              transform: none !important;
             }
             .control-page > :not(.screen-card) {
               display: none !important;
             }
             .screen-card {
-              display: block !important;
+              display: flex !important;
+              flex-direction: column !important;
+              align-items: stretch !important;
               width: 100% !important;
               max-width: none !important;
-              margin: 0 !important;
-              padding: 0 !important;
-              border: 0 !important;
-              border-radius: 0 !important;
-              background: transparent !important;
-              box-shadow: none !important;
+              min-width: 0 !important;
+              margin: 0 auto !important;
+              padding: 16px !important;
+              border: 1px solid #29313b !important;
+              border-radius: 15px !important;
+              background: linear-gradient(155deg,#151b22 0%,#0e1217 62%,#0b0f13 100%) !important;
+              box-shadow: 0 14px 34px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.035) !important;
               box-sizing: border-box !important;
+              gap: 0 !important;
             }
             .screen-card > .section-head {
-              display: none !important;
+              display: flex !important;
+              align-items: center !important;
+              justify-content: space-between !important;
+              width: 100% !important;
+              margin: 0 0 16px !important;
+              padding: 0 0 13px !important;
+              border-bottom: 1px solid #27303a !important;
+              box-sizing: border-box !important;
+            }
+            .screen-card > .section-head .label {
+              color: #8e9aa8 !important;
+              font-size: 9px !important;
+              font-weight: 700 !important;
+              letter-spacing: .17em !important;
+            }
+            .screen-card > .section-head h2 {
+              margin: 5px 0 0 !important;
+              color: #f1f4f7 !important;
+              font-size: 21px !important;
+              font-weight: 700 !important;
+              line-height: 1.2 !important;
+              letter-spacing: -.035em !important;
+            }
+            .screen-card #screenState {
+              flex: 0 0 auto !important;
+              padding: 6px 10px !important;
+              border: 1px solid #39434e !important;
+              border-radius: 999px !important;
+              color: #aab4bf !important;
+              background: #171e26 !important;
+              font-size: 9px !important;
+              font-weight: 700 !important;
+              letter-spacing: .12em !important;
+            }
+            .screen-card #screenState.live {
+              border-color: #286b4b !important;
+              color: #8be0b0 !important;
+              background: #10291e !important;
             }
             .screen-card > .control-note {
               display: none !important;
             }
             .screen-stream-options {
               display: grid !important;
-              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
-              gap: 9px !important;
-              margin: 0 0 11px !important;
+              width: 100% !important;
+              min-width: 0 !important;
+              grid-template-columns: repeat(2,minmax(0,1fr)) !important;
+              gap: 11px !important;
+              margin: 0 0 14px !important;
+              box-sizing: border-box !important;
             }
             .screen-stream-options label {
               min-width: 0 !important;
               gap: 5px !important;
-              font-size: 8px !important;
-              letter-spacing: .09em !important;
+              color: #9ca8b5 !important;
+              font-size: 9px !important;
+              font-weight: 700 !important;
+              letter-spacing: .11em !important;
             }
             .screen-stream-options select {
               min-width: 0 !important;
               width: 100% !important;
-              min-height: 39px !important;
-              padding: 0 10px !important;
-              border-radius: 8px !important;
-              background: #12171d !important;
-              border-color: #303944 !important;
-              font-size: 11px !important;
+              min-height: 44px !important;
+              padding: 0 11px !important;
+              border-radius: 9px !important;
+              background: #0d131a !important;
+              border: 1px solid #34404c !important;
+              color: #e4eaf0 !important;
+              font-size: 12px !important;
             }
             .screen-viewer {
               width: 100% !important;
@@ -546,10 +598,13 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               height: auto !important;
               aspect-ratio: 16 / 9 !important;
               overflow: hidden !important;
-              border: 1px solid #303944 !important;
-              border-radius: 10px !important;
+              width: 100% !important;
+              min-width: 0 !important;
+              border: 1px solid #35414e !important;
+              border-radius: 12px !important;
               background: #05070a !important;
-              box-shadow: 0 8px 22px rgba(0,0,0,.22) !important;
+              box-shadow: 0 10px 26px rgba(0,0,0,.3) !important;
+              box-sizing: border-box !important;
             }
             .screen-viewer video {
               display: block !important;
@@ -566,32 +621,47 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
             }
             .screen-actions {
               display: grid !important;
-              grid-template-columns: 1fr 1fr !important;
-              gap: 8px !important;
-              margin: 11px 0 0 !important;
+              width: 100% !important;
+              grid-template-columns: minmax(0,1fr) minmax(0,1fr) !important;
+              gap: 9px !important;
+              margin: 14px 0 0 !important;
             }
             .screen-actions .button {
               width: 100% !important;
-              min-height: 43px !important;
+              min-height: 46px !important;
               margin: 0 !important;
-              border-radius: 8px !important;
-              font-size: 10px !important;
+              border: 1px solid #3a4653 !important;
+              border-radius: 10px !important;
+              background: #1a222c !important;
+              color: #e9eef3 !important;
+              font-size: 11px !important;
+              font-weight: 700 !important;
               letter-spacing: .01em !important;
             }
-            .screen-actions #screenStart,
+            .screen-actions #screenStart {
+              grid-column: 1 / -1 !important;
+              background: linear-gradient(135deg,#245b42,#173d2c) !important;
+              border-color: #347653 !important;
+              color: #c8f4dc !important;
+            }
             .screen-actions #screenStop {
               grid-column: 1 !important;
+              background: #291719 !important;
+              border-color: #613237 !important;
+              color: #f1b6b9 !important;
             }
             .screen-actions #screenFullscreen {
               grid-column: 2 !important;
-              grid-row: 1 !important;
+              grid-row: 2 !important;
+              background: #18212b !important;
             }
             .screen-fps {
               grid-column: 1 / -1 !important;
               width: 100% !important;
-              margin: 1px 0 0 !important;
-              color: #98a2ae !important;
-              font-size: 9px !important;
+              margin: 2px 0 0 !important;
+              padding: 3px 0 0 !important;
+              color: #8794a2 !important;
+              font-size: 10px !important;
               text-align: center !important;
               line-height: 1.5 !important;
             }
@@ -757,16 +827,11 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PageHeading(
-            "LIVE DESKTOP",
-            "Screen mirroring",
-            "View and control your Windows desktop in real time."
-        )
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(maxWidth * (9f / 16f) + 148.dp)
+                    .height(maxWidth * (9f / 16f) + 245.dp)
                     .background(Color(0xFF0A0C0F))
             ) {
                 androidx.compose.ui.viewinterop.AndroidView(
