@@ -647,6 +647,10 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         }
     }
 
+    androidx.activity.compose.BackHandler(enabled = fullscreenCustomView != null) {
+        webView.evaluateJavascript("if (typeof leaveScreenFullscreen === 'function') leaveScreenFullscreen()", null)
+    }
+
     androidx.compose.runtime.DisposableEffect(webView, host) {
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
