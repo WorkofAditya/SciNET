@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -61,6 +62,7 @@ private fun SciNETApp() {
     var notice by remember { mutableStateOf("") }
     var noticeBad by remember { mutableStateOf(false) }
     var noticeVisible by remember { mutableStateOf(false) }
+    var noticeExpanded by remember { mutableStateOf(false) }
     var noticeVersion by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val keyboardMutex = remember { Mutex() }
@@ -68,13 +70,15 @@ private fun SciNETApp() {
     fun notify(text: String, bad: Boolean = false) {
         notice = text
         noticeBad = bad
+        noticeExpanded = false
         noticeVisible = true
         noticeVersion++
     }
-    LaunchedEffect(noticeVersion) {
+    LaunchedEffect(noticeVersion, noticeExpanded) {
         if (notice.isNotBlank()) {
-            delay(if (noticeBad) 5000 else 2500)
+            delay(if (noticeExpanded) 8000 else if (noticeBad) 5000 else 2500)
             noticeVisible = false
+            noticeExpanded = false
         }
     }
     fun control(action: String, extra: Map<String, Any?> = emptyMap()) {
@@ -188,7 +192,9 @@ private fun SciNETApp() {
                     message = notice,
                     isError = noticeBad,
                     visible = noticeVisible,
-                    connected = false
+                    connected = false,
+                    expanded = noticeExpanded,
+                    onClick = { noticeExpanded = !noticeExpanded }
                 )
             } else {
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(15.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -220,7 +226,9 @@ private fun SciNETApp() {
                     message = notice,
                     isError = noticeBad,
                     visible = noticeVisible,
-                    connected = true
+                    connected = true,
+                    expanded = noticeExpanded,
+                    onClick = { noticeExpanded = !noticeExpanded }
                 )
                 Row(Modifier.fillMaxWidth().background(Color(0xFF0C0F13)).padding(horizontal = 3.dp, vertical = 5.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
                     listOf("HOME" to "⌂", "CONTROL" to "⌁", "FILES" to "▤", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
@@ -240,11 +248,12 @@ private fun NotificationToast(
     message: String,
     isError: Boolean,
     visible: Boolean,
-    connected: Boolean
+    connected: Boolean,
+    expanded: Boolean,
+    onClick: () -> Unit
 ) {
     if (visible && message.isNotBlank()) {
         val density = androidx.compose.ui.platform.LocalDensity.current
-        // Float above the bottom navigation; without reserving a full-width layout row.
         Popup(
             alignment = Alignment.BottomCenter,
             offset = IntOffset(
@@ -257,20 +266,45 @@ private fun NotificationToast(
                 dismissOnClickOutside = false
             )
         ) {
-            Surface(
-                modifier = Modifier.size(42.dp),
-                color = if (isError) Color(0xFF4A2024) else Color(0xFF173D29),
-                contentColor = Color(0xFFF2F7F3),
-                shape = RoundedCornerShape(50),
-                shadowElevation = 6.dp
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+                modifier = Modifier.widthIn(max = 290.dp)
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        if (isError) "×" else "✓",
-                        fontSize = 21.sp,
-                        lineHeight = 22.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                if (expanded) {
+                    Surface(
+                        color = Color(0xFF20262D),
+                        contentColor = Color(0xFFF2F7F3),
+                        shape = RoundedCornerShape(12.dp),
+                        shadowElevation = 8.dp,
+                        modifier = Modifier.wrapContentWidth()
+                    ) {
+                        Text(
+                            message,
+                            modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            color = Color(0xFFF2F7F3)
+                        )
+                    }
+                }
+                Surface(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clickable(onClick = onClick),
+                    color = if (isError) Color(0xFF4A2024) else Color(0xFF173D29),
+                    contentColor = Color(0xFFF2F7F3),
+                    shape = RoundedCornerShape(50),
+                    shadowElevation = 6.dp
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            if (isError) "×" else "✓",
+                            fontSize = 21.sp,
+                            lineHeight = 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
