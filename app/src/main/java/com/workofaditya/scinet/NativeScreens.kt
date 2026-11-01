@@ -545,6 +545,7 @@ internal fun ScreenMirrorScreen(
     // Only its video element is mounted here. All visible controls remain native Compose.
     val nativeVideoSurfaceScript = """
         (() => {
+          const existingCard = document.querySelector('.screen-card');
           const viewer = document.getElementById('screenViewer');
           const frame = document.getElementById('screenFrame');
           const start = document.getElementById('screenStart');
@@ -553,29 +554,43 @@ internal fun ScreenMirrorScreen(
           const fps = document.getElementById('screenFps');
           const state = document.getElementById('screenState');
           const message = document.getElementById('screenMessage');
-          if (!viewer || !frame || !start || !stop || !resolution || !fps || !state || !message ||
+
+          // Keep the original renderer's complete DOM subtree intact. The old client holds
+          // references to these elements and relies on their original parent/style lifecycle.
+          if (!existingCard || !viewer || !frame || !start || !stop ||
+              !resolution || !fps || !state || !message ||
               typeof window.startScreenStream !== 'function' ||
               typeof window.stopScreenStream !== 'function') return false;
 
-          let root = document.getElementById('scinet-native-video-root');
+          let root = document.getElementById('scinet-native-screen-root');
           if (!root) {
             root = document.createElement('div');
-            root.id = 'scinet-native-video-root';
-            if (viewer.parentNode) viewer.parentNode.removeChild(viewer);
+            root.id = 'scinet-native-screen-root';
+            const shell = document.querySelector('.app-shell');
+            if (existingCard.parentNode) existingCard.parentNode.removeChild(existingCard);
+            if (shell) shell.style.display = 'none';
             document.body.appendChild(root);
-            root.appendChild(viewer);
+            root.appendChild(existingCard);
           }
 
-          if (!document.getElementById('scinet-native-video-surface-style')) {
+          if (!document.getElementById('scinet-native-screen-surface-style')) {
             const css = document.createElement('style');
-            css.id = 'scinet-native-video-surface-style';
+            css.id = 'scinet-native-screen-surface-style';
             css.textContent =
-              'html,body{width:100%!important;height:100%!important;min-height:100%!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#05070a!important;}' +
-              'body>*:not(#scinet-native-video-root){display:none!important;}' +
-              '#scinet-native-video-root{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#05070a!important;}' +
-              '#scinet-native-video-root #screenViewer{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important;overflow:hidden!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:#05070a!important;}' +
-              '#scinet-native-video-root #screenFrame{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:contain!important;object-position:center center!important;background:#05070a!important;}' +
-              '#scinet-native-video-root #screenPlaceholder,#scinet-native-video-root #screenLiveIndicator,#scinet-native-video-root #screenTouchControls{display:none!important;}';
+              'html,body{display:block!important;width:100%!important;height:100%!important;min-height:100%!important;min-width:0!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#05070a!important;}' +
+              'body>*:not(#scinet-native-screen-root){display:none!important;}' +
+              '#scinet-native-screen-root{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#05070a!important;}' +
+              '#scinet-native-screen-root .screen-card{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:none!important;margin:0!important;padding:0!important;gap:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;overflow:hidden!important;}' +
+              '#scinet-native-screen-root .screen-card>.section-head,' +
+              '#scinet-native-screen-root .screen-stream-options,' +
+              '#scinet-native-screen-root .screen-actions,' +
+              '#scinet-native-screen-root .screen-placeholder,' +
+              '#scinet-native-screen-root .screen-live-indicator,' +
+              '#scinet-native-screen-root #screenTouchControls,' +
+              '#scinet-native-screen-root .control-note{display:none!important;}' +
+              '#scinet-native-screen-root .screen-viewer{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important;overflow:hidden!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:#05070a!important;}' +
+              '#scinet-native-screen-root .screen-viewer video{display:block!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:contain!important;object-position:center center!important;background:#05070a!important;}' +
+              '#scinet-native-screen-root .screen-viewer video[hidden]{display:none!important;}';
             document.head.appendChild(css);
           }
 
@@ -585,6 +600,7 @@ internal fun ScreenMirrorScreen(
               const currentMessage = document.getElementById('screenMessage');
               const currentFrame = document.getElementById('screenFrame');
               if (!currentState || !currentMessage || !currentFrame) return;
+
               const label = (currentState.textContent || 'OFF').trim();
               const active = label.toUpperCase() === 'LIVE';
               try {
