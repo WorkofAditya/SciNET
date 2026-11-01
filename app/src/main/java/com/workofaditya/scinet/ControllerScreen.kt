@@ -28,8 +28,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 private data class PadButton(val id: String, val label: String, val key: String, val size: Int = 56, val accent: Boolean = false)
@@ -55,6 +53,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     val currentSensitivity by rememberUpdatedState(sensitivity)
     val currentOnError by rememberUpdatedState(onError)
     val cameraClient = remember(host) { CameraInputClient(host) { message -> currentOnError(message) } }
+    val activeSensitivity = rememberUpdatedState(sensitivity)
     val positions = remember {
         mutableStateMapOf<String, Offset>().apply {
             putAll(defaultPadPositions)
@@ -72,8 +71,6 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     }
     val originalOrientation = remember(activity) { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     val originalUi = remember(activity) { activity?.window?.decorView?.systemUiVisibility ?: 0 }
-    val cameraDeltas = remember { Channel<Offset>(Channel.UNLIMITED) }
-
     LaunchedEffect(sensitivity) {
         prefs.edit().putFloat("camera_sensitivity", sensitivity).apply()
     }
@@ -81,29 +78,6 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     DisposableEffect(cameraClient) {
         cameraClient.connect()
         onDispose { cameraClient.close() }
-    }
-
-    LaunchedEffect(cameraDeltas, cameraClient) {
-        var remainderX = 0f
-        var remainderY = 0f
-        while (true) {
-            val first = cameraDeltas.receiveCatching().getOrNull() ?: break
-            var totalX = first.x
-            var totalY = first.y
-            delay(8)
-            while (true) {
-                val next = cameraDeltas.tryReceive().getOrNull() ?: break
-                totalX += next.x
-                totalY += next.y
-            }
-            remainderX += totalX * currentSensitivity
-            remainderY += totalY * currentSensitivity
-            val dx = remainderX.toInt()
-            val dy = remainderY.toInt()
-            remainderX -= dx
-            remainderY -= dy
-            cameraClient.sendDelta(dx, dy)
-        }
     }
 
     DisposableEffect(activity) {
@@ -157,7 +131,11 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     if (!editMode && !settingsOpen) {
                         detectDragGestures { change, dragAmount ->
                             change.consume()
-                            cameraDeltas.trySend(Offset(dragAmount.x, dragAmount.y))
+                            cameraClient.sendDelta(
+                                dragAmount.x,
+                                dragAmount.y,
+                                activeSensitivity.value
+                            )
                         }
                     }
                 }
