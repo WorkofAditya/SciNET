@@ -4,7 +4,14 @@ import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -57,10 +64,26 @@ private fun SciNETApp() {
     var events by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var notice by remember { mutableStateOf("") }
     var noticeBad by remember { mutableStateOf(false) }
+    var noticeVisible by remember { mutableStateOf(false) }
+    var noticeExpanded by remember { mutableStateOf(false) }
+    var noticeVersion by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val keyboardMutex = remember { Mutex() }
 
-    fun notify(text: String, bad: Boolean = false) { notice = text; noticeBad = bad }
+    fun notify(text: String, bad: Boolean = false) {
+        notice = text
+        noticeBad = bad
+        noticeExpanded = false
+        noticeVisible = true
+        noticeVersion++
+    }
+    LaunchedEffect(noticeVersion, noticeExpanded) {
+        if (notice.isNotBlank()) {
+            delay(if (noticeExpanded) 6000 else 3500)
+            noticeVisible = false
+            noticeExpanded = false
+        }
+    }
     fun control(action: String, extra: Map<String, Any?> = emptyMap()) {
         scope.launch {
             suspend fun sendRequest() {
@@ -147,7 +170,7 @@ private fun SciNETApp() {
             }
             HorizontalDivider(color = Color(0xFF20242A))
             if (!connected) {
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
+                Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
                     Spacer(Modifier.height(6.dp))
                     Text("LOCAL NETWORK / 01", color = Accent, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
                     Text("Your PC.\nIn your hands.", fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
@@ -157,7 +180,6 @@ private fun SciNETApp() {
                         OutlinedTextField(value = host, onValueChange = { host = it }, modifier = Modifier.fillMaxWidth(), label = { Text("PC address") }, placeholder = { Text("http://192.168.1.25:8000") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = fieldColors())
                         Text("Use your PC's local IPv4 address and port 8000. Both devices must be on a reachable private network.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
                         PrimaryButton(if (busy) "CONNECTING…" else "CONNECT TO PC", !busy) { connect() }
-                        if (notice.isNotBlank()) Text(notice, color = if (noticeBad) Bad else Good, fontSize = 11.sp)
                     }
                     PanelCard {
                         SectionHeading("NATIVE TOOLS", "Everything in one place")
@@ -169,6 +191,13 @@ private fun SciNETApp() {
                     }
                     Text("PRIVATE NETWORK ONLY • NEVER EXPOSE THE SERVER TO THE PUBLIC INTERNET", color = Muted, fontSize = 9.sp)
                 }
+                NotificationToast(
+                    message = notice,
+                    isError = noticeBad,
+                    visible = noticeVisible,
+                    expanded = noticeExpanded,
+                    onClick = { noticeExpanded = !noticeExpanded }
+                )
             } else {
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(15.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
                     when (page) {
@@ -194,14 +223,72 @@ private fun SciNETApp() {
                         "CONTROLLER" -> ControllerScreen(onAction = { action, extra -> control(action, extra) })
                         else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) })
                     }
-                    if (notice.isNotBlank()) Text(notice, color = if (noticeBad) Bad else Good, fontSize = 11.sp, modifier = Modifier.fillMaxWidth().background(if (noticeBad) Color(0xFF1B1111) else Color(0xFF101A13), RoundedCornerShape(8.dp)).padding(11.dp))
                 }
+                NotificationToast(
+                    message = notice,
+                    isError = noticeBad,
+                    visible = noticeVisible,
+                    expanded = noticeExpanded,
+                    onClick = { noticeExpanded = !noticeExpanded }
+                )
                 Row(Modifier.fillMaxWidth().background(Color(0xFF0C0F13)).padding(horizontal = 3.dp, vertical = 5.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
                     listOf("HOME" to "⌂", "CONTROL" to "⌁", "FILES" to "▤", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
                         Column(Modifier.weight(1f).background(if (page == key) Raised else Color.Transparent, RoundedCornerShape(7.dp)).padding(vertical = 7.dp).pointerInput(key) { detectTapGestures { page = key } }, horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(symbol, color = if (page == key) Accent else Muted, fontSize = 17.sp)
                             Text(key, color = if (page == key) Ink else Muted, fontSize = 6.sp, maxLines = 1)
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotificationToast(
+    message: String,
+    isError: Boolean,
+    visible: Boolean,
+    expanded: Boolean,
+    onClick: () -> Unit
+) {
+    AnimatedVisibility(
+        visible = visible && message.isNotBlank(),
+        enter = fadeIn() + slideInVertically { it / 2 },
+        exit = fadeOut() + slideOutVertically { it / 2 }
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Surface(
+                modifier = Modifier.animateContentSize().clickable(onClick = onClick),
+                color = if (isError) Color(0xFF4A2024) else Color(0xFF173D29),
+                contentColor = Color(0xFFF2F7F3),
+                shape = RoundedCornerShape(50),
+                shadowElevation = 8.dp
+            ) {
+                Row(
+                    Modifier.defaultMinSize(minWidth = 44.dp, minHeight = 42.dp)
+                        .padding(horizontal = if (expanded) 15.dp else 0.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        if (isError) "×" else "✓",
+                        fontSize = 21.sp,
+                        lineHeight = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (expanded) {
+                        Spacer(Modifier.width(9.dp))
+                        Text(
+                            message,
+                            modifier = Modifier.widthIn(max = 260.dp),
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            color = Color(0xFFF2F7F3)
+                        )
                     }
                 }
             }
