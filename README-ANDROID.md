@@ -26,7 +26,11 @@ If the app cannot connect, check Windows Firewall, hotspot/client-isolation sett
 - **Live clipboard:** text changes sync automatically with SciNET and connected browser clients; incoming shared text updates the phone clipboard while the app is open. Android OS restrictions mean clipboard monitoring is foreground-only.
 - **Processes:** starts monitoring only after explicit user action; supports search, sorting, app grouping, window controls, end-task, and force-stop actions subject to server-side protection.
 - **Screen mirroring:** uses the Android WebRTC SDK to receive the existing on-demand desktop stream, with resolution/frame-rate selection and pointer interaction.
-- **Keyboard controller:** sends held keyboard keys for games that accept keyboard input. This is not XInput or a virtual Xbox controller.
+- **Game controller:** choose WASD or an analog joystick in Controller Settings. Joystick mode streams continuous two-axis input to a virtual Xbox 360 controller, so games that support XInput can use full 360-degree movement. The Windows PC needs the ViGEmBus virtual gamepad driver installed; `start.bat` installs the Python `vgamepad` package automatically.
+
+## Analog joystick prerequisite
+
+Install the ViGEmBus virtual gamepad driver on the Windows PC before selecting Joystick mode. Restart SciNET after installation. Without the driver, WASD mode continues to work, but Windows cannot expose the virtual Xbox controller to games.
 
 ## Important network and security notes
 
