@@ -612,7 +612,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 contentAlignment = Alignment.Center
             ) {
                 androidx.compose.ui.viewinterop.AndroidView(
-                    factory = {
+                    factory = { _ ->
                         if (!rendererReady) {
                             session.initialize()
                             rendererReady = true
