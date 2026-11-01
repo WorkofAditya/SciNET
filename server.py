@@ -11,6 +11,7 @@ import io
 import json
 import hashlib
 import socket
+import struct
 import threading
 import time
 import uuid
@@ -674,6 +675,62 @@ async def pwa_manifest(): return FileResponse(WEB_DIR / "manifest.webmanifest", 
 async def service_worker():
     return FileResponse(WEB_DIR / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
 
+def _send_windows_mouse(dx, dy):
+    """Inject uncoalesced relative mouse movement using Windows SendInput."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.c_uint16),
+            ("wScan", ctypes.c_uint16),
+            ("dwFlags", ctypes.c_uint32),
+            ("time", ctypes.c_uint32),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", ctypes.c_int32),
+            ("dy", ctypes.c_int32),
+            ("mouseData", ctypes.c_uint32),
+            ("dwFlags", ctypes.c_uint32),
+            ("time", ctypes.c_uint32),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", ctypes.c_uint32),
+            ("wParamL", ctypes.c_uint16),
+            ("wParamH", ctypes.c_uint16),
+        ]
+
+    class INPUTUNION(ctypes.Union):
+        _fields_ = [
+            ("ki", KEYBDINPUT),
+            ("mi", MOUSEINPUT),
+            ("hi", HARDWAREINPUT),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_uint32), ("union", INPUTUNION)]
+
+    packet = INPUT()
+    packet.type = 0  # INPUT_MOUSE
+    packet.union.mi = MOUSEINPUT(
+        int(dx), int(dy), 0,
+        0x0001 | 0x2000,  # MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE
+        0, 0
+    )
+
+    user32.SendInput.argtypes = (ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int)
+    user32.SendInput.restype = ctypes.c_uint
+    sent = user32.SendInput(1, ctypes.byref(packet), ctypes.sizeof(INPUT))
+    if sent != 1:
+        error_code = ctypes.get_last_error()
+        raise OSError(error_code, "Windows rejected the camera movement event.")
+
+
 def _send_windows_key(vk_code, down):
     """Inject a physical-style keyboard event using Windows SendInput scan codes."""
     user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -1225,16 +1282,15 @@ async def controller_socket(websocket: WebSocket):
     user32 = ctypes.windll.user32
     try:
         while True:
-            data = await websocket.receive_json()
-            try:
-                dx = max(-1200, min(1200, int(data.get("dx", 0))))
-                dy = max(-1200, min(1200, int(data.get("dy", 0))))
-            except (TypeError, ValueError):
-                await websocket.send_json({"error": "Invalid camera movement"})
+            payload = await websocket.receive_bytes()
+            if len(payload) != 8:
+                await websocket.send_json({"error": "Invalid camera movement packet"})
                 continue
+            dx, dy = struct.unpack("<ii", payload)
+            dx = max(-1200, min(1200, dx))
+            dy = max(-1200, min(1200, dy))
             if dx or dy:
-                # Relative mouse input is what games use for camera-look movement.
-                user32.mouse_event(0x0001, dx, dy, 0, 0)  # MOUSEEVENTF_MOVE
+                _send_windows_mouse(dx, dy)
     except WebSocketDisconnect:
         pass
     except Exception:
