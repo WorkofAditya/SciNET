@@ -258,7 +258,7 @@ private fun NotificationToast(
     expanded: Boolean,
     onClick: () -> Unit
 ) {
-    if (visible && message.isNotBlank()) {
+    if (message.isNotBlank()) {
         val density = androidx.compose.ui.platform.LocalDensity.current
         Popup(
             alignment = Alignment.BottomCenter,
@@ -273,7 +273,7 @@ private fun NotificationToast(
             )
         ) {
             AnimatedVisibility(
-                visible = true,
+                visible = visible,
                 enter = fadeIn() + slideInVertically { it / 2 },
                 exit = fadeOut() + slideOutVertically { it / 2 }
             ) {
