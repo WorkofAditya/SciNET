@@ -155,11 +155,11 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             Modifier
                 .offset(x = areaWidth * 0.22f, y = areaHeight * 0.12f)
                 .size(width = areaWidth * 0.43f, height = areaHeight * 0.78f)
-                .pointerInput(editMode) {
-                    if (!editMode) {
+                .pointerInput(editMode, settingsOpen) {
+                    if (!editMode && !settingsOpen) {
                         detectDragGestures { change, dragAmount ->
                             change.consume()
-                            cameraDeltas.trySend(Offset(dragAmount.x * 1.25f, dragAmount.y * 1.25f))
+                            cameraDeltas.trySend(Offset(dragAmount.x, dragAmount.y))
                         }
                     }
                 }
@@ -173,7 +173,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     .clip(CircleShape)
                     .background(if (editMode) Color(0xFF273847) else if (button.accent) Color(0xFF344C5B) else Color(0xCC171E26))
                     .border(if (editMode) 2.dp else 1.dp, if (editMode) Color(0xFF80C5E8) else Color(0xFF52616F), CircleShape)
-                    .pointerInput(button.id, editMode) {
+                    .pointerInput(button.id, editMode, settingsOpen) {
                         if (editMode) {
                             detectDragGestures { change, drag ->
                                 change.consume()
@@ -181,7 +181,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                                 val ny = (positions.getValue(button.id).y + drag.y / constraints.maxHeight).coerceIn(.09f, .91f)
                                 positions[button.id] = Offset(nx, ny)
                             }
-                        } else {
+                        } else if (!settingsOpen) {
                             detectTapGestures(onPress = {
                                 if (button.id == "mouse-left" || button.id == "mouse-right") {
                                     val mouseButton = if (button.id == "mouse-left") "left" else "right"
@@ -210,18 +210,78 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                 Text(if (editMode) "DRAG ANY CONTROL TO REPOSITION" else "TOUCH AND HOLD TO PRESS", color = Color(0xFF74818D), fontSize = 8.sp, letterSpacing = 1.sp)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = {
-                    if (editMode) {
-                        val saved = JSONObject()
-                        positions.forEach { (id, p) -> saved.put(id, JSONObject().put("x", p.x).put("y", p.y)) }
-                        prefs.edit().putString("positions", saved.toString()).apply()
-                    }
-                    editMode = !editMode
-                }) { Text(if (editMode) "SAVE LAYOUT" else "EDIT LAYOUT", color = Color(0xFFB8DDF0), fontSize = 10.sp, fontWeight = FontWeight.Bold) }
-                if (editMode) TextButton(onClick = { positions.clear(); positions.putAll(defaultPadPositions) }) {
-                    Text("RESET", color = Color(0xFF9AA7B2), fontSize = 10.sp)
+                TextButton(onClick = { settingsOpen = !settingsOpen }) {
+                    Text("⚙ SETTINGS", color = Color(0xFFB8DDF0), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
                 TextButton(onClick = onExit) { Text("EXIT  ✕", color = Color.White, fontSize = 10.sp) }
+            }
+        }
+
+        if (settingsOpen) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 54.dp, end = 14.dp)
+                    .width(300.dp)
+                    .border(1.dp, Color(0xFF435361), RoundedCornerShape(14.dp)),
+                color = Color(0xF0182029),
+                contentColor = Color(0xFFEAF0F4),
+                shape = RoundedCornerShape(14.dp),
+                shadowElevation = 12.dp
+            ) {
+                Column(
+                    Modifier.padding(horizontal = 16.dp, vertical = 15.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    Text("CONTROLLER SETTINGS", color = Color(0xFFEAF0F4), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                    HorizontalDivider(color = Color(0xFF34414C))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("CAMERA SENSITIVITY", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+                        Spacer(Modifier.weight(1f))
+                        Text("${(sensitivity * 10).toInt() / 10f}×", color = Color(0xFFB8DDF0), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = sensitivity,
+                        onValueChange = { sensitivity = it },
+                        valueRange = 0.5f..8.0f,
+                        steps = 14,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        "Higher sensitivity moves the game camera farther with the same swipe.",
+                        color = Color(0xFF82909B),
+                        fontSize = 9.sp,
+                        lineHeight = 13.sp
+                    )
+                    HorizontalDivider(color = Color(0xFF34414C))
+                    if (editMode) {
+                        Text("LAYOUT EDITING", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = {
+                                val saved = JSONObject()
+                                positions.forEach { (id, p) -> saved.put(id, JSONObject().put("x", p.x).put("y", p.y)) }
+                                prefs.edit().putString("positions", saved.toString()).apply()
+                                editMode = false
+                                settingsOpen = false
+                            }) {
+                                Text("SAVE LAYOUT", color = Color(0xFFB8DDF0), fontSize = 10.sp)
+                            }
+                            TextButton(onClick = {
+                                positions.clear()
+                                positions.putAll(defaultPadPositions)
+                            }) {
+                                Text("RESET", color = Color(0xFF9AA7B2), fontSize = 10.sp)
+                            }
+                        }
+                    } else {
+                        TextButton(onClick = {
+                            editMode = true
+                            settingsOpen = false
+                        }) {
+                            Text("EDIT LAYOUT", color = Color(0xFFB8DDF0), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
         }
     }
