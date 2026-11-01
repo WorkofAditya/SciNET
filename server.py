@@ -288,6 +288,63 @@ class DesktopVideoTrack(VideoStreamTrack):
         super().stop()
 
 
+@app.get("/api/screen/stream")
+async def screen_stream(request: Request, resolution: str = "720p", fps: int = 24):
+    """Stream desktop JPEG frames directly to the native Android viewer."""
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Screen viewing is only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    if platform.system() != "Windows":
+        return JSONResponse({"error": "Screen mirroring is supported on Windows only"}, status_code=501)
+
+    resolutions = {
+        "480p": (854, 480),
+        "720p": (1280, 720),
+        "1080p": (1920, 1080),
+    }
+    if resolution not in resolutions:
+        return JSONResponse({"error": "Unsupported resolution"}, status_code=400)
+    if fps not in (15, 24, 30):
+        return JSONResponse({"error": "FPS must be 15, 24, or 30"}, status_code=400)
+
+    width, height = resolutions[resolution]
+    track = DesktopVideoTrack(width, height, fps)
+
+    async def generate_frames():
+        try:
+            while not await request.is_disconnected():
+                frame = await track.recv()
+                image = frame.to_image()
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG", quality=76, optimize=False)
+                jpeg = buffer.getvalue()
+                yield (
+                    b"--frame\\r\\n"
+                    b"Content-Type: image/jpeg\\r\\n"
+                    + f"Content-Length: {len(jpeg)}\\r\\n\\r\\n".encode("ascii")
+                    + jpeg
+                    + b"\\r\\n"
+                )
+        finally:
+            await track.stop()
+
+    return StreamingResponse(
+        generate_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/api/screen/offer")
 async def screen_offer(request: Request):
     client = request.client
