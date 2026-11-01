@@ -3,7 +3,10 @@ package com.workofaditya.scinet
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.os.Build
 import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -25,7 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
@@ -65,17 +69,48 @@ internal fun ControllerScreen(onAction: (String, Map<String, Any?>) -> Unit, onE
     }
     val originalOrientation = remember(activity) { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     val originalUi = remember(activity) { activity?.window?.decorView?.systemUiVisibility ?: 0 }
+    val cameraDeltas = remember { Channel<Offset>(Channel.UNLIMITED) }
+
+    LaunchedEffect(cameraDeltas) {
+        while (true) {
+            val first = cameraDeltas.receiveCatching().getOrNull() ?: break
+            var totalX = first.x
+            var totalY = first.y
+            withTimeoutOrNull(16L) {
+                while (true) {
+                    val next = cameraDeltas.receive()
+                    totalX += next.x
+                    totalY += next.y
+                }
+            }
+            val dx = totalX.roundToInt()
+            val dy = totalY.roundToInt()
+            if (dx != 0 || dy != 0) {
+                onAction("mouse-move", mapOf("dx" to dx, "dy" to dy))
+            }
+        }
+    }
 
     DisposableEffect(activity) {
         activity?.let {
             it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            it.window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                it.window.insetsController?.let { bars ->
+                    bars.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    bars.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                }
+            } else {
+                it.window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+            }
         }
         onDispose {
             activity?.let {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    it.window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                }
                 it.requestedOrientation = originalOrientation
                 it.window.decorView.systemUiVisibility = originalUi
                 it.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -97,6 +132,21 @@ internal fun ControllerScreen(onAction: (String, Map<String, Any?>) -> Unit, onE
         val areaWidth = maxWidth
         val areaHeight = maxHeight
         Box(Modifier.fillMaxSize().background(Color(0xFF0D131A)))
+        // Invisible camera-look surface. Existing controls are rendered above it,
+        // so their taps and their drag-to-reposition behavior keep priority.
+        Box(
+            Modifier
+                .offset(x = areaWidth * 0.22f, y = areaHeight * 0.12f)
+                .size(width = areaWidth * 0.43f, height = areaHeight * 0.78f)
+                .pointerInput(editMode) {
+                    if (!editMode) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            cameraDeltas.trySend(Offset(dragAmount.x * 1.25f, dragAmount.y * 1.25f))
+                        }
+                    }
+                }
+        )
         buttons.forEach { button ->
             val pos = positions[button.id] ?: defaultPadPositions.getValue(button.id)
             val diameter = button.size.dp
