@@ -4,6 +4,12 @@ import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -266,44 +272,53 @@ private fun NotificationToast(
                 dismissOnClickOutside = false
             )
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(7.dp),
-                modifier = Modifier.widthIn(max = 290.dp)
+            AnimatedVisibility(
+                visible = true,
+                enter = fadeIn() + slideInVertically { it / 2 },
+                exit = fadeOut() + slideOutVertically { it / 2 }
             ) {
-                if (expanded) {
-                    Surface(
-                        color = Color(0xFF20262D),
-                        contentColor = Color(0xFFF2F7F3),
-                        shape = RoundedCornerShape(12.dp),
-                        shadowElevation = 8.dp,
-                        modifier = Modifier.wrapContentWidth()
-                    ) {
-                        Text(
-                            message,
-                            modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp,
-                            color = Color(0xFFF2F7F3)
-                        )
-                    }
-                }
-                Surface(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clickable(onClick = onClick),
-                    color = if (isError) Color(0xFF4A2024) else Color(0xFF173D29),
-                    contentColor = Color(0xFFF2F7F3),
-                    shape = RoundedCornerShape(50),
-                    shadowElevation = 6.dp
+                // Match the original expanding-pill interaction. The Popup floats above the
+                // screen content, and this transparent row only centers the compact pill.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Color.Transparent)
+                        .padding(horizontal = 16.dp, vertical = 5.dp),
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            if (isError) "×" else "✓",
-                            fontSize = 21.sp,
-                            lineHeight = 22.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                    Surface(
+                        modifier = Modifier
+                            .animateContentSize()
+                            .clickable(onClick = onClick),
+                        color = if (isError) Color(0xFF4A2024) else Color(0xFF173D29),
+                        contentColor = Color(0xFFF2F7F3),
+                        shape = RoundedCornerShape(50),
+                        shadowElevation = 8.dp
+                    ) {
+                        Row(
+                            Modifier
+                                .defaultMinSize(minWidth = 44.dp, minHeight = 42.dp)
+                                .padding(horizontal = if (expanded) 15.dp else 0.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                if (isError) "×" else "✓",
+                                fontSize = 21.sp,
+                                lineHeight = 22.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (expanded) {
+                                Spacer(Modifier.width(9.dp))
+                                Text(
+                                    message,
+                                    modifier = Modifier.widthIn(max = 260.dp),
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp,
+                                    color = Color(0xFFF2F7F3)
+                                )
+                            }
+                        }
                     }
                 }
             }
