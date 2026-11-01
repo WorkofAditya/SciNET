@@ -477,7 +477,8 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
             * { box-sizing: border-box; }
             html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #e7e9ed; font-family: sans-serif; }
             #viewer { position: relative; width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; }
-            #desktop { display: none; width: 100%; height: 100%; object-fit: contain; background: #000; pointer-events: none; }
+            #desktop { position: absolute; left: -4px; top: -4px; width: 2px; height: 2px; opacity: 0.01; pointer-events: none; }
+            #desktopCanvas { display: none; width: 100%; height: 100%; object-fit: contain; background: #000; }
             #placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 9px; padding: 18px; text-align: center; background: #0c0f13; }
             #placeholder strong { font-size: 12px; letter-spacing: 1px; }
             #placeholder small { color: #858d98; font-size: 11px; line-height: 1.5; }
@@ -486,6 +487,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         <body>
           <div id="viewer">
             <video id="desktop" autoplay playsinline muted></video>
+            <canvas id="desktopCanvas"></canvas>
             <div id="placeholder"><strong>DESKTOP STREAM IS OFF</strong><small>Video starts only when requested.</small></div>
           </div>
           <script>
@@ -495,8 +497,13 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
             let statsTimer = null;
             let framePollTimer = null;
             let firstFrameTimer = null;
+            let drawLoopId = null;
             let videoFrameSeen = false;
+            let lastDrawnTime = -1;
+            let canvasFrames = 0;
             const video = document.getElementById('desktop');
+            const canvas = document.getElementById('desktopCanvas');
+            const canvasContext = canvas.getContext('2d', { alpha: false, desynchronized: true });
             const placeholder = document.getElementById('placeholder');
             const viewer = document.getElementById('viewer');
 
@@ -506,6 +513,41 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                   window.SciNETBridge.onStatus(String(state || ''), String(message || ''));
                 }
               } catch (_) {}
+            }
+            function startCanvasRendering(pc) {
+              if (drawLoopId !== null) return;
+              const drawNextFrame = () => {
+                drawLoopId = null;
+                if (!mirrorActive || mirrorPeer !== pc) return;
+                if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+                    video.videoWidth > 0 && video.videoHeight > 0 &&
+                    video.currentTime !== lastDrawnTime) {
+                  try {
+                    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+                      canvas.width = video.videoWidth;
+                      canvas.height = video.videoHeight;
+                    }
+                    canvasContext.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    lastDrawnTime = video.currentTime;
+                    canvasFrames++;
+                    canvas.style.display = 'block';
+                    if (!videoFrameSeen) {
+                      videoFrameSeen = true;
+                      placeholder.style.display = 'none';
+                      if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
+                      nativeStatus('video-frame', 'Desktop is rendering · ' + canvas.width + '×' + canvas.height);
+                    } else if (canvasFrames % 90 === 0) {
+                      nativeStatus('canvas-frame', 'Canvas rendered ' + canvasFrames + ' live frames.');
+                    }
+                  } catch (error) {
+                    nativeStatus('error', 'Could not composite the decoded video frame: ' +
+                      ((error && error.message) || 'canvas draw failed'));
+                    return;
+                  }
+                }
+                drawLoopId = requestAnimationFrame(drawNextFrame);
+              };
+              drawLoopId = requestAnimationFrame(drawNextFrame);
             }
             async function postControl(payload) {
               try {
@@ -522,7 +564,13 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
               if (framePollTimer) { clearInterval(framePollTimer); framePollTimer = null; }
               if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
+              if (drawLoopId !== null) { cancelAnimationFrame(drawLoopId); drawLoopId = null; }
               videoFrameSeen = false;
+              lastDrawnTime = -1;
+              canvasFrames = 0;
+              canvas.style.display = 'none';
+              canvas.width = 1;
+              canvas.height = 1;
               const oldPeer = mirrorPeer;
               mirrorPeer = null;
               if (oldPeer) {
@@ -530,7 +578,8 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               }
               video.pause();
               video.srcObject = null;
-              video.style.display = 'none';
+              video.style.display = 'block';
+              canvas.style.display = 'none';
               placeholder.style.display = 'flex';
               placeholder.querySelector('strong').textContent = 'DESKTOP STREAM IS OFF';
               placeholder.querySelector('small').textContent = 'Video starts only when requested.';
@@ -544,7 +593,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               placeholder.style.display = 'flex';
               placeholder.querySelector('strong').textContent = 'CONNECTING TO DESKTOP…';
               placeholder.querySelector('small').textContent = 'Negotiating real-time video transport.';
-              video.style.display = 'none';
+              video.style.display = 'block';
               try {
                 if (!window.RTCPeerConnection) throw new Error('This Android WebView does not support WebRTC.');
                 const pc = new RTCPeerConnection({ iceServers: [] });
@@ -554,53 +603,39 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                   if (!mirrorActive || mirrorPeer !== pc) return;
                   const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
                   const track = event.track;
-                  nativeStatus('track', 'PC sent a video track. Waiting for decoded desktop frames…');
-                  track.onunmute = () => nativeStatus('track', 'Video track is unmuted; waiting for the first frame…');
+                  nativeStatus('track', 'PC sent a video track. Preparing the desktop canvas…');
+                  track.onunmute = () => nativeStatus('track', 'Video track unmuted; waiting for decoded frames…');
                   track.onmute = () => nativeStatus('stats', 'The PC video track is currently muted.');
                   track.onended = () => nativeStatus('error', 'The PC ended the desktop video track.');
                   videoFrameSeen = false;
+                  lastDrawnTime = -1;
+                  canvasFrames = 0;
                   video.srcObject = stream;
                   video.muted = true;
-                  video.style.display = 'block';
-                  placeholder.style.display = 'none';
                   video.onloadedmetadata = () => {
-                    nativeStatus('track', 'Video size: ' + video.videoWidth + '×' + video.videoHeight + '. Waiting for first frame…');
+                    canvas.width = Math.max(2, video.videoWidth);
+                    canvas.height = Math.max(2, video.videoHeight);
+                    nativeStatus('track', 'Decoded video size: ' + video.videoWidth + '×' + video.videoHeight + '. Compositing frames…');
+                    startCanvasRendering(pc);
                   };
-                  video.onplaying = () => nativeStatus('track', 'Video playback started; checking decoded frames…');
+                  video.onloadeddata = () => startCanvasRendering(pc);
+                  video.onplaying = () => startCanvasRendering(pc);
                   video.onerror = () => nativeStatus('error', 'Android WebView could not decode the incoming desktop video.');
                   const playback = video.play();
                   if (playback && playback.catch) {
                     playback.catch(error => nativeStatus('error', 'Video playback failed: ' + ((error && error.message) || 'unknown playback error')));
                   }
 
-                  const revealFirstFrame = () => {
-                    if (videoFrameSeen || !mirrorActive || mirrorPeer !== pc) return;
-                    videoFrameSeen = true;
-                    if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
-                    nativeStatus('video-frame', 'Live desktop video · ' + video.videoWidth + '×' + video.videoHeight);
-                  };
                   firstFrameTimer = setTimeout(async () => {
                     if (mirrorActive && mirrorPeer === pc && !videoFrameSeen) {
+                      const detail = 'No visible canvas frame after 12 seconds (video readyState=' +
+                        video.readyState + ', size=' + video.videoWidth + '×' + video.videoHeight +
+                        ', currentTime=' + video.currentTime.toFixed(2) + ').';
                       await stopMirror(false);
-                      nativeStatus('error', 'WebRTC connected, but Android did not decode a desktop frame. Check the PC server log and WebView video decoder.');
+                      nativeStatus('error', detail + ' The WebRTC track may be decoding, but Android did not composite it.');
                     }
                   }, 12000);
-                  if (video.requestVideoFrameCallback) {
-                    const frameCallback = () => {
-                      revealFirstFrame();
-                      if (mirrorActive && mirrorPeer === pc) video.requestVideoFrameCallback(frameCallback);
-                    };
-                    video.requestVideoFrameCallback(frameCallback);
-                  } else {
-                    let previousTime = -1;
-                    framePollTimer = setInterval(() => {
-                      if (!mirrorActive || mirrorPeer !== pc) return;
-                      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.currentTime > previousTime) {
-                        previousTime = video.currentTime;
-                        revealFirstFrame();
-                      }
-                    }, 300);
-                  }
+                  startCanvasRendering(pc);
                 };
                 pc.oniceconnectionstatechange = () => {
                   nativeStatus('ice', 'ICE state: ' + pc.iceConnectionState);
@@ -686,7 +721,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
             let pointer = null;
             let lastPositionSend = 0;
             function screenPoint(event) {
-              const rect = video.getBoundingClientRect();
+              const rect = canvas.getBoundingClientRect();
               const vw = video.videoWidth || rect.width;
               const vh = video.videoHeight || rect.height;
               if (!vw || !vh || !rect.width || !rect.height) return null;
@@ -699,7 +734,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               return { x: (event.clientX - left) / renderedW, y: (event.clientY - top) / renderedH };
             }
             viewer.addEventListener('pointerdown', event => {
-              if (!mirrorActive || video.style.display === 'none') return;
+              if (!mirrorActive || canvas.style.display === 'none') return;
               pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
               try { viewer.setPointerCapture(event.pointerId); } catch (_) {}
             });
@@ -741,7 +776,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                     if (!firstFrameReceived) onMessage(message, false)
                     firstFrameReceived = true
                 }
-                "track", "ice", "stats", "connecting" -> Unit
+                "canvas-frame", "track", "ice", "stats", "connecting" -> Unit
                 "error" -> {
                     active = false
                     busy = false
