@@ -459,212 +459,196 @@ private fun HoldKey(label: String, key: String, onAction: (String, Map<String, A
 @Composable
 internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val renderer = remember(context) { org.webrtc.TextureViewRenderer(context) }
-    val session = remember(renderer) { NativeWebRtcSession(context, renderer) }
+    var pageReady by remember { mutableStateOf(false) }
+    var pageError by remember { mutableStateOf("") }
 
-    var rendererReady by remember { mutableStateOf(false) }
-    var active by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-    var resolution by remember { mutableStateOf("720p") }
-    var fps by remember { mutableIntStateOf(30) }
-    var streamStatus by remember { mutableStateOf("READY · desktop video starts when requested") }
+    val webView = remember(context, host) { android.webkit.WebView(context) }
+    val screenOnlyStyle = """
+        (() => {
+          const css = document.createElement('style');
+          css.id = 'scinet-native-screen-only';
+          css.textContent = `
+            html, body, .app-shell {
+              min-height: 0 !important;
+              height: auto !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              background: #0a0c0f !important;
+            }
+            .topbar, .app-shell > footer {
+              display: none !important;
+            }
+            .control-page {
+              width: 100% !important;
+              max-width: none !important;
+              min-height: 0 !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              display: block !important;
+            }
+            .control-page > :not(.screen-card) {
+              display: none !important;
+            }
+            .screen-card {
+              display: block !important;
+              width: 100% !important;
+              max-width: none !important;
+              margin: 0 !important;
+              padding: 12px !important;
+              border-radius: 10px !important;
+              box-sizing: border-box !important;
+            }
+            .screen-card > .section-head,
+            .screen-card > .control-note {
+              display: none !important;
+            }
+            .screen-stream-options {
+              margin-top: 0 !important;
+            }
+            .screen-viewer {
+              width: 100% !important;
+              min-height: 0 !important;
+              aspect-ratio: 16 / 9 !important;
+              height: auto !important;
+              overflow: hidden !important;
+            }
+            .screen-viewer video {
+              display: block !important;
+              width: 100% !important;
+              height: 100% !important;
+              max-width: 100% !important;
+              max-height: none !important;
+              object-fit: contain !important;
+              background: #050607 !important;
+            }
+            .screen-actions {
+              margin-bottom: 0 !important;
+            }
+            .screen-fps {
+              margin-left: 0 !important;
+              width: 100% !important;
+            }
+          `;
+          document.head.appendChild(css);
+          window.scrollTo(0, 0);
+          return JSON.stringify({
+            page: !!document.querySelector('.screen-card'),
+            start: !!document.getElementById('screenStart'),
+            video: !!document.getElementById('screenFrame'),
+            rtc: !!window.RTCPeerConnection
+          });
+        })();
+    """.trimIndent()
 
-    androidx.compose.runtime.DisposableEffect(session, host) {
+    androidx.compose.runtime.DisposableEffect(webView, host) {
+        webView.settings.javaScriptEnabled = true
+        webView.settings.domStorageEnabled = true
+        webView.settings.mediaPlaybackRequiresUserGesture = false
+        webView.settings.allowContentAccess = false
+        webView.setBackgroundColor(android.graphics.Color.rgb(10, 12, 15))
+        webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
+        webView.isVerticalScrollBarEnabled = false
+        webView.isHorizontalScrollBarEnabled = false
+        webView.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
+                val line = "Web control JS ${message.messageLevel()}: ${message.message()} (${message.sourceId()}:${message.lineNumber()})"
+                android.util.Log.d("SciNETMirrorWeb", line)
+                return true
+            }
+        }
+        webView.webViewClient = object : android.webkit.WebViewClient() {
+            override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                webView.evaluateJavascript(screenOnlyStyle) { result ->
+                    android.util.Log.i("SciNETMirrorWeb", "Embedded PC screen page: $result")
+                    pageReady = true
+                    pageError = ""
+                }
+            }
+
+            override fun onReceivedError(
+                view: android.webkit.WebView?,
+                request: android.webkit.WebResourceRequest?,
+                error: android.webkit.WebResourceError?
+            ) {
+                if (request?.isForMainFrame == true) {
+                    val detail = error?.description?.toString() ?: "Could not load the PC screen control page."
+                    pageError = detail
+                    android.util.Log.e("SciNETMirrorWeb", detail)
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: android.webkit.WebView?,
+                request: android.webkit.WebResourceRequest?,
+                errorResponse: android.webkit.WebResourceResponse?
+            ) {
+                if (request?.isForMainFrame == true) {
+                    val detail = "PC screen page returned HTTP ${errorResponse?.statusCode ?: "error"}."
+                    pageError = detail
+                    android.util.Log.e("SciNETMirrorWeb", detail)
+                }
+            }
+        }
+
+        webView.loadUrl(host.trimEnd('/') + "/control")
+
         onDispose {
-            // Closing the peer immediately stops the remote sender through its connection-state
-            // handler. Make a best-effort explicit stop request after releasing native resources.
-            session.close()
-            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                try { SciNETApi.post(host, "/api/screen/stop", JSONObject()) } catch (_: Exception) { }
-            }
-        }
-    }
-
-    fun startStream() {
-        if (busy || !rendererReady) return
-        busy = true
-        streamStatus = "CONNECTING · negotiating the native WebRTC receiver…"
-        scope.launch {
             try {
-                session.start(host, resolution, fps)
-                active = true
-                streamStatus = "LIVE · native video renderer is displaying desktop frames"
-                onMessage("Desktop stream connected and a video frame was rendered.", false)
-            } catch (e: Exception) {
-                try { session.stop(host) } catch (_: Exception) { }
-                active = false
-                streamStatus = e.message ?: "Could not render the desktop stream."
-                onMessage(streamStatus, true)
-                android.util.Log.e("SciNETMirror", "Native screen mirror failed", e)
-            } finally {
-                busy = false
-            }
-        }
-    }
-
-    fun stopStream() {
-        if (busy || !rendererReady) return
-        busy = true
-        active = false
-        streamStatus = "STOPPING · releasing the video stream…"
-        scope.launch {
-            try {
-                session.stop(host)
-                streamStatus = "STOPPED · desktop video is off"
-            } catch (e: Exception) {
-                streamStatus = e.message ?: "Could not stop the desktop stream cleanly."
-            } finally {
-                busy = false
-            }
-        }
-    }
-
-    fun restartStream() {
-        if (busy || !rendererReady) return
-        busy = true
-        active = false
-        streamStatus = "RESTARTING · applying stream settings…"
-        scope.launch {
-            try {
-                session.stop(host)
-                session.start(host, resolution, fps)
-                active = true
-                streamStatus = "LIVE · native video renderer is displaying desktop frames"
-            } catch (e: Exception) {
-                try { session.stop(host) } catch (_: Exception) { }
-                active = false
-                streamStatus = e.message ?: "Could not restart the desktop stream."
-                onMessage(streamStatus, true)
-                android.util.Log.e("SciNETMirror", "Native screen mirror restart failed", e)
-            } finally {
-                busy = false
-            }
+                webView.evaluateJavascript(
+                    "if (typeof stopScreenStream === 'function') stopScreenStream('Leaving screen view')",
+                    null
+                )
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.destroy()
+            } catch (_: Exception) { }
         }
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PageHeading("LIVE DESKTOP", "Screen mirroring", "Native WebRTC video rendered directly by Android.")
-        PanelCard {
-            SectionHeading("STREAM OPTIONS", if (active) "LIVE" else "OFF")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        resolution = when (resolution) { "480p" -> "720p"; "720p" -> "1080p"; else -> "480p" }
-                        if (active) restartStream()
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = !busy && rendererReady,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Edge)
-                ) { Text("$resolution · RESOLUTION", fontSize = 9.sp) }
-                OutlinedButton(
-                    onClick = {
-                        fps = when (fps) { 15 -> 24; 24 -> 30; else -> 15 }
-                        if (active) restartStream()
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = !busy && rendererReady,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Edge)
-                ) { Text("$fps FPS", fontSize = 9.sp) }
+        PageHeading(
+            "LIVE DESKTOP",
+            "Screen mirroring",
+            "Using the same PC-hosted WebRTC screen viewer as SciNET Web."
+        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(430.dp)
+                .background(Color(0xFF0A0C0F), RoundedCornerShape(10.dp))
+                .border(1.dp, Edge, RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { _ -> webView },
+                modifier = Modifier.fillMaxSize()
+            )
+            if (!pageReady && pageError.isBlank()) {
+                Text("LOADING THE PC SCREEN VIEWER…", color = Muted, fontSize = 10.sp)
             }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(230.dp)
-                    .background(Color.Black, RoundedCornerShape(8.dp))
-                    .border(1.dp, Edge, RoundedCornerShape(8.dp))
-                    .pointerInput(active, host) {
-                        detectTapGestures {
-                            if (active) scope.launch {
-                                try {
-                                    SciNETApi.post(
-                                        host,
-                                        "/api/control",
-                                        JSONObject().put("action", "mouse-click").put("button", "left")
-                                    )
-                                } catch (e: Exception) {
-                                    onMessage(e.message ?: "Desktop click failed.", true)
-                                }
-                            }
-                        }
-                    }
-                    .pointerInput(active, host) {
-                        detectDragGestures { change, _ ->
-                            change.consume()
-                            if (active && size.width > 0 && size.height > 0) {
-                                val nx = (change.position.x / size.width).coerceIn(0f, 1f)
-                                val ny = (change.position.y / size.height).coerceIn(0f, 1f)
-                                scope.launch {
-                                    try {
-                                        SciNETApi.post(
-                                            host,
-                                            "/api/control",
-                                            JSONObject()
-                                                .put("action", "mouse-position")
-                                                .put("x", nx)
-                                                .put("y", ny)
-                                        )
-                                    } catch (_: Exception) { }
-                                }
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                androidx.compose.ui.viewinterop.AndroidView(
-                    factory = { _ ->
-                        if (!rendererReady) {
-                            session.initialize()
-                            rendererReady = true
-                        }
-                        renderer
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-                if (!active) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier
-                            .background(Color(0xEE0C0F13), RoundedCornerShape(8.dp))
-                            .padding(18.dp)
-                    ) {
-                        Text("▱", color = Accent, fontSize = 26.sp)
-                        Text(
-                            when {
-                                busy -> "CONNECTING TO DESKTOP…"
-                                !rendererReady -> "PREPARING NATIVE VIDEO…"
-                                else -> "DESKTOP STREAM IS OFF"
-                            },
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            "The view turns LIVE only after Android renders a real video frame.",
-                            color = Muted,
-                            fontSize = 9.sp
-                        )
-                    }
+            if (pageError.isNotBlank()) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .background(Color(0xEE0C0F13), RoundedCornerShape(8.dp))
+                        .padding(18.dp)
+                ) {
+                    Text("PC SCREEN VIEWER UNAVAILABLE", color = Bad, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text(pageError, color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+                    OutlinedButton(onClick = {
+                        pageReady = false
+                        pageError = ""
+                        webView.reload()
+                    }) { Text("RELOAD VIEWER") }
                 }
             }
-            Text(
-                streamStatus,
-                color = if (streamStatus.contains("failed", true) || streamStatus.contains("could not", true) || streamStatus.contains("did not", true)) Bad else Muted,
-                fontSize = 10.sp,
-                lineHeight = 16.sp
-            )
-            Text(
-                "Tap the desktop to click. Drag to move the Windows pointer. Video is received and decoded by the native WebRTC engine.",
-                color = Muted,
-                fontSize = 10.sp,
-                lineHeight = 16.sp
-            )
-            PrimaryButton(
-                if (busy) "PLEASE WAIT…" else if (active) "STOP VIEWING" else "START VIEWING",
-                enabled = rendererReady && !busy
-            ) {
-                if (active) stopStream() else startStream()
-            }
         }
+        Text(
+            "The PC's original screen-viewer code handles starting, stopping, resolution, FPS and touch input.",
+            color = Muted,
+            fontSize = 10.sp,
+            lineHeight = 16.sp
+        )
     }
 }
