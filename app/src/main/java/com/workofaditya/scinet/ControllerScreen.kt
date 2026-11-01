@@ -11,6 +11,8 @@ import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -35,6 +37,7 @@ import org.json.JSONObject
 private data class PadButton(val id: String, val label: String, val key: String, val size: Int = 56, val accent: Boolean = false)
 
 private val defaultPadPositions = mapOf(
+    "joystick" to Offset(.13f, .49f),
     "w" to Offset(.13f, .32f), "a" to Offset(.075f, .49f),
     "s" to Offset(.13f, .66f), "d" to Offset(.185f, .49f),
     "space" to Offset(.78f, .28f), "shift" to Offset(.88f, .43f),
@@ -158,17 +161,25 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     }
                 }
         )
-        if (movementMode == "joystick" && !editMode) {
+        if (movementMode == "joystick") {
             val joystickSize = 148.dp
+            val joystickPosition = positions["joystick"] ?: defaultPadPositions.getValue("joystick")
             Box(
                 Modifier
-                    .offset(x = areaWidth * 0.13f - joystickSize / 2, y = areaHeight * 0.49f - joystickSize / 2)
+                    .offset(x = areaWidth * joystickPosition.x - joystickSize / 2, y = areaHeight * joystickPosition.y - joystickSize / 2)
                     .size(joystickSize)
                     .clip(CircleShape)
                     .background(Color(0xAA18232D))
-                    .border(2.dp, Color(0xFF526675), CircleShape)
-                    .pointerInput(joystickClient, settingsOpen) {
-                        if (!settingsOpen && joystickClient != null) {
+                    .border(2.dp, if (editMode) Color(0xFF80C5E8) else Color(0xFF526675), CircleShape)
+                    .pointerInput(joystickClient, settingsOpen, editMode) {
+                        if (editMode) {
+                            detectDragGestures { change, dragAmount ->
+                                change.consume()
+                                val nx = (positions.getValue("joystick").x + dragAmount.x / constraints.maxWidth).coerceIn(.06f, .94f)
+                                val ny = (positions.getValue("joystick").y + dragAmount.y / constraints.maxHeight).coerceIn(.12f, .88f)
+                                positions["joystick"] = Offset(nx, ny)
+                            }
+                        } else if (!settingsOpen && joystickClient != null) {
                             detectDragGestures(
                                 onDragStart = { joystickOffset = Offset.Zero },
                                 onDragEnd = {
@@ -205,6 +216,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                         .background(Color(0xFF91BBD2))
                         .border(2.dp, Color(0xFFD9EFFB), CircleShape)
                 )
+                if (editMode) Text("STICK", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
             }
         }
         buttons.filterNot { movementMode == "joystick" && it.id in setOf("w", "a", "s", "d") }.forEach { button ->
@@ -266,6 +278,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     .align(Alignment.TopEnd)
                     .padding(top = 54.dp, end = 14.dp)
                     .width(300.dp)
+                    .heightIn(max = areaHeight - 70.dp)
                     .border(1.dp, Color(0xFF435361), RoundedCornerShape(14.dp)),
                 color = Color(0xF0182029),
                 contentColor = Color(0xFFEAF0F4),
@@ -273,7 +286,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                 shadowElevation = 12.dp
             ) {
                 Column(
-                    Modifier.padding(horizontal = 16.dp, vertical = 15.dp),
+                    Modifier.padding(horizontal = 16.dp, vertical = 15.dp).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(9.dp)
                 ) {
                     Text("CONTROLLER SETTINGS", color = Color(0xFFEAF0F4), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
