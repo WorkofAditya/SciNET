@@ -7,6 +7,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.webrtc.DataChannel
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
@@ -48,10 +50,17 @@ internal class NativeWebRtcSession(
                 .createInitializationOptions()
         )
         egl = EglBase.create()
-        renderer.init(egl!!.eglBaseContext, null)
+        val eglContext = egl!!.eglBaseContext
+        renderer.init(eglContext, null)
         renderer.setEnableHardwareScaler(true)
         renderer.setMirror(false)
-        factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
+
+        // Explicit decoder setup is important on Android: decode the incoming VP8/H.264
+        // desktop track into continuously rendered frames for SurfaceViewRenderer.
+        factory = PeerConnectionFactory.builder()
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglContext, true, true))
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglContext))
+            .createPeerConnectionFactory()
         initialized = true
     }
 
@@ -60,6 +69,7 @@ internal class NativeWebRtcSession(
         stopPeerOnly()
 
         val connectionReady = CompletableDeferred<Unit>()
+        val videoTrackReady = CompletableDeferred<Unit>()
         val observer = object : PeerConnection.Observer {
             override fun onSignalingChange(state: PeerConnection.SignalingState?) = Unit
 
@@ -80,7 +90,7 @@ internal class NativeWebRtcSession(
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) = Unit
 
             override fun onAddStream(stream: MediaStream?) {
-                stream?.videoTracks?.forEach(::attachVideoTrack)
+                stream?.videoTracks?.forEach { attachVideoTrack(it, videoTrackReady) }
             }
 
             override fun onRemoveStream(stream: MediaStream?) {
@@ -91,17 +101,19 @@ internal class NativeWebRtcSession(
             override fun onRenegotiationNeeded() = Unit
 
             override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
-                attachVideoTrack(receiver?.track() as? VideoTrack)
+                attachVideoTrack(receiver?.track() as? VideoTrack, videoTrackReady)
             }
 
             override fun onTrack(transceiver: RtpTransceiver?) {
-                attachVideoTrack(transceiver?.receiver?.track() as? VideoTrack)
+                attachVideoTrack(transceiver?.receiver?.track() as? VideoTrack, videoTrackReady)
             }
         }
 
         // The desktop web client intentionally uses an empty ICE server list for the trusted
         // LAN connection. Keep the native peer identical: local host candidates are preferred.
-        val configuration = PeerConnection.RTCConfiguration(emptyList())
+        val configuration = PeerConnection.RTCConfiguration(emptyList()).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        }
         val connection = factory?.createPeerConnection(configuration, observer)
             ?: throw IllegalStateException("Could not create the WebRTC connection.")
         peer = connection
@@ -158,9 +170,13 @@ internal class NativeWebRtcSession(
             throw IllegalStateException("WebRTC did not connect to the PC. Check the Wi-Fi/hotspot connection and try again.")
         }
 
-        // Keep a reference to the negotiated receive-only transceiver and make sure it remains
-        // enabled for incoming frames while this peer is active.
-        transceiver.setDirection(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+        val receivedTrack = withTimeoutOrNull(10000) {
+            videoTrackReady.await()
+            true
+        } ?: false
+        if (!receivedTrack) {
+            throw IllegalStateException("The PC connected but did not send a desktop video track.")
+        }
     }
 
     suspend fun stop(host: String) {
@@ -183,13 +199,14 @@ internal class NativeWebRtcSession(
         initialized = false
     }
 
-    private fun attachVideoTrack(track: VideoTrack?) {
+    private fun attachVideoTrack(track: VideoTrack?, ready: CompletableDeferred<Unit>) {
         if (track == null) return
         val newlyAttached = synchronized(attachedVideoTracks) { attachedVideoTracks.add(track) }
         if (newlyAttached) {
             track.setEnabled(true)
             track.addSink(renderer)
         }
+        ready.complete(Unit)
     }
 
     private fun detachVideoTrack(track: VideoTrack?) {
