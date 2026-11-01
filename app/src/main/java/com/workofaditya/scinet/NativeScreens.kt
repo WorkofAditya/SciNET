@@ -459,435 +459,92 @@ private fun HoldKey(label: String, key: String, onAction: (String, Map<String, A
 @Composable
 internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val renderer = remember(context) { org.webrtc.TextureViewRenderer(context) }
+    val session = remember(renderer) { NativeWebRtcSession(context, renderer) }
+
+    var rendererReady by remember { mutableStateOf(false) }
     var active by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    var webReady by remember { mutableStateOf(false) }
     var resolution by remember { mutableStateOf("720p") }
     var fps by remember { mutableIntStateOf(30) }
-    var mirrorStatus by remember { mutableStateOf("Ready · video starts only when requested") }
-    var firstFrameReceived by remember { mutableStateOf(false) }
+    var streamStatus by remember { mutableStateOf("READY · desktop video starts when requested") }
 
-    val webView = remember(host) { android.webkit.WebView(context) }
-    val mirrorHtml = """
-        <!doctype html>
-        <html>
-        <head>
-          <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-          <style>
-            * { box-sizing: border-box; }
-            html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #e7e9ed; font-family: sans-serif; }
-            #viewer { position: relative; width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; }
-            #desktop { position: absolute; left: -4px; top: -4px; width: 2px; height: 2px; opacity: 0.01; pointer-events: none; }
-            #desktopCanvas { display: none; width: 100%; height: 100%; object-fit: contain; background: #000; }
-            #placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 9px; padding: 18px; text-align: center; background: #0c0f13; }
-            #placeholder strong { font-size: 12px; letter-spacing: 1px; }
-            #placeholder small { color: #858d98; font-size: 11px; line-height: 1.5; }
-          </style>
-        </head>
-        <body>
-          <div id="viewer">
-            <video id="desktop" autoplay playsinline muted></video>
-            <canvas id="desktopCanvas"></canvas>
-            <div id="placeholder"><strong>DESKTOP STREAM IS OFF</strong><small>Video starts only when requested.</small></div>
-          </div>
-          <script>
-            let mirrorPeer = null;
-            let mirrorActive = false;
-            let connectTimer = null;
-            let statsTimer = null;
-            let framePollTimer = null;
-            let firstFrameTimer = null;
-            let drawLoopId = null;
-            let videoFrameSeen = false;
-            let lastDrawnTime = -1;
-            let canvasFrames = 0;
-            const video = document.getElementById('desktop');
-            const canvas = document.getElementById('desktopCanvas');
-            const canvasContext = canvas.getContext('2d', { alpha: false, desynchronized: true });
-            const placeholder = document.getElementById('placeholder');
-            const viewer = document.getElementById('viewer');
-
-            function nativeStatus(state, message) {
-              try {
-                if (window.SciNETBridge && window.SciNETBridge.onStatus) {
-                  window.SciNETBridge.onStatus(String(state || ''), String(message || ''));
-                }
-              } catch (_) {}
-            }
-            function startCanvasRendering(pc) {
-              if (drawLoopId !== null) return;
-              const drawNextFrame = () => {
-                drawLoopId = null;
-                if (!mirrorActive || mirrorPeer !== pc) return;
-                if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
-                    video.videoWidth > 0 && video.videoHeight > 0 &&
-                    video.currentTime !== lastDrawnTime) {
-                  try {
-                    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-                      canvas.width = video.videoWidth;
-                      canvas.height = video.videoHeight;
-                    }
-                    canvasContext.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    lastDrawnTime = video.currentTime;
-                    canvasFrames++;
-                    canvas.style.display = 'block';
-                    if (!videoFrameSeen) {
-                      videoFrameSeen = true;
-                      placeholder.style.display = 'none';
-                      if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
-                      // Sample a tiny copy of the actual decoded image. This distinguishes a
-                      // compositor problem from a PC capture source that is itself black.
-                      const probe = document.createElement('canvas');
-                      probe.width = 16;
-                      probe.height = 9;
-                      const probeContext = probe.getContext('2d', { willReadFrequently: true });
-                      probeContext.drawImage(video, 0, 0, probe.width, probe.height);
-                      const pixels = probeContext.getImageData(0, 0, probe.width, probe.height).data;
-                      let visiblePixels = 0;
-                      for (let i = 0; i < pixels.length; i += 4) {
-                        if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 36) visiblePixels++;
-                      }
-                      nativeStatus(
-                        'video-frame',
-                        'Canvas frame ' + canvas.width + '×' + canvas.height +
-                          ' · image sample ' + visiblePixels + '/144 non-black pixels.'
-                      );
-                    } else if (canvasFrames % 90 === 0) {
-                      nativeStatus('canvas-frame', 'Canvas rendered ' + canvasFrames + ' live frames.');
-                    }
-                  } catch (error) {
-                    nativeStatus('error', 'Could not composite the decoded video frame: ' +
-                      ((error && error.message) || 'canvas draw failed'));
-                    return;
-                  }
-                }
-                drawLoopId = requestAnimationFrame(drawNextFrame);
-              };
-              drawLoopId = requestAnimationFrame(drawNextFrame);
-            }
-            async function postControl(payload) {
-              try {
-                await fetch('/api/control', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(payload)
-                });
-              } catch (_) {}
-            }
-            async function stopMirror(notify) {
-              mirrorActive = false;
-              if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
-              if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
-              if (framePollTimer) { clearInterval(framePollTimer); framePollTimer = null; }
-              if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
-              if (drawLoopId !== null) { cancelAnimationFrame(drawLoopId); drawLoopId = null; }
-              videoFrameSeen = false;
-              lastDrawnTime = -1;
-              canvasFrames = 0;
-              canvas.style.display = 'none';
-              canvas.width = 1;
-              canvas.height = 1;
-              const oldPeer = mirrorPeer;
-              mirrorPeer = null;
-              if (oldPeer) {
-                try { oldPeer.ontrack = null; oldPeer.onconnectionstatechange = null; oldPeer.close(); } catch (_) {}
-              }
-              video.pause();
-              video.srcObject = null;
-              video.style.display = 'block';
-              canvas.style.display = 'none';
-              placeholder.style.display = 'flex';
-              placeholder.querySelector('strong').textContent = 'DESKTOP STREAM IS OFF';
-              placeholder.querySelector('small').textContent = 'Video starts only when requested.';
-              try { await fetch('/api/screen/stop', { method: 'POST', keepalive: true }); } catch (_) {}
-              if (notify) nativeStatus('stopped', 'Screen stream stopped.');
-            }
-            async function startMirror(selectedResolution, selectedFps) {
-              if (mirrorActive) return;
-              mirrorActive = true;
-              nativeStatus('connecting', 'Negotiating a live WebRTC stream…');
-              placeholder.style.display = 'flex';
-              placeholder.querySelector('strong').textContent = 'CONNECTING TO DESKTOP…';
-              placeholder.querySelector('small').textContent = 'Negotiating real-time video transport.';
-              video.style.display = 'block';
-              try {
-                if (!window.RTCPeerConnection) throw new Error('This Android WebView does not support WebRTC.');
-                const pc = new RTCPeerConnection({ iceServers: [] });
-                mirrorPeer = pc;
-                pc.addTransceiver('video', { direction: 'recvonly' });
-                pc.ontrack = event => {
-                  if (!mirrorActive || mirrorPeer !== pc) return;
-                  const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
-                  const track = event.track;
-                  nativeStatus('track', 'PC sent a video track. Preparing the desktop canvas…');
-                  track.onunmute = () => nativeStatus('track', 'Video track unmuted; waiting for decoded frames…');
-                  track.onmute = () => nativeStatus('stats', 'The PC video track is currently muted.');
-                  track.onended = () => nativeStatus('error', 'The PC ended the desktop video track.');
-                  videoFrameSeen = false;
-                  lastDrawnTime = -1;
-                  canvasFrames = 0;
-                  video.srcObject = stream;
-                  video.muted = true;
-                  video.onloadedmetadata = () => {
-                    canvas.width = Math.max(2, video.videoWidth);
-                    canvas.height = Math.max(2, video.videoHeight);
-                    nativeStatus('track', 'Decoded video size: ' + video.videoWidth + '×' + video.videoHeight + '. Compositing frames…');
-                    startCanvasRendering(pc);
-                  };
-                  video.onloadeddata = () => startCanvasRendering(pc);
-                  video.onplaying = () => startCanvasRendering(pc);
-                  video.onerror = () => nativeStatus('error', 'Android WebView could not decode the incoming desktop video.');
-                  const playback = video.play();
-                  if (playback && playback.catch) {
-                    playback.catch(error => nativeStatus('error', 'Video playback failed: ' + ((error && error.message) || 'unknown playback error')));
-                  }
-
-                  firstFrameTimer = setTimeout(async () => {
-                    if (mirrorActive && mirrorPeer === pc && !videoFrameSeen) {
-                      const detail = 'No visible canvas frame after 12 seconds (video readyState=' +
-                        video.readyState + ', size=' + video.videoWidth + '×' + video.videoHeight +
-                        ', currentTime=' + video.currentTime.toFixed(2) + ').';
-                      await stopMirror(false);
-                      nativeStatus('error', detail + ' The WebRTC track may be decoding, but Android did not composite it.');
-                    }
-                  }, 12000);
-                  startCanvasRendering(pc);
-                };
-                pc.oniceconnectionstatechange = () => {
-                  nativeStatus('ice', 'ICE state: ' + pc.iceConnectionState);
-                };
-                pc.onconnectionstatechange = () => {
-                  if (!mirrorActive || mirrorPeer !== pc) return;
-                  if (pc.connectionState === 'connected') {
-                    if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
-                    nativeStatus('connected', 'WebRTC connected. Waiting for the first decoded video frame…');
-                    if (statsTimer) clearInterval(statsTimer);
-                    const reportStats = async () => {
-                      if (!mirrorActive || mirrorPeer !== pc) return;
-                      try {
-                        const report = await pc.getStats();
-                        let inbound = null;
-                        report.forEach(stat => {
-                          if (stat.type === 'inbound-rtp' && (stat.kind === 'video' || stat.mediaType === 'video')) inbound = stat;
-                        });
-                        if (inbound) {
-                          nativeStatus('stats', 'Video RX ' + (inbound.bytesReceived || 0) +
-                            ' bytes · ' + (inbound.packetsReceived || 0) + ' packets · ' +
-                            (inbound.framesReceived || 0) + ' received / ' + (inbound.framesDecoded || 0) + ' decoded frames.');
-                        } else {
-                          nativeStatus('stats', 'WebRTC is connected; waiting for incoming video statistics…');
-                        }
-                      } catch (error) {
-                        nativeStatus('stats', 'Could not read video statistics: ' + ((error && error.message) || 'unknown error'));
-                      }
-                    };
-                    reportStats();
-                    statsTimer = setInterval(reportStats, 2000);
-                  } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                    if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
-                    nativeStatus('error', 'WebRTC connection was lost. Check that the phone and PC are on the same reachable network.');
-                    stopMirror(false);
-                  }
-                };
-
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                await new Promise(resolve => {
-                  if (pc.iceGatheringState === 'complete') return resolve();
-                  const timeout = setTimeout(resolve, 5000);
-                  pc.addEventListener('icegatheringstatechange', () => {
-                    if (pc.iceGatheringState === 'complete') { clearTimeout(timeout); resolve(); }
-                  });
-                });
-
-                const response = await fetch('/api/screen/offer', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    sdp: pc.localDescription.sdp,
-                    type: pc.localDescription.type,
-                    resolution: selectedResolution,
-                    fps: Number(selectedFps)
-                  })
-                });
-                const answer = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(answer.error || 'The PC rejected the WebRTC offer.');
-                if (!mirrorActive || mirrorPeer !== pc) { pc.close(); return; }
-                await pc.setRemoteDescription(answer);
-
-                connectTimer = setTimeout(() => {
-                  if (mirrorActive && mirrorPeer === pc && pc.connectionState !== 'connected') {
-                    nativeStatus('error', 'The PC accepted the offer, but WebRTC did not connect. Check the PC firewall and local network.');
-                    stopMirror(false);
-                  }
-                }, 25000);
-              } catch (error) {
-                await stopMirror(false);
-                nativeStatus('error', (error && error.message) || 'Could not start screen mirroring.');
-              }
-            }
-            async function restartMirror(selectedResolution, selectedFps) {
-              await stopMirror(false);
-              await startMirror(selectedResolution, selectedFps);
-            }
-            window.startMirror = startMirror;
-            window.stopMirror = stopMirror;
-            window.restartMirror = restartMirror;
-
-            let pointer = null;
-            let lastPositionSend = 0;
-            function screenPoint(event) {
-              const rect = canvas.getBoundingClientRect();
-              const vw = video.videoWidth || rect.width;
-              const vh = video.videoHeight || rect.height;
-              if (!vw || !vh || !rect.width || !rect.height) return null;
-              const scale = Math.min(rect.width / vw, rect.height / vh);
-              const renderedW = vw * scale, renderedH = vh * scale;
-              const left = rect.left + (rect.width - renderedW) / 2;
-              const top = rect.top + (rect.height - renderedH) / 2;
-              if (event.clientX < left || event.clientX > left + renderedW ||
-                  event.clientY < top || event.clientY > top + renderedH) return null;
-              return { x: (event.clientX - left) / renderedW, y: (event.clientY - top) / renderedH };
-            }
-            viewer.addEventListener('pointerdown', event => {
-              if (!mirrorActive || canvas.style.display === 'none') return;
-              pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
-              try { viewer.setPointerCapture(event.pointerId); } catch (_) {}
-            });
-            viewer.addEventListener('pointermove', event => {
-              if (!pointer || pointer.id !== event.pointerId || !mirrorActive) return;
-              if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 6) pointer.moved = true;
-              if (!pointer.moved) return;
-              const point = screenPoint(event);
-              const now = Date.now();
-              if (point && now - lastPositionSend > 35) {
-                lastPositionSend = now;
-                postControl({ action: 'mouse-position', x: point.x, y: point.y });
-              }
-            });
-            viewer.addEventListener('pointerup', event => {
-              if (!pointer || pointer.id !== event.pointerId) return;
-              const moved = pointer.moved;
-              pointer = null;
-              if (mirrorActive && !moved) postControl({ action: 'mouse-click', button: 'left' });
-            });
-            viewer.addEventListener('pointercancel', () => { pointer = null; });
-          </script>
-        </body>
-        </html>
-    """.trimIndent()
-
-    val bridge = remember(webView) {
-        ScreenMirrorJavascriptBridge { state, message ->
-            android.util.Log.d("SciNETMirror", "$state: $message")
-            mirrorStatus = message
-            when (state) {
-                "connected" -> {
-                    active = true
-                    busy = false
-                }
-                "video-frame" -> {
-                    active = true
-                    busy = false
-                    if (!firstFrameReceived) onMessage(message, false)
-                    firstFrameReceived = true
-                }
-                "canvas-frame", "track", "ice", "stats", "connecting" -> Unit
-                "error" -> {
-                    active = false
-                    busy = false
-                    onMessage(message, true)
-                }
-                "stopped" -> {
-                    active = false
-                    busy = false
-                    mirrorStatus = "Screen stream stopped."
-                }
-            }
-        }
-    }
-
-    androidx.compose.runtime.DisposableEffect(webView, host) {
-        webView.addJavascriptInterface(bridge, "SciNETBridge")
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.mediaPlaybackRequiresUserGesture = false
-        webView.settings.allowContentAccess = false
-        // Keep the default hardware-accelerated WebView compositor. Forcing a separate
-        // hardware View layer can interfere with independently composed media surfaces.
-        webView.setBackgroundColor(android.graphics.Color.BLACK)
-        webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
-        webView.webChromeClient = object : android.webkit.WebChromeClient() {
-            override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
-                val line = "JS ${message.messageLevel()}: ${message.message()} (${message.sourceId()}:${message.lineNumber()})"
-                android.util.Log.d("SciNETMirror", line)
-                return true
-            }
-        }
-        webView.webViewClient = object : android.webkit.WebViewClient() {
-            override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
-                webReady = true
-                mirrorStatus = "Ready · WebRTC support: checking…"
-                webView.evaluateJavascript(
-                    "JSON.stringify({rtc:!!window.RTCPeerConnection,media:!!window.MediaStream,secure:window.isSecureContext})"
-                ) { result ->
-                    android.util.Log.d("SciNETMirror", "WebView capabilities: $result")
-                    android.util.Log.d(
-                        "SciNETMirror",
-                        "View compositor: hardwareAccelerated=${webView.isHardwareAccelerated}, layerType=${webView.layerType}"
-                    )
-                }
-            }
-            override fun onReceivedError(
-                view: android.webkit.WebView?,
-                request: android.webkit.WebResourceRequest?,
-                error: android.webkit.WebResourceError?
-            ) {
-                if (request?.isForMainFrame == true) {
-                    val detail = error?.description?.toString() ?: "WebView page load failed"
-                    mirrorStatus = detail
-                    android.util.Log.e("SciNETMirror", detail)
-                }
-            }
-        }
-        val baseUrl = host.trimEnd('/') + "/"
-        webView.loadDataWithBaseURL(baseUrl, mirrorHtml, "text/html", "UTF-8", null)
-
+    androidx.compose.runtime.DisposableEffect(session, host) {
         onDispose {
-            try {
-                webView.evaluateJavascript("window.stopMirror && window.stopMirror(false)", null)
-                webView.removeJavascriptInterface("SciNETBridge")
-                webView.stopLoading()
-                webView.loadUrl("about:blank")
-                webView.destroy()
-            } catch (_: Exception) { }
+            // Closing the peer immediately stops the remote sender through its connection-state
+            // handler. Make a best-effort explicit stop request after releasing native resources.
+            session.close()
+            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                try { SciNETApi.post(host, "/api/screen/stop", JSONObject()) } catch (_: Exception) { }
+            }
         }
     }
 
     fun startStream() {
-        if (busy || !webReady) return
+        if (busy || !rendererReady) return
         busy = true
-        firstFrameReceived = false
-        mirrorStatus = "Starting live WebRTC stream…"
-        webView.evaluateJavascript("window.startMirror('$resolution', $fps)", null)
+        streamStatus = "CONNECTING · negotiating the native WebRTC receiver…"
+        scope.launch {
+            try {
+                session.start(host, resolution, fps)
+                active = true
+                streamStatus = "LIVE · native video renderer is displaying desktop frames"
+                onMessage("Desktop stream connected and a video frame was rendered.", false)
+            } catch (e: Exception) {
+                try { session.stop(host) } catch (_: Exception) { }
+                active = false
+                streamStatus = e.message ?: "Could not render the desktop stream."
+                onMessage(streamStatus, true)
+                android.util.Log.e("SciNETMirror", "Native screen mirror failed", e)
+            } finally {
+                busy = false
+            }
+        }
     }
+
     fun stopStream() {
-        if (busy || !webReady) return
-        busy = true
-        firstFrameReceived = false
-        webView.evaluateJavascript("window.stopMirror(true)", null)
-    }
-    fun restartStream() {
-        if (busy || !webReady) return
+        if (busy || !rendererReady) return
         busy = true
         active = false
-        firstFrameReceived = false
-        mirrorStatus = "Restarting live WebRTC stream…"
-        webView.evaluateJavascript("window.restartMirror('$resolution', $fps)", null)
+        streamStatus = "STOPPING · releasing the video stream…"
+        scope.launch {
+            try {
+                session.stop(host)
+                streamStatus = "STOPPED · desktop video is off"
+            } catch (e: Exception) {
+                streamStatus = e.message ?: "Could not stop the desktop stream cleanly."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun restartStream() {
+        if (busy || !rendererReady) return
+        busy = true
+        active = false
+        streamStatus = "RESTARTING · applying stream settings…"
+        scope.launch {
+            try {
+                session.stop(host)
+                session.start(host, resolution, fps)
+                active = true
+                streamStatus = "LIVE · native video renderer is displaying desktop frames"
+            } catch (e: Exception) {
+                try { session.stop(host) } catch (_: Exception) { }
+                active = false
+                streamStatus = e.message ?: "Could not restart the desktop stream."
+                onMessage(streamStatus, true)
+                android.util.Log.e("SciNETMirror", "Native screen mirror restart failed", e)
+            } finally {
+                busy = false
+            }
+        }
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PageHeading("LIVE DESKTOP", "Screen mirroring", "Real-time WebRTC video from the Windows host.")
+        PageHeading("LIVE DESKTOP", "Screen mirroring", "Native WebRTC video rendered directly by Android.")
         PanelCard {
             SectionHeading("STREAM OPTIONS", if (active) "LIVE" else "OFF")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -897,7 +554,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                         if (active) restartStream()
                     },
                     modifier = Modifier.weight(1f),
-                    enabled = !busy && webReady,
+                    enabled = !busy && rendererReady,
                     border = androidx.compose.foundation.BorderStroke(1.dp, Edge)
                 ) { Text("$resolution · RESOLUTION", fontSize = 9.sp) }
                 OutlinedButton(
@@ -906,51 +563,108 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                         if (active) restartStream()
                     },
                     modifier = Modifier.weight(1f),
-                    enabled = !busy && webReady,
+                    enabled = !busy && rendererReady,
                     border = androidx.compose.foundation.BorderStroke(1.dp, Edge)
                 ) { Text("$fps FPS", fontSize = 9.sp) }
             }
             Box(
-                Modifier.fillMaxWidth().height(230.dp)
+                Modifier
+                    .fillMaxWidth()
+                    .height(230.dp)
                     .background(Color.Black, RoundedCornerShape(8.dp))
-                    .border(1.dp, Edge, RoundedCornerShape(8.dp)),
+                    .border(1.dp, Edge, RoundedCornerShape(8.dp))
+                    .pointerInput(active, host) {
+                        detectTapGestures {
+                            if (active) scope.launch {
+                                try {
+                                    SciNETApi.post(
+                                        host,
+                                        "/api/control",
+                                        JSONObject().put("action", "mouse-click").put("button", "left")
+                                    )
+                                } catch (e: Exception) {
+                                    onMessage(e.message ?: "Desktop click failed.", true)
+                                }
+                            }
+                        }
+                    }
+                    .pointerInput(active, host) {
+                        detectDragGestures { change, _ ->
+                            change.consume()
+                            if (active && size.width > 0 && size.height > 0) {
+                                val nx = (change.position.x / size.width).coerceIn(0f, 1f)
+                                val ny = (change.position.y / size.height).coerceIn(0f, 1f)
+                                scope.launch {
+                                    try {
+                                        SciNETApi.post(
+                                            host,
+                                            "/api/control",
+                                            JSONObject()
+                                                .put("action", "mouse-position")
+                                                .put("x", nx)
+                                                .put("y", ny)
+                                        )
+                                    } catch (_: Exception) { }
+                                }
+                            }
+                        }
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 androidx.compose.ui.viewinterop.AndroidView(
-                    factory = { webView },
+                    factory = {
+                        if (!rendererReady) {
+                            session.initialize()
+                            rendererReady = true
+                        }
+                        renderer
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
-                if (!webReady) {
-                    Text("PREPARING LIVE VIDEO VIEW…", color = Muted, fontSize = 10.sp)
+                if (!active) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .background(Color(0xEE0C0F13), RoundedCornerShape(8.dp))
+                            .padding(18.dp)
+                    ) {
+                        Text("▱", color = Accent, fontSize = 26.sp)
+                        Text(
+                            when {
+                                busy -> "CONNECTING TO DESKTOP…"
+                                !rendererReady -> "PREPARING NATIVE VIDEO…"
+                                else -> "DESKTOP STREAM IS OFF"
+                            },
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "The view turns LIVE only after Android renders a real video frame.",
+                            color = Muted,
+                            fontSize = 9.sp
+                        )
+                    }
                 }
             }
             Text(
-                mirrorStatus,
-                color = if (mirrorStatus.contains("failed", true) || mirrorStatus.contains("could not", true) || mirrorStatus.contains("lost", true)) Bad else Muted,
+                streamStatus,
+                color = if (streamStatus.contains("failed", true) || streamStatus.contains("could not", true) || streamStatus.contains("did not", true)) Bad else Muted,
                 fontSize = 10.sp,
                 lineHeight = 16.sp
             )
             Text(
-                "Tap the desktop to click. Drag to move the Windows pointer. The stream is live WebRTC video, not screenshots.",
-                color = Muted, fontSize = 10.sp, lineHeight = 16.sp
+                "Tap the desktop to click. Drag to move the Windows pointer. Video is received and decoded by the native WebRTC engine.",
+                color = Muted,
+                fontSize = 10.sp,
+                lineHeight = 16.sp
             )
             PrimaryButton(
                 if (busy) "PLEASE WAIT…" else if (active) "STOP VIEWING" else "START VIEWING",
-                enabled = webReady && !busy
+                enabled = rendererReady && !busy
             ) {
                 if (active) stopStream() else startStream()
             }
-        }
-    }
-}
-
-private class ScreenMirrorJavascriptBridge(
-    private val callback: (String, String) -> Unit
-) {
-    @android.webkit.JavascriptInterface
-    fun onStatus(state: String, message: String) {
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            callback(state, message)
         }
     }
 }
