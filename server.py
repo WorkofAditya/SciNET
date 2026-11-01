@@ -764,8 +764,8 @@ async def control_host(request: Request):
     }
     if action in media_keys:
         key = media_keys[action]
-        _send_windows_key(key, True)
-        _send_windows_key(key, False)
+        user32.keybd_event(key, 0, 0, 0)
+        user32.keybd_event(key, 0, 2, 0)
         log_event(f"Remote control: {action}", "control")
         return {"ok": True, "action": action}
     modifier_codes = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "meta": 0x5B}
@@ -788,7 +788,7 @@ async def control_host(request: Request):
         flags = 0x0001 if key_name == "meta" else 0
         if not down:
             flags |= 0x0002
-        _send_windows_key(modifier_codes[key_name], down)
+        user32.keybd_event(modifier_codes[key_name], 0, flags, 0)
         return {"ok": True, "action": f"{key_name}-{'down' if down else 'up'}"}
     if action == "key":
         key_name = str(data.get("key") or "").lower()
@@ -804,18 +804,18 @@ async def control_host(request: Request):
                 # The Windows logo key is an extended key; set this flag
                 # for both key-down and key-up so Win+R / Win+E reach the shell.
                 flags = 0x0001 if name == "meta" else 0
-                _send_windows_key(code, True)
-                temporary.append(code)
+                user32.keybd_event(code, 0, flags, 0)
+                temporary.append((code, flags))
         code = key_codes[key_name]
         try:
             repeat_count = max(1, min(100, int(data.get("repeat", 1))))
         except (TypeError, ValueError):
             repeat_count = 1
         for _ in range(repeat_count):
-            _send_windows_key(code, True)
-            _send_windows_key(code, False)
-        for modifier_code in reversed(temporary):
-            _send_windows_key(modifier_code, False)
+            user32.keybd_event(code, 0, 0, 0)
+            user32.keybd_event(code, 0, 2, 0)
+        for code, flags in reversed(temporary):
+            user32.keybd_event(code, 0, flags | 0x0002, 0)
         log_event(f"Remote key: {key_name}", "control")
         return {"ok": True, "action": key_name, "repeat": repeat_count}
     if action == "key-hold":
