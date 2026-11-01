@@ -459,8 +459,18 @@ private fun HoldKey(label: String, key: String, onAction: (String, Map<String, A
 @Composable
 internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Unit) {
     val context = LocalContext.current
+    val activity = context as? android.app.Activity
     var pageReady by remember { mutableStateOf(false) }
     var pageError by remember { mutableStateOf("") }
+    var fullscreenCustomView by remember { mutableStateOf<android.view.View?>(null) }
+    var fullscreenCallback by remember {
+        mutableStateOf<android.webkit.WebChromeClient.CustomViewCallback?>(null)
+    }
+    val originalOrientation = remember(activity) {
+        activity?.requestedOrientation
+            ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    var originalSystemUiVisibility by remember { mutableIntStateOf(0) }
 
     val webView = remember(context, host) { android.webkit.WebView(context) }
     val screenOnlyStyle = """
@@ -473,6 +483,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               height: auto !important;
               margin: 0 !important;
               padding: 0 !important;
+              overflow-x: hidden !important;
               background: #0a0c0f !important;
             }
             .topbar, .app-shell > footer {
@@ -494,23 +505,61 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               width: 100% !important;
               max-width: none !important;
               margin: 0 !important;
-              padding: 12px !important;
-              border-radius: 10px !important;
+              padding: 0 !important;
+              border: 0 !important;
+              border-radius: 0 !important;
+              background: transparent !important;
+              box-shadow: none !important;
               box-sizing: border-box !important;
             }
-            .screen-card > .section-head,
+            .screen-card > .section-head {
+              display: flex !important;
+              align-items: center !important;
+              justify-content: space-between !important;
+              margin: 0 0 12px !important;
+              padding: 0 1px !important;
+            }
+            .screen-card > .section-head h2 {
+              margin: 3px 0 0 !important;
+              font-size: 17px !important;
+              line-height: 1.25 !important;
+              letter-spacing: -.02em !important;
+            }
             .screen-card > .control-note {
               display: none !important;
             }
             .screen-stream-options {
-              margin-top: 0 !important;
+              display: grid !important;
+              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+              gap: 9px !important;
+              margin: 0 0 11px !important;
+            }
+            .screen-stream-options label {
+              min-width: 0 !important;
+              gap: 5px !important;
+              font-size: 8px !important;
+              letter-spacing: .09em !important;
+            }
+            .screen-stream-options select {
+              min-width: 0 !important;
+              width: 100% !important;
+              min-height: 39px !important;
+              padding: 0 10px !important;
+              border-radius: 8px !important;
+              background: #12171d !important;
+              border-color: #303944 !important;
+              font-size: 11px !important;
             }
             .screen-viewer {
               width: 100% !important;
               min-height: 0 !important;
-              aspect-ratio: 16 / 9 !important;
               height: auto !important;
+              aspect-ratio: 16 / 9 !important;
               overflow: hidden !important;
+              border: 1px solid #303944 !important;
+              border-radius: 10px !important;
+              background: #05070a !important;
+              box-shadow: 0 8px 22px rgba(0,0,0,.22) !important;
             }
             .screen-viewer video {
               display: block !important;
@@ -521,12 +570,65 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               object-fit: contain !important;
               background: #050607 !important;
             }
+            .screen-placeholder {
+              min-height: 100% !important;
+              padding: 18px !important;
+            }
             .screen-actions {
-              margin-bottom: 0 !important;
+              display: grid !important;
+              grid-template-columns: 1fr 1fr !important;
+              gap: 8px !important;
+              margin: 11px 0 0 !important;
+            }
+            .screen-actions .button {
+              width: 100% !important;
+              min-height: 43px !important;
+              margin: 0 !important;
+              border-radius: 8px !important;
+              font-size: 10px !important;
+              letter-spacing: .01em !important;
+            }
+            .screen-actions #screenStart,
+            .screen-actions #screenStop {
+              grid-column: 1 !important;
+            }
+            .screen-actions #screenFullscreen {
+              grid-column: 2 !important;
+              grid-row: 1 !important;
             }
             .screen-fps {
-              margin-left: 0 !important;
+              grid-column: 1 / -1 !important;
               width: 100% !important;
+              margin: 1px 0 0 !important;
+              color: #98a2ae !important;
+              font-size: 9px !important;
+              text-align: center !important;
+              line-height: 1.5 !important;
+            }
+            .screen-live-indicator {
+              z-index: 3 !important;
+            }
+            .screen-viewer:fullscreen {
+              position: fixed !important;
+              inset: 0 !important;
+              width: 100vw !important;
+              height: 100vh !important;
+              height: 100dvh !important;
+              max-width: none !important;
+              max-height: none !important;
+              aspect-ratio: auto !important;
+              border: 0 !important;
+              border-radius: 0 !important;
+              background: #000 !important;
+              z-index: 99999 !important;
+            }
+            .screen-viewer:fullscreen video {
+              width: 100% !important;
+              height: 100% !important;
+              object-fit: contain !important;
+            }
+            .screen-touch-controls {
+              z-index: 100000 !important;
             }
           `;
           document.head.appendChild(css);
@@ -534,11 +636,26 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
           return JSON.stringify({
             page: !!document.querySelector('.screen-card'),
             start: !!document.getElementById('screenStart'),
+            fullscreen: !!document.getElementById('screenFullscreen'),
             video: !!document.getElementById('screenFrame'),
             rtc: !!window.RTCPeerConnection
           });
         })();
     """.trimIndent()
+
+    fun leaveFullscreen() {
+        val view = fullscreenCustomView
+        if (view != null) {
+            (view.parent as? android.view.ViewGroup)?.removeView(view)
+            fullscreenCustomView = null
+        }
+        fullscreenCallback?.onCustomViewHidden()
+        fullscreenCallback = null
+        activity?.let { hostActivity ->
+            hostActivity.requestedOrientation = originalOrientation
+            hostActivity.window.decorView.systemUiVisibility = originalSystemUiVisibility
+        }
+    }
 
     androidx.compose.runtime.DisposableEffect(webView, host) {
         webView.settings.javaScriptEnabled = true
@@ -550,6 +667,45 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         webView.isVerticalScrollBarEnabled = false
         webView.isHorizontalScrollBarEnabled = false
         webView.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onShowCustomView(
+                view: android.view.View?,
+                callback: android.webkit.WebChromeClient.CustomViewCallback?
+            ) {
+                if (view == null || callback == null || activity == null) {
+                    callback?.onCustomViewHidden()
+                    return
+                }
+                if (fullscreenCustomView != null) {
+                    callback.onCustomViewHidden()
+                    return
+                }
+                fullscreenCustomView = view
+                fullscreenCallback = callback
+                val decor = activity.window.decorView as android.view.ViewGroup
+                originalSystemUiVisibility = decor.systemUiVisibility
+                activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                decor.systemUiVisibility = (
+                    android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                        or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    )
+                (view.parent as? android.view.ViewGroup)?.removeView(view)
+                decor.addView(
+                    view,
+                    android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                )
+            }
+
+            override fun onHideCustomView() {
+                leaveFullscreen()
+            }
+
             override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
                 val line = "Web control JS ${message.messageLevel()}: ${message.message()} (${message.sourceId()}:${message.lineNumber()})"
                 android.util.Log.d("SciNETMirrorWeb", line)
@@ -593,6 +749,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         webView.loadUrl(host.trimEnd('/') + "/control")
 
         onDispose {
+            leaveFullscreen()
             try {
                 webView.evaluateJavascript(
                     "if (typeof stopScreenStream === 'function') stopScreenStream('Leaving screen view')",
@@ -609,28 +766,32 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         PageHeading(
             "LIVE DESKTOP",
             "Screen mirroring",
-            "Using the same PC-hosted WebRTC screen viewer as SciNET Web."
+            "View and control your Windows desktop in real time."
         )
-        Box(
+        BoxWithConstraints(
             Modifier
                 .fillMaxWidth()
-                .height(430.dp)
-                .background(Color(0xFF0A0C0F), RoundedCornerShape(10.dp))
-                .border(1.dp, Edge, RoundedCornerShape(10.dp)),
-            contentAlignment = Alignment.Center
+                .height(maxWidth * (9f / 16f) + 160.dp)
+                .background(Color(0xFF0A0C0F))
         ) {
             androidx.compose.ui.viewinterop.AndroidView(
                 factory = { _ -> webView },
                 modifier = Modifier.fillMaxSize()
             )
             if (!pageReady && pageError.isBlank()) {
-                Text("LOADING THE PC SCREEN VIEWER…", color = Muted, fontSize = 10.sp)
+                Text(
+                    "LOADING SCREEN VIEWER…",
+                    color = Muted,
+                    fontSize = 10.sp,
+                    modifier = Modifier.align(Alignment.Center)
+                )
             }
             if (pageError.isNotBlank()) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
+                        .align(Alignment.Center)
                         .background(Color(0xEE0C0F13), RoundedCornerShape(8.dp))
                         .padding(18.dp)
                 ) {
@@ -644,11 +805,5 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 }
             }
         }
-        Text(
-            "The PC's original screen-viewer code handles starting, stopping, resolution, FPS and touch input.",
-            color = Muted,
-            fontSize = 10.sp,
-            lineHeight = 16.sp
-        )
     }
 }
