@@ -807,6 +807,14 @@ async def control_host(request: Request):
         if delta:
             user32.mouse_event(0x0800, 0, 0, delta, 0)  # MOUSEEVENTF_WHEEL
         return {"ok": True, "action": "mouse-scroll"}
+    if action == "mouse-hold":
+        button = str(data.get("button") or "left").lower()
+        flags = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
+        if button not in flags:
+            return JSONResponse({"error": "Unsupported mouse button"}, status_code=400)
+        down_flag, up_flag = flags[button]
+        user32.mouse_event(down_flag if bool(data.get("down")) else up_flag, 0, 0, 0, 0)
+        return {"ok": True, "action": f"{button}-{"down" if bool(data.get("down")) else "up"}"}
     if action == "mouse-click":
         button = str(data.get("button") or "left").lower()
         click_flags = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
