@@ -95,10 +95,10 @@ private fun SciNETApp() {
                     val body = JSONObject().put("action", action)
                     extra.forEach { (key, value) -> body.put(key, value) }
                     SciNETApi.post(host, "/api/control", body)
-                    if (action != "key-hold") notify("Sent: " + action.replace('-', ' '))
+                    if (action != "key-hold" && action != "mouse-hold") notify("Sent: " + action.replace('-', ' '))
                 } catch (e: Exception) { notify(e.message ?: "Could not reach the PC.", true) }
             }
-            if (action == "type" || action == "key" || action == "key-hold") keyboardMutex.withLock { sendRequest() }
+            if (action == "type" || action == "key" || action == "key-hold" || action == "mouse-hold") keyboardMutex.withLock { sendRequest() }
             else sendRequest()
         }
     }
