@@ -464,6 +464,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
     var webReady by remember { mutableStateOf(false) }
     var resolution by remember { mutableStateOf("720p") }
     var fps by remember { mutableIntStateOf(30) }
+    var mirrorStatus by remember { mutableStateOf("Ready · video starts only when requested") }
 
     val webView = remember(host) { android.webkit.WebView(context) }
     val mirrorHtml = """
@@ -475,7 +476,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
             * { box-sizing: border-box; }
             html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #e7e9ed; font-family: sans-serif; }
             #viewer { position: relative; width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; }
-            #desktop { display: none; width: 100%; height: 100%; object-fit: contain; background: #000; pointer-events: none; }
+            #desktop { display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; pointer-events: none; opacity: 0; transform: translateZ(0); }
             #placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 9px; padding: 18px; text-align: center; background: #0c0f13; }
             #placeholder strong { font-size: 12px; letter-spacing: 1px; }
             #placeholder small { color: #858d98; font-size: 11px; line-height: 1.5; }
@@ -483,13 +484,16 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         </head>
         <body>
           <div id="viewer">
-            <video id="desktop" autoplay playsinline></video>
+            <video id="desktop" autoplay playsinline muted></video>
             <div id="placeholder"><strong>DESKTOP STREAM IS OFF</strong><small>Video starts only when requested.</small></div>
           </div>
           <script>
             let mirrorPeer = null;
             let mirrorActive = false;
             let connectTimer = null;
+            let statsTimer = null;
+            let framePollTimer = null;
+            let videoFrameSeen = false;
             const video = document.getElementById('desktop');
             const placeholder = document.getElementById('placeholder');
             const viewer = document.getElementById('viewer');
@@ -513,6 +517,9 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
             async function stopMirror(notify) {
               mirrorActive = false;
               if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+              if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+              if (framePollTimer) { clearInterval(framePollTimer); framePollTimer = null; }
+              videoFrameSeen = false;
               const oldPeer = mirrorPeer;
               mirrorPeer = null;
               if (oldPeer) {
@@ -521,6 +528,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               video.pause();
               video.srcObject = null;
               video.style.display = 'none';
+              video.style.opacity = '0';
               placeholder.style.display = 'flex';
               placeholder.querySelector('strong').textContent = 'DESKTOP STREAM IS OFF';
               placeholder.querySelector('small').textContent = 'Video starts only when requested.';
@@ -543,17 +551,79 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 pc.ontrack = event => {
                   if (!mirrorActive || mirrorPeer !== pc) return;
                   const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
+                  const track = event.track;
+                  nativeStatus('track', 'PC sent a video track. Waiting for decoded desktop frames…');
+                  track.onunmute = () => nativeStatus('track', 'Video track is unmuted; waiting for the first frame…');
+                  track.onmute = () => nativeStatus('stats', 'The PC video track is currently muted.');
+                  track.onended = () => nativeStatus('error', 'The PC ended the desktop video track.');
+                  videoFrameSeen = false;
                   video.srcObject = stream;
+                  video.muted = true;
                   video.style.display = 'block';
-                  placeholder.style.display = 'none';
-                  video.play().catch(() => {});
-                  nativeStatus('video', 'Live desktop video is being received.');
+                  video.style.opacity = '0';
+                  video.onloadedmetadata = () => {
+                    nativeStatus('track', 'Video size: ' + video.videoWidth + '×' + video.videoHeight + '. Waiting for first frame…');
+                  };
+                  video.onplaying = () => nativeStatus('track', 'Video playback started; checking decoded frames…');
+                  video.onerror = () => nativeStatus('error', 'Android WebView could not decode the incoming desktop video.');
+                  const playback = video.play();
+                  if (playback && playback.catch) {
+                    playback.catch(error => nativeStatus('error', 'Video playback failed: ' + ((error && error.message) || 'unknown playback error')));
+                  }
+
+                  const revealFirstFrame = () => {
+                    if (videoFrameSeen || !mirrorActive || mirrorPeer !== pc) return;
+                    videoFrameSeen = true;
+                    video.style.opacity = '1';
+                    placeholder.style.display = 'none';
+                    nativeStatus('video-frame', 'Live desktop video · ' + video.videoWidth + '×' + video.videoHeight);
+                  };
+                  if (video.requestVideoFrameCallback) {
+                    const frameCallback = () => {
+                      revealFirstFrame();
+                      if (mirrorActive && mirrorPeer === pc) video.requestVideoFrameCallback(frameCallback);
+                    };
+                    video.requestVideoFrameCallback(frameCallback);
+                  } else {
+                    let previousTime = -1;
+                    framePollTimer = setInterval(() => {
+                      if (!mirrorActive || mirrorPeer !== pc) return;
+                      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.currentTime > previousTime) {
+                        previousTime = video.currentTime;
+                        revealFirstFrame();
+                      }
+                    }, 300);
+                  }
+                };
+                pc.oniceconnectionstatechange = () => {
+                  nativeStatus('ice', 'ICE state: ' + pc.iceConnectionState);
                 };
                 pc.onconnectionstatechange = () => {
                   if (!mirrorActive || mirrorPeer !== pc) return;
                   if (pc.connectionState === 'connected') {
                     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
-                    nativeStatus('connected', 'WebRTC connection established.');
+                    nativeStatus('connected', 'WebRTC connected. Waiting for the first decoded video frame…');
+                    if (statsTimer) clearInterval(statsTimer);
+                    const reportStats = async () => {
+                      if (!mirrorActive || mirrorPeer !== pc) return;
+                      try {
+                        const report = await pc.getStats();
+                        let inbound = null;
+                        report.forEach(stat => {
+                          if (stat.type === 'inbound-rtp' && (stat.kind === 'video' || stat.mediaType === 'video')) inbound = stat;
+                        });
+                        if (inbound) {
+                          nativeStatus('stats', 'Video received: ' + (inbound.bytesReceived || 0) +
+                            ' bytes · ' + (inbound.framesDecoded || 0) + ' frames decoded.');
+                        } else {
+                          nativeStatus('stats', 'WebRTC is connected; waiting for incoming video statistics…');
+                        }
+                      } catch (error) {
+                        nativeStatus('stats', 'Could not read video statistics: ' + ((error && error.message) || 'unknown error'));
+                      }
+                    };
+                    reportStats();
+                    statsTimer = setInterval(reportStats, 2000);
                   } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
                     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
                     nativeStatus('error', 'WebRTC connection was lost. Check that the phone and PC are on the same reachable network.');
@@ -650,13 +720,20 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
 
     val bridge = remember(webView) {
         ScreenMirrorJavascriptBridge { state, message ->
+            android.util.Log.d("SciNETMirror", "$state: $message")
+            mirrorStatus = message
             when (state) {
-                "connected", "video" -> {
+                "connected" -> {
+                    active = true
+                    busy = false
+                }
+                "video-frame" -> {
                     val wasActive = active
                     active = true
                     busy = false
                     if (!wasActive) onMessage(message, false)
                 }
+                "track", "ice", "stats", "connecting" -> Unit
                 "error" -> {
                     active = false
                     busy = false
@@ -665,7 +742,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                 "stopped" -> {
                     active = false
                     busy = false
-                    onMessage(message, false)
+                    mirrorStatus = "Screen stream stopped."
                 }
             }
         }
@@ -676,12 +753,35 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         webView.settings.mediaPlaybackRequiresUserGesture = false
+        webView.settings.allowContentAccess = false
+        webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
         webView.setBackgroundColor(android.graphics.Color.BLACK)
         webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
-        webView.webChromeClient = android.webkit.WebChromeClient()
+        webView.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
+                val line = "JS ${message.messageLevel()}: ${message.message()} (${message.sourceId()}:${message.lineNumber()})"
+                android.util.Log.d("SciNETMirror", line)
+                return true
+            }
+        }
         webView.webViewClient = object : android.webkit.WebViewClient() {
             override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
                 webReady = true
+                mirrorStatus = "Ready · WebRTC support: checking…"
+                webView.evaluateJavascript(
+                    "JSON.stringify({rtc:!!window.RTCPeerConnection,media:!!window.MediaStream,secure:window.isSecureContext})"
+                ) { result -> android.util.Log.d("SciNETMirror", "WebView capabilities: $result") }
+            }
+            override fun onReceivedError(
+                view: android.webkit.WebView?,
+                request: android.webkit.WebResourceRequest?,
+                error: android.webkit.WebResourceError?
+            ) {
+                if (request?.isForMainFrame == true) {
+                    val detail = error?.description?.toString() ?: "WebView page load failed"
+                    mirrorStatus = detail
+                    android.util.Log.e("SciNETMirror", detail)
+                }
             }
         }
         val baseUrl = host.trimEnd('/') + "/"
@@ -753,6 +853,12 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                     Text("PREPARING LIVE VIDEO VIEW…", color = Muted, fontSize = 10.sp)
                 }
             }
+            Text(
+                mirrorStatus,
+                color = if (mirrorStatus.contains("failed", true) || mirrorStatus.contains("could not", true) || mirrorStatus.contains("lost", true)) Bad else Muted,
+                fontSize = 10.sp,
+                lineHeight = 16.sp
+            )
             Text(
                 "Tap the desktop to click. Drag to move the Windows pointer. The stream is live WebRTC video, not screenshots.",
                 color = Muted, fontSize = 10.sp, lineHeight = 16.sp
