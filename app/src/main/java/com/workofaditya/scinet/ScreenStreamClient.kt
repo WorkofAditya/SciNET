@@ -7,7 +7,6 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,7 +19,7 @@ import org.json.JSONObject
 internal object ScreenStreamClient {
     private val client = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(2, TimeUnit.SECONDS)
         .build()
 
     suspend fun receive(
@@ -40,9 +39,6 @@ internal object ScreenStreamClient {
             .build()
 
         val call = client.newCall(request)
-        val job = currentCoroutineContext().job
-        val cancelCall = job.invokeOnCompletion { call.cancel() }
-
         try {
             call.execute().use { response ->
                 if (!response.isSuccessful) {
@@ -59,7 +55,11 @@ internal object ScreenStreamClient {
                     ?: throw IOException("The PC returned an empty screen stream.")
 
                 while (currentCoroutineContext().isActive) {
-                    val boundary = source.readUtf8Line() ?: break
+                    val boundary = try {
+                        source.readUtf8Line()
+                    } catch (_: java.io.InterruptedIOException) {
+                        if (!currentCoroutineContext().isActive) break else continue
+                    } ?: break
                     if (!boundary.startsWith("--frame")) continue
 
                     var contentLength = -1
@@ -88,7 +88,6 @@ internal object ScreenStreamClient {
         } catch (error: Exception) {
             if (currentCoroutineContext().isActive) throw error
         } finally {
-            cancelCall.dispose()
             call.cancel()
         }
     }
