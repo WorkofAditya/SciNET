@@ -762,40 +762,42 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
             "Screen mirroring",
             "View and control your Windows desktop in real time."
         )
-        BoxWithConstraints(
-            Modifier
-                .fillMaxWidth()
-                .height(maxWidth * (9f / 16f) + 148.dp)
-                .background(Color(0xFF0A0C0F))
-        ) {
-            androidx.compose.ui.viewinterop.AndroidView(
-                factory = { _ -> webView },
-                modifier = Modifier.fillMaxSize()
-            )
-            if (!pageReady && pageError.isBlank()) {
-                Text(
-                    "LOADING SCREEN VIEWER…",
-                    color = Muted,
-                    fontSize = 10.sp,
-                    modifier = Modifier.align(Alignment.Center)
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(maxWidth * (9f / 16f) + 148.dp)
+                    .background(Color(0xFF0A0C0F))
+            ) {
+                androidx.compose.ui.viewinterop.AndroidView(
+                    factory = { _ -> webView },
+                    modifier = Modifier.fillMaxSize()
                 )
-            }
-            if (pageError.isNotBlank()) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .background(Color(0xEE0C0F13), RoundedCornerShape(8.dp))
-                        .padding(18.dp)
-                ) {
-                    Text("PC SCREEN VIEWER UNAVAILABLE", color = Bad, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    Text(pageError, color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
-                    OutlinedButton(onClick = {
-                        pageReady = false
-                        pageError = ""
-                        webView.reload()
-                    }) { Text("RELOAD VIEWER") }
+                if (!pageReady && pageError.isBlank()) {
+                    Text(
+                        "LOADING SCREEN VIEWER…",
+                        color = Muted,
+                        fontSize = 10.sp,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+                if (pageError.isNotBlank()) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .background(Color(0xEE0C0F13), RoundedCornerShape(8.dp))
+                            .padding(18.dp)
+                    ) {
+                        Text("PC SCREEN VIEWER UNAVAILABLE", color = Bad, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text(pageError, color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+                        OutlinedButton(onClick = {
+                            pageReady = false
+                            pageError = ""
+                            webView.reload()
+                        }) { Text("RELOAD VIEWER") }
+                    }
                 }
             }
         }
