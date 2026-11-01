@@ -23,6 +23,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -456,374 +457,251 @@ private fun HoldKey(label: String, key: String, onAction: (String, Map<String, A
     ) { Text(label, color = Ink, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
 }
 
+private class ScreenMirrorJavascriptBridge(
+    private val onState: (Boolean, String) -> Unit,
+    private val onVideoSize: (Int, Int) -> Unit
+) {
+    @android.webkit.JavascriptInterface
+    fun onState(active: Boolean, message: String) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post { onState(active, message) }
+    }
+
+    @android.webkit.JavascriptInterface
+    fun onVideoSize(width: Int, height: Int) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post { onVideoSize(width, height) }
+    }
+}
+
+private fun mapViewerTouch(
+    point: androidx.compose.ui.geometry.Offset,
+    viewWidth: Float,
+    viewHeight: Float,
+    sourceWidth: Int,
+    sourceHeight: Int
+): androidx.compose.ui.geometry.Offset? {
+    if (viewWidth <= 0f || viewHeight <= 0f || sourceWidth <= 0 || sourceHeight <= 0) return null
+    // Match object-fit: contain so letterbox margins never map to desktop coordinates.
+    val scale = minOf(viewWidth / sourceWidth, viewHeight / sourceHeight)
+    val renderedWidth = sourceWidth * scale
+    val renderedHeight = sourceHeight * scale
+    val left = (viewWidth - renderedWidth) / 2f
+    val top = (viewHeight - renderedHeight) / 2f
+    if (point.x < left || point.x > left + renderedWidth ||
+        point.y < top || point.y > top + renderedHeight
+    ) return null
+    return androidx.compose.ui.geometry.Offset(
+        ((point.x - left) / renderedWidth).coerceIn(0f, 1f),
+        ((point.y - top) / renderedHeight).coerceIn(0f, 1f)
+    )
+}
+
 @Composable
-internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Unit) {
+internal fun ScreenMirrorScreen(
+    host: String,
+    onMessage: (String, Boolean) -> Unit,
+    fullscreen: Boolean,
+    onFullscreenChanged: (Boolean) -> Unit
+) {
     val context = LocalContext.current
     val activity = context as? android.app.Activity
-    var pageReady by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    var webReady by remember { mutableStateOf(false) }
     var pageError by remember { mutableStateOf("") }
-    var fullscreenCustomView by remember { mutableStateOf<android.view.View?>(null) }
-    var fullscreenCallback by remember {
-        mutableStateOf<android.webkit.WebChromeClient.CustomViewCallback?>(null)
-    }
-    val originalOrientation = remember(activity) {
-        activity?.requestedOrientation
-            ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-    }
-    var originalSystemUiVisibility by remember { mutableIntStateOf(0) }
+    var streamActive by remember { mutableStateOf(false) }
+    var hasVideo by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf("Screen stream is off") }
+    var videoWidth by remember { mutableIntStateOf(0) }
+    var videoHeight by remember { mutableIntStateOf(0) }
+    var resolution by remember { mutableStateOf("720p") }
+    var fps by remember { mutableIntStateOf(30) }
+    var lastPointerSentAt by remember { mutableStateOf(0L) }
 
     val webView = remember(context, host) { android.webkit.WebView(context) }
-    val screenOnlyStyle = """
-        (() => {
-          const existingCard = document.querySelector('.screen-card');
-          if (!existingCard) {
-            return JSON.stringify({ error: 'The PC page did not include its screen mirroring panel.' });
-          }
-
-          // Detach the existing, fully wired screen panel from the desktop site's constrained
-          // app-shell/main layout. Moving (not cloning) preserves all control.js event handlers.
-          const nativeRoot = document.createElement('div');
-          nativeRoot.id = 'scinet-native-screen-root';
-          existingCard.parentNode.removeChild(existingCard);
-          const oldShell = document.querySelector('.app-shell');
-          if (oldShell) oldShell.style.display = 'none';
-          document.body.appendChild(nativeRoot);
-          nativeRoot.appendChild(existingCard);
-
-          const css = document.createElement('style');
-          css.id = 'scinet-native-screen-only';
-          css.textContent = `
-            *, *::before, *::after { box-sizing: border-box !important; }
-            html, body {
-              display: block !important;
-              width: 100% !important;
-              min-width: 0 !important;
-              height: auto !important;
-              min-height: 100% !important;
-              margin: 0 !important;
-              padding: 0 !important;
-              overflow-x: hidden !important;
-              background: #0a0c0f !important;
+    val bridge = remember(webView, host) {
+        ScreenMirrorJavascriptBridge(
+            onState = { active, message ->
+                streamActive = active
+                statusMessage = message
+                if (!active) {
+                    hasVideo = false
+                    videoWidth = 0
+                    videoHeight = 0
+                    if (message.contains("could not", true) ||
+                        message.contains("failed", true) ||
+                        message.contains("unavailable", true)
+                    ) onMessage(message, true)
+                }
+            },
+            onVideoSize = { width, height ->
+                if (width > 0 && height > 0) {
+                    videoWidth = width
+                    videoHeight = height
+                    hasVideo = true
+                    streamActive = true
+                    statusMessage = "Live desktop · " + width + " × " + height
+                }
             }
-            #scinet-native-screen-root {
-              display: block !important;
-              position: relative !important;
-              width: 100% !important;
-              max-width: none !important;
-              min-width: 0 !important;
-              margin: 0 !important;
-              padding: 14px 14px 18px !important;
-              overflow: visible !important;
-              box-sizing: border-box !important;
-            }
-            #scinet-native-screen-root .screen-card {
-              display: flex !important;
-              flex-direction: column !important;
-              align-items: stretch !important;
-              width: 100% !important;
-              max-width: none !important;
-              min-width: 0 !important;
-              margin: 0 !important;
-              padding: 16px !important;
-              gap: 0 !important;
-              border: 1px solid #2b3540 !important;
-              border-radius: 16px !important;
-              background: linear-gradient(155deg,#151c24 0%,#10161d 55%,#0d1218 100%) !important;
-              box-shadow: 0 14px 36px rgba(0,0,0,.30), inset 0 1px rgba(255,255,255,.035) !important;
-              box-sizing: border-box !important;
-            }
-            #scinet-native-screen-root .screen-card > .section-head {
-              display: flex !important;
-              align-items: center !important;
-              justify-content: space-between !important;
-              width: 100% !important;
-              min-width: 0 !important;
-              margin: 0 0 15px !important;
-              padding: 0 0 13px !important;
-              border-bottom: 1px solid #2a3540 !important;
-            }
-            #scinet-native-screen-root .screen-card > .section-head .label {
-              color: #94a3b3 !important;
-              font-size: 9px !important;
-              font-weight: 700 !important;
-              letter-spacing: .18em !important;
-            }
-            #scinet-native-screen-root .screen-card > .section-head h2 {
-              margin: 5px 0 0 !important;
-              color: #f3f6f9 !important;
-              font-size: 22px !important;
-              font-weight: 700 !important;
-              line-height: 1.2 !important;
-              letter-spacing: -.04em !important;
-            }
-            #scinet-native-screen-root #screenState {
-              flex: 0 0 auto !important;
-              padding: 6px 10px !important;
-              border: 1px solid #394653 !important;
-              border-radius: 999px !important;
-              color: #aab7c4 !important;
-              background: #1a232d !important;
-              font-size: 9px !important;
-              font-weight: 700 !important;
-              letter-spacing: .12em !important;
-            }
-            #scinet-native-screen-root #screenState.live {
-              border-color: #286e4b !important;
-              color: #9aebba !important;
-              background: #112d20 !important;
-            }
-            #scinet-native-screen-root .screen-stream-options {
-              display: grid !important;
-              grid-template-columns: repeat(2,minmax(0,1fr)) !important;
-              align-items: end !important;
-              gap: 10px !important;
-              width: 100% !important;
-              min-width: 0 !important;
-              margin: 0 0 14px !important;
-            }
-            #scinet-native-screen-root .screen-stream-options label {
-              display: flex !important;
-              flex-direction: column !important;
-              min-width: 0 !important;
-              gap: 6px !important;
-              color: #99a7b5 !important;
-              font-size: 9px !important;
-              font-weight: 700 !important;
-              letter-spacing: .10em !important;
-            }
-            #scinet-native-screen-root .screen-stream-options select {
-              display: block !important;
-              width: 100% !important;
-              min-width: 0 !important;
-              min-height: 44px !important;
-              margin: 0 !important;
-              padding: 0 10px !important;
-              border: 1px solid #354452 !important;
-              border-radius: 9px !important;
-              outline: none !important;
-              background: #0c131b !important;
-              color: #e7edf3 !important;
-              font-family: inherit !important;
-              font-size: 12px !important;
-            }
-            #scinet-native-screen-root .screen-viewer {
-              position: relative !important;
-              display: grid !important;
-              place-items: center !important;
-              width: 100% !important;
-              max-width: none !important;
-              min-width: 0 !important;
-              min-height: 0 !important;
-              height: auto !important;
-              aspect-ratio: 16 / 9 !important;
-              margin: 0 !important;
-              overflow: hidden !important;
-              border: 1px solid #364553 !important;
-              border-radius: 12px !important;
-              background: #05080c !important;
-              box-shadow: 0 10px 26px rgba(0,0,0,.28) !important;
-            }
-            #scinet-native-screen-root .screen-viewer video {
-              display: block !important;
-              width: 100% !important;
-              height: 100% !important;
-              max-width: 100% !important;
-              max-height: none !important;
-              object-fit: contain !important;
-              background: #05080c !important;
-            }
-            #scinet-native-screen-root .screen-placeholder {
-              display: flex !important;
-              align-items: center !important;
-              justify-content: center !important;
-              flex-direction: column !important;
-              gap: 9px !important;
-              width: 100% !important;
-              min-width: 0 !important;
-              min-height: 100% !important;
-              padding: 18px !important;
-              text-align: center !important;
-            }
-            #scinet-native-screen-root .screen-placeholder[hidden] { display: none !important; }
-            #scinet-native-screen-root .screen-placeholder-icon {
-              display: grid !important;
-              place-items: center !important;
-              width: 48px !important;
-              height: 48px !important;
-              border: 1px solid #34414e !important;
-              border-radius: 13px !important;
-              background: #151e27 !important;
-              color: #c3cfda !important;
-              font-size: 23px !important;
-            }
-            #scinet-native-screen-root .screen-placeholder strong {
-              color: #d8e0e8 !important;
-              font-size: 12px !important;
-              font-weight: 600 !important;
-            }
-            #scinet-native-screen-root .screen-placeholder small {
-              max-width: 270px !important;
-              color: #82909e !important;
-              font-size: 10px !important;
-              line-height: 1.5 !important;
-            }
-            #scinet-native-screen-root .screen-live-indicator {
-              position: absolute !important;
-              top: 10px !important;
-              left: 10px !important;
-              z-index: 4 !important;
-              padding: 6px 9px !important;
-              border: 1px solid #256a48 !important;
-              border-radius: 7px !important;
-              background: rgba(12,35,24,.94) !important;
-              color: #a2efbe !important;
-              font-size: 9px !important;
-              font-weight: 800 !important;
-              letter-spacing: .12em !important;
-            }
-            #scinet-native-screen-root .screen-live-indicator[hidden] { display: none !important; }
-            #scinet-native-screen-root .screen-actions {
-              display: grid !important;
-              grid-template-columns: minmax(0,1fr) minmax(0,1fr) !important;
-              align-items: stretch !important;
-              gap: 9px !important;
-              width: 100% !important;
-              margin: 14px 0 0 !important;
-            }
-            #scinet-native-screen-root .screen-actions .button {
-              display: inline-flex !important;
-              align-items: center !important;
-              justify-content: center !important;
-              width: 100% !important;
-              min-width: 0 !important;
-              min-height: 46px !important;
-              margin: 0 !important;
-              padding: 0 10px !important;
-              border: 1px solid #394857 !important;
-              border-radius: 10px !important;
-              background: #19232e !important;
-              color: #e7edf3 !important;
-              font-family: inherit !important;
-              font-size: 11px !important;
-              font-weight: 700 !important;
-              letter-spacing: .01em !important;
-            }
-            #scinet-native-screen-root #screenStart {
-              grid-column: 1 / -1 !important;
-              border-color: #347c58 !important;
-              background: linear-gradient(135deg,#236344,#17452f) !important;
-              color: #d2f6e0 !important;
-              box-shadow: inset 0 1px rgba(255,255,255,.08), 0 5px 14px rgba(12,52,31,.28) !important;
-            }
-            #scinet-native-screen-root #screenStop {
-              grid-column: 1 !important;
-              border-color: #713d43 !important;
-              background: #321d21 !important;
-              color: #ffd0d1 !important;
-            }
-            #scinet-native-screen-root #screenFullscreen {
-              grid-column: 2 !important;
-              grid-row: 2 !important;
-            }
-            #scinet-native-screen-root #screenFullscreen:disabled {
-              opacity: .45 !important;
-            }
-            #scinet-native-screen-root .screen-fps {
-              grid-column: 1 / -1 !important;
-              width: 100% !important;
-              margin: 2px 0 0 !important;
-              color: #91a0ae !important;
-              font-size: 10px !important;
-              line-height: 1.5 !important;
-              text-align: left !important;
-            }
-            #scinet-native-screen-root .control-note { display: none !important; }
-            #scinet-native-screen-root .screen-viewer:fullscreen {
-              position: fixed !important;
-              inset: 0 !important;
-              width: 100vw !important;
-              height: 100vh !important;
-              height: 100dvh !important;
-              max-width: none !important;
-              max-height: none !important;
-              aspect-ratio: auto !important;
-              margin: 0 !important;
-              border: 0 !important;
-              border-radius: 0 !important;
-              background: #000 !important;
-              z-index: 99999 !important;
-            }
-            #scinet-native-screen-root .screen-viewer:fullscreen video {
-              width: 100% !important;
-              height: 100% !important;
-              object-fit: contain !important;
-            }
-            #screenTouchControls { z-index: 100000 !important; }
-          `;
-          document.head.appendChild(css);
-
-          const rootRect = nativeRoot.getBoundingClientRect();
-          const cardRect = existingCard.getBoundingClientRect();
-          window.scrollTo(0, 0);
-          return JSON.stringify({
-            page: !!document.querySelector('#scinet-native-screen-root .screen-card'),
-            rootWidth: Math.round(rootRect.width),
-            cardWidth: Math.round(cardRect.width),
-            viewportWidth: window.innerWidth,
-            start: !!document.getElementById('screenStart'),
-            fullscreen: !!document.getElementById('screenFullscreen'),
-            video: !!document.getElementById('screenFrame'),
-            rtc: !!window.RTCPeerConnection
-          });
-        })();
-    """.trimIndent()
-
-    fun leaveFullscreen() {
-        val view = fullscreenCustomView
-        if (view != null) {
-            (view.parent as? android.view.ViewGroup)?.removeView(view)
-            fullscreenCustomView = null
-        }
-        fullscreenCallback?.onCustomViewHidden()
-        fullscreenCallback = null
-        activity?.let { hostActivity ->
-            hostActivity.requestedOrientation = originalOrientation
-            hostActivity.window.decorView.systemUiVisibility = originalSystemUiVisibility
-        }
+        )
     }
 
-    androidx.activity.compose.BackHandler(enabled = fullscreenCustomView != null) {
-        webView.evaluateJavascript("if (typeof leaveScreenFullscreen === 'function') leaveScreenFullscreen()", null)
+    // This local document contains only the video element and WebRTC signalling code.
+    // The complete screen-mirroring interface is rendered by native Jetpack Compose.
+    val mirrorHtml = remember {
+        """
+        <!doctype html>
+        <html><head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+          <style>
+            html, body { width:100%; height:100%; margin:0; padding:0; overflow:hidden; background:#05070a; }
+            video {
+              display:block; width:100%; height:100%; margin:0; padding:0;
+              background:#05070a; object-fit:contain; object-position:center center;
+              pointer-events:none;
+            }
+          </style>
+        </head><body>
+          <video id="desktop" autoplay playsinline muted></video>
+          <script>
+          (() => {
+            const video = document.getElementById('desktop');
+            let peer = null, mediaStream = null, active = false, generation = 0;
+
+            function reportState(value, message) {
+              try { window.SciNETNative.onState(value, String(message || '')); } catch (_) {}
+            }
+            function reportSize() {
+              if (video.videoWidth > 0 && video.videoHeight > 0) {
+                try { window.SciNETNative.onVideoSize(video.videoWidth, video.videoHeight); } catch (_) {}
+              }
+            }
+            video.addEventListener('loadedmetadata', reportSize);
+            video.addEventListener('resize', reportSize);
+
+            function waitForIce(connection) {
+              return new Promise(resolve => {
+                if (connection.iceGatheringState === 'complete') return resolve();
+                let finished = false;
+                const check = () => {
+                  if (connection.iceGatheringState === 'complete') finish();
+                };
+                const finish = () => {
+                  if (finished) return;
+                  finished = true;
+                  clearTimeout(timeout);
+                  connection.removeEventListener('icegatheringstatechange', check);
+                  resolve();
+                };
+                const timeout = setTimeout(finish, 5000);
+                connection.addEventListener('icegatheringstatechange', check);
+              });
+            }
+
+            async function start(selectedResolution, selectedFps) {
+              if (active) return;
+              active = true;
+              const token = ++generation;
+              reportState(true, 'Negotiating a local video session…');
+              try {
+                const connection = new RTCPeerConnection({ iceServers: [] });
+                peer = connection;
+                connection.addTransceiver('video', { direction: 'recvonly' });
+                connection.ontrack = event => {
+                  if (!active || token !== generation) return;
+                  mediaStream = event.streams[0] || new MediaStream([event.track]);
+                  video.srcObject = mediaStream;
+                  video.play().catch(error => reportState(true, 'Video ready · ' + error.message));
+                  reportState(true, 'Receiving desktop video…');
+                };
+                connection.onconnectionstatechange = () => {
+                  if (!active || token !== generation) return;
+                  if (connection.connectionState === 'connected') {
+                    reportState(true, 'Live desktop stream connected');
+                  } else if (connection.connectionState === 'failed' ||
+                             connection.connectionState === 'disconnected') {
+                    stop('Connection lost · press Start viewing to reconnect');
+                  }
+                };
+
+                const offer = await connection.createOffer();
+                await connection.setLocalDescription(offer);
+                await waitForIce(connection);
+                if (!active || token !== generation) { connection.close(); return; }
+
+                const response = await fetch('/api/screen/offer', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    sdp: connection.localDescription.sdp,
+                    type: connection.localDescription.type,
+                    resolution: selectedResolution,
+                    fps: Number(selectedFps)
+                  })
+                });
+                const answer = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(answer.error || 'Could not establish the desktop stream');
+                if (!active || token !== generation) { connection.close(); return; }
+                await connection.setRemoteDescription(answer);
+                reportState(true, 'Waiting for the first desktop frame…');
+              } catch (error) {
+                if (token === generation) {
+                  active = false;
+                  if (peer) { try { peer.close(); } catch (_) {} peer = null; }
+                  if (mediaStream) { mediaStream.getTracks().forEach(track => track.stop()); mediaStream = null; }
+                  video.pause();
+                  video.srcObject = null;
+                  reportState(false, 'Could not start screen stream: ' + (error.message || 'Unknown error'));
+                  fetch('/api/screen/stop', { method:'POST', keepalive:true }).catch(() => {});
+                }
+              }
+            }
+
+            async function stop(message) {
+              generation += 1;
+              active = false;
+              if (peer) { try { peer.ontrack = null; peer.close(); } catch (_) {} peer = null; }
+              if (mediaStream) { mediaStream.getTracks().forEach(track => track.stop()); mediaStream = null; }
+              video.pause();
+              video.srcObject = null;
+              reportState(false, message || 'Screen stream stopped');
+              fetch('/api/screen/stop', { method:'POST', keepalive:true }).catch(() => {});
+            }
+
+            async function configure(selectedResolution, selectedFps) {
+              const restart = active;
+              if (restart) await stop('Applying stream settings…');
+              if (restart) await start(selectedResolution, selectedFps);
+            }
+            window.SciNETMirror = { start, stop, configure };
+          })();
+          </script>
+        </body></html>
+        """.trimIndent()
     }
 
-    androidx.compose.runtime.DisposableEffect(webView, host) {
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.mediaPlaybackRequiresUserGesture = false
-        webView.settings.allowContentAccess = false
-        webView.setBackgroundColor(android.graphics.Color.rgb(10, 12, 15))
-        webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
-        webView.isVerticalScrollBarEnabled = false
-        webView.isHorizontalScrollBarEnabled = false
-        webView.webChromeClient = object : android.webkit.WebChromeClient() {
-            override fun onShowCustomView(
-                view: android.view.View?,
-                callback: android.webkit.WebChromeClient.CustomViewCallback?
-            ) {
-                if (view == null || callback == null || activity == null) {
-                    callback?.onCustomViewHidden()
-                    return
-                }
-                if (fullscreenCustomView != null) {
-                    callback.onCustomViewHidden()
-                    return
-                }
-                fullscreenCustomView = view
-                fullscreenCallback = callback
-                val decor = activity.window.decorView as android.view.ViewGroup
-                originalSystemUiVisibility = decor.systemUiVisibility
-                activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                decor.systemUiVisibility = (
+    val originalOrientation = remember(activity) {
+        activity?.requestedOrientation ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    val originalSystemUi = remember(activity) {
+        activity?.window?.decorView?.systemUiVisibility ?: 0
+    }
+
+    androidx.compose.runtime.DisposableEffect(activity) {
+        onDispose {
+            activity?.let {
+                it.requestedOrientation = originalOrientation
+                it.window.decorView.systemUiVisibility = originalSystemUi
+                it.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+    androidx.compose.runtime.SideEffect {
+        activity?.let {
+            if (fullscreen) {
+                it.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                it.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                it.window.decorView.systemUiVisibility = (
                     android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
                         or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                         or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
@@ -831,114 +709,288 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
                         or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                         or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                     )
-                (view.parent as? android.view.ViewGroup)?.removeView(view)
-                decor.addView(
-                    view,
-                    android.view.ViewGroup.LayoutParams(
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                )
-            }
-
-            override fun onHideCustomView() {
-                leaveFullscreen()
-            }
-
-            override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
-                val line = "Web control JS ${message.messageLevel()}: ${message.message()} (${message.sourceId()}:${message.lineNumber()})"
-                android.util.Log.d("SciNETMirrorWeb", line)
-                return true
+            } else {
+                it.requestedOrientation = originalOrientation
+                it.window.decorView.systemUiVisibility = originalSystemUi
+                it.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
         }
+    }
+
+    androidx.activity.compose.BackHandler(enabled = fullscreen) {
+        onFullscreenChanged(false)
+    }
+
+    androidx.compose.runtime.DisposableEffect(webView, host, bridge, mirrorHtml) {
+        webView.settings.javaScriptEnabled = true
+        webView.settings.domStorageEnabled = true
+        webView.settings.mediaPlaybackRequiresUserGesture = false
+        webView.settings.setSupportZoom(false)
+        webView.settings.builtInZoomControls = false
+        webView.settings.displayZoomControls = false
+        webView.settings.allowContentAccess = false
+        webView.setBackgroundColor(android.graphics.Color.BLACK)
+        webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
+        webView.isVerticalScrollBarEnabled = false
+        webView.isHorizontalScrollBarEnabled = false
+        webView.addJavascriptInterface(bridge, "SciNETNative")
         webView.webViewClient = object : android.webkit.WebViewClient() {
             override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
-                webView.evaluateJavascript(screenOnlyStyle) { result ->
-                    android.util.Log.i("SciNETMirrorWeb", "Embedded PC screen page: $result")
-                    pageReady = true
-                    pageError = ""
-                }
+                webReady = true
+                pageError = ""
             }
-
             override fun onReceivedError(
                 view: android.webkit.WebView?,
                 request: android.webkit.WebResourceRequest?,
                 error: android.webkit.WebResourceError?
             ) {
                 if (request?.isForMainFrame == true) {
-                    val detail = error?.description?.toString() ?: "Could not load the PC screen control page."
-                    pageError = detail
-                    android.util.Log.e("SciNETMirrorWeb", detail)
-                }
-            }
-
-            override fun onReceivedHttpError(
-                view: android.webkit.WebView?,
-                request: android.webkit.WebResourceRequest?,
-                errorResponse: android.webkit.WebResourceResponse?
-            ) {
-                if (request?.isForMainFrame == true) {
-                    val detail = "PC screen page returned HTTP ${errorResponse?.statusCode ?: "error"}."
-                    pageError = detail
-                    android.util.Log.e("SciNETMirrorWeb", detail)
+                    pageError = error?.description?.toString() ?: "Could not initialise the video surface."
+                    webReady = false
                 }
             }
         }
-
-        webView.loadUrl(host.trimEnd('/') + "/control")
-
+        webView.loadDataWithBaseURL(
+            SciNETApi.normalizeHost(host).trimEnd('/') + "/",
+            mirrorHtml,
+            "text/html",
+            "UTF-8",
+            null
+        )
         onDispose {
-            leaveFullscreen()
             try {
                 webView.evaluateJavascript(
-                    "if (typeof stopScreenStream === 'function') stopScreenStream('Leaving screen view')",
+                    "if (window.SciNETMirror) window.SciNETMirror.stop('Leaving screen view')",
                     null
                 )
                 webView.stopLoading()
+                webView.removeJavascriptInterface("SciNETNative")
                 webView.loadUrl("about:blank")
                 webView.destroy()
             } catch (_: Exception) { }
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(maxWidth * (9f / 16f) + 265.dp)
-                    .background(Color(0xFF0A0C0F))
-            ) {
-                androidx.compose.ui.viewinterop.AndroidView(
-                    factory = { _ -> webView },
-                    modifier = Modifier.fillMaxSize()
-                )
-                if (!pageReady && pageError.isBlank()) {
-                    Text(
-                        "LOADING SCREEN VIEWER…",
-                        color = Muted,
-                        fontSize = 10.sp,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                if (pageError.isNotBlank()) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .background(Color(0xEE0C0F13), RoundedCornerShape(8.dp))
-                            .padding(18.dp)
+    fun startStream() {
+        if (!webReady || streamActive) return
+        pageError = ""
+        webView.evaluateJavascript(
+            "if (window.SciNETMirror) window.SciNETMirror.start(" + JSONObject.quote(resolution) + ", " + fps + ")",
+            null
+        )
+    }
+    fun stopStream() {
+        webView.evaluateJavascript("if (window.SciNETMirror) window.SciNETMirror.stop('Screen stream stopped')", null)
+    }
+    fun setResolution(value: String) {
+        if (resolution == value) return
+        resolution = value
+        webView.evaluateJavascript(
+            "if (window.SciNETMirror) window.SciNETMirror.configure(" + JSONObject.quote(value) + ", " + fps + ")",
+            null
+        )
+    }
+    fun setFrameRate(value: Int) {
+        if (fps == value) return
+        fps = value
+        webView.evaluateJavascript(
+            "if (window.SciNETMirror) window.SciNETMirror.configure(" + JSONObject.quote(resolution) + ", " + value + ")",
+            null
+        )
+    }
+
+    suspend fun sendPointerPosition(point: androidx.compose.ui.geometry.Offset) {
+        SciNETApi.post(
+            host, "/api/control",
+            JSONObject().put("action", "mouse-position")
+                .put("x", point.x.toDouble()).put("y", point.y.toDouble())
+        )
+    }
+    fun sendMouseClick(button: String) {
+        scope.launch {
+            try {
+                SciNETApi.post(host, "/api/control", JSONObject().put("action", "mouse-click").put("button", button))
+            } catch (error: Exception) {
+                onMessage(error.message ?: "Could not send mouse click.", true)
+            }
+        }
+    }
+
+    val sourceAspect = if (videoWidth > 0 && videoHeight > 0) videoWidth.toFloat() / videoHeight else 16f / 9f
+    val statusLabel = if (hasVideo) "LIVE" else if (streamActive) "CONNECTING" else "OFF"
+    val statusColor = if (hasVideo) Good else if (streamActive) Color(0xFFE6B86A) else Muted
+
+    Column(
+        modifier = if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(if (fullscreen) 0.dp else 13.dp)
+    ) {
+        if (!fullscreen) {
+            PageHeading("REMOTE DISPLAY", "Screen mirroring", "A live, low-latency view of your Windows desktop.")
+            PanelCard {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    SectionHeading("LIVE DESKTOP", "PC screen")
+                    Row(
+                        Modifier.background(if (hasVideo) Color(0xFF153323) else Raised, RoundedCornerShape(50))
+                            .border(1.dp, if (hasVideo) Color(0xFF2D6846) else Edge, RoundedCornerShape(50))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text("PC SCREEN VIEWER UNAVAILABLE", color = Bad, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Text(pageError, color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
-                        OutlinedButton(onClick = {
-                            pageReady = false
-                            pageError = ""
-                            webView.reload()
-                        }) { Text("RELOAD VIEWER") }
+                        Box(Modifier.size(6.dp).background(statusColor, RoundedCornerShape(50)))
+                        Text(statusLabel, color = if (hasVideo) Good else Ink, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     }
                 }
+                Text("The full desktop is fitted into the viewer. The image is never stretched or cropped.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+            }
+        }
+
+        Box(
+            modifier = if (fullscreen) {
+                Modifier.fillMaxWidth().weight(1f).background(Color.Black)
+            } else {
+                Modifier.fillMaxWidth().aspectRatio(sourceAspect).clip(RoundedCornerShape(11.dp))
+                    .background(Color.Black).border(1.dp, Edge, RoundedCornerShape(11.dp))
+            }
+        ) {
+            androidx.compose.ui.viewinterop.AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+
+            if (!hasVideo) {
+                Column(
+                    Modifier.align(Alignment.Center).padding(24.dp)
+                        .background(Color(0xDD0C1117), RoundedCornerShape(12.dp))
+                        .border(1.dp, Edge, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 22.dp, vertical = 18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        if (pageError.isNotBlank()) "VIEWER UNAVAILABLE"
+                        else if (streamActive) "CONNECTING TO YOUR PC"
+                        else "DESKTOP IS NOT SHARED",
+                        color = if (pageError.isNotBlank()) Bad else Ink,
+                        fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp
+                    )
+                    Text(
+                        when {
+                            pageError.isNotBlank() -> pageError
+                            streamActive -> statusMessage
+                            !webReady -> "Preparing the video receiver…"
+                            else -> "Start viewing to open a live stream from your PC."
+                        },
+                        color = Muted, fontSize = 10.sp, lineHeight = 15.sp
+                    )
+                }
+            }
+
+            if (fullscreen && hasVideo) {
+                Box(
+                    Modifier.fillMaxSize()
+                        .pointerInput(videoWidth, videoHeight) {
+                            detectTapGestures { position ->
+                                val mapped = mapViewerTouch(position, size.width.toFloat(), size.height.toFloat(), videoWidth, videoHeight)
+                                if (mapped != null) scope.launch {
+                                    try {
+                                        sendPointerPosition(mapped)
+                                        SciNETApi.post(host, "/api/control", JSONObject().put("action", "mouse-click").put("button", "left"))
+                                    } catch (error: Exception) {
+                                        onMessage(error.message ?: "Could not send desktop click.", true)
+                                    }
+                                }
+                            }
+                        }
+                        .pointerInput(videoWidth, videoHeight) {
+                            detectDragGestures(
+                                onDragStart = { position ->
+                                    val mapped = mapViewerTouch(position, size.width.toFloat(), size.height.toFloat(), videoWidth, videoHeight)
+                                    if (mapped != null) {
+                                        val now = android.os.SystemClock.uptimeMillis()
+                                        if (now - lastPointerSentAt >= 25L) {
+                                            lastPointerSentAt = now
+                                            scope.launch { runCatching { sendPointerPosition(mapped) } }
+                                        }
+                                    }
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val mapped = mapViewerTouch(change.position, size.width.toFloat(), size.height.toFloat(), videoWidth, videoHeight)
+                                    if (mapped != null) {
+                                        val now = android.os.SystemClock.uptimeMillis()
+                                        if (now - lastPointerSentAt >= 25L) {
+                                            lastPointerSentAt = now
+                                            scope.launch { runCatching { sendPointerPosition(mapped) } }
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                )
+                Row(
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(color = Color(0xCC101820), shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x553F596B))) {
+                        Text("SCINET  /  LIVE DESKTOP", Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                            color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { onFullscreenChanged(false) },
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xCC101820), contentColor = Color.White),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x665A6875)),
+                        contentPadding = PaddingValues(horizontal = 13.dp, vertical = 7.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) { Text("EXIT FULLSCREEN", fontSize = 9.sp, letterSpacing = .5.sp) }
+                }
+                Row(
+                    Modifier.align(Alignment.BottomCenter).padding(14.dp)
+                        .background(Color(0xDD101820), RoundedCornerShape(12.dp))
+                        .border(1.dp, Color(0x553F596B), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 5.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    TextButton(onClick = { sendMouseClick("left") }) { Text("LEFT CLICK", color = Color.White, fontSize = 9.sp) }
+                    TextButton(onClick = { sendMouseClick("right") }) { Text("RIGHT CLICK", color = Color.White, fontSize = 9.sp) }
+                    TextButton(onClick = { stopStream() }) { Text("STOP", color = Bad, fontSize = 9.sp) }
+                }
+            }
+        }
+
+        if (!fullscreen) {
+            Text(statusMessage, color = if (hasVideo) Good else Muted, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 2.dp))
+            PanelCard {
+                SectionHeading("STREAM SETTINGS", "Video quality")
+                Text("Higher settings use more network bandwidth and PC processing power.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+                Text("RESOLUTION", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    listOf("480p", "720p", "1080p").forEach { value ->
+                        FilterChip(selected = resolution == value, onClick = { setResolution(value) }, label = { Text(value, fontSize = 11.sp) })
+                    }
+                }
+                Text("FRAME RATE", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    listOf(15, 24, 30).forEach { value ->
+                        FilterChip(selected = fps == value, onClick = { setFrameRate(value) }, label = { Text("$value FPS", fontSize = 11.sp) })
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    if (streamActive) {
+                        OutlinedButton(
+                            onClick = { stopStream() }, modifier = Modifier.fillMaxWidth().height(47.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Edge), shape = RoundedCornerShape(8.dp)
+                        ) { Text("STOP VIEWING", fontSize = 10.sp, letterSpacing = .7.sp) }
+                    } else {
+                        PrimaryButton("START VIEWING", webReady) { startStream() }
+                    }
+                }
+                OutlinedButton(
+                    onClick = { onFullscreenChanged(true) }, enabled = hasVideo,
+                    modifier = Modifier.weight(1f).height(47.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Edge), shape = RoundedCornerShape(8.dp)
+                ) { Text("⛶  FULLSCREEN", fontSize = 10.sp, letterSpacing = .5.sp) }
             }
         }
     }
