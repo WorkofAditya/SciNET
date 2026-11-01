@@ -257,19 +257,27 @@ private fun NotificationToast(
         enter = fadeIn() + slideInVertically { it / 2 },
         exit = fadeOut() + slideOutVertically { it / 2 }
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.Center
+        // The full-width Box is transparent; only the compact pill paints a background.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.Transparent)
+                .padding(horizontal = 16.dp, vertical = 5.dp),
+            contentAlignment = Alignment.Center
         ) {
             Surface(
-                modifier = Modifier.animateContentSize().clickable(onClick = onClick),
+                modifier = Modifier
+                    .wrapContentWidth()
+                    .animateContentSize()
+                    .clickable(onClick = onClick),
                 color = if (isError) Color(0xFF4A2024) else Color(0xFF173D29),
                 contentColor = Color(0xFFF2F7F3),
                 shape = RoundedCornerShape(50),
-                shadowElevation = 8.dp
+                shadowElevation = 6.dp
             ) {
                 Row(
-                    Modifier.defaultMinSize(minWidth = 44.dp, minHeight = 42.dp)
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = 44.dp, minHeight = 42.dp)
                         .padding(horizontal = if (expanded) 15.dp else 0.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
