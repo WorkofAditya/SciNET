@@ -502,121 +502,18 @@ internal fun ScreenMirrorScreen(
     val activity = context as? android.app.Activity
     val scope = rememberCoroutineScope()
 
-    var webReady by remember { mutableStateOf(false) }
-    var pageError by remember { mutableStateOf("") }
-    var streamActive by remember { mutableStateOf(false) }
-    var hasVideo by remember { mutableStateOf(false) }
-    var statusLabel by remember { mutableStateOf("OFF") }
-    var statusMessage by remember { mutableStateOf("Screen stream is off") }
-    var videoWidth by remember { mutableIntStateOf(0) }
-    var videoHeight by remember { mutableIntStateOf(0) }
-    var resolution by remember { mutableStateOf("720p") }
-    var fps by remember { mutableIntStateOf(30) }
+    var streamJob by remember(host) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var frameBitmap by remember(host) { mutableStateOf<Bitmap?>(null) }
+    var pageError by remember(host) { mutableStateOf("") }
+    var streamActive by remember(host) { mutableStateOf(false) }
+    var hasVideo by remember(host) { mutableStateOf(false) }
+    var statusLabel by remember(host) { mutableStateOf("OFF") }
+    var statusMessage by remember(host) { mutableStateOf("Screen stream is off") }
+    var videoWidth by remember(host) { mutableIntStateOf(0) }
+    var videoHeight by remember(host) { mutableIntStateOf(0) }
+    var resolution by remember(host) { mutableStateOf("720p") }
+    var fps by remember(host) { mutableIntStateOf(24) }
     var lastPointerSentAt by remember { mutableStateOf(0L) }
-    var lastReportedError by remember { mutableStateOf("") }
-
-    val webView = remember(context, host) { android.webkit.WebView(context) }
-    val bridge = remember(webView, host) {
-        ScreenMirrorJavascriptBridge { active, state, message, width, height ->
-            streamActive = active
-            statusLabel = state
-            statusMessage = message
-            if (width > 0 && height > 0) {
-                videoWidth = width
-                videoHeight = height
-                hasVideo = true
-            } else if (!active) {
-                videoWidth = 0
-                videoHeight = 0
-                hasVideo = false
-            }
-            val isError = message.contains("could not", true) ||
-                message.contains("failed", true) ||
-                message.contains("connection lost", true)
-            if (isError && message != lastReportedError) {
-                lastReportedError = message
-                onMessage(message, true)
-            }
-            if (!isError) lastReportedError = ""
-        }
-    }
-
-    // Keep the exact legacy /control WebRTC client, which already negotiates and renders the stream.
-    // Only its video element is mounted here. All visible controls remain native Compose.
-    val nativeVideoSurfaceScript = """
-        (() => {
-          const existingCard = document.querySelector('.screen-card');
-          const viewer = document.getElementById('screenViewer');
-          const frame = document.getElementById('screenFrame');
-          const start = document.getElementById('screenStart');
-          const stop = document.getElementById('screenStop');
-          const resolution = document.getElementById('screenResolution');
-          const fps = document.getElementById('screenFps');
-          const state = document.getElementById('screenState');
-          const message = document.getElementById('screenMessage');
-
-          // Keep the original renderer's complete DOM subtree intact. The old client holds
-          // references to these elements and relies on their original parent/style lifecycle.
-          if (!existingCard || !viewer || !frame || !start || !stop ||
-              !resolution || !fps || !state || !message ||
-              typeof window.startScreenStream !== 'function' ||
-              typeof window.stopScreenStream !== 'function') return false;
-
-          let root = document.getElementById('scinet-native-screen-root');
-          if (!root) {
-            root = document.createElement('div');
-            root.id = 'scinet-native-screen-root';
-            const shell = document.querySelector('.app-shell');
-            if (existingCard.parentNode) existingCard.parentNode.removeChild(existingCard);
-            if (shell) shell.style.display = 'none';
-            document.body.appendChild(root);
-            root.appendChild(existingCard);
-          }
-
-          if (!document.getElementById('scinet-native-screen-surface-style')) {
-            const css = document.createElement('style');
-            css.id = 'scinet-native-screen-surface-style';
-            css.textContent =
-              'html,body{display:block!important;width:100%!important;height:100%!important;min-height:100%!important;min-width:0!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#05070a!important;}' +
-              'body>*:not(#scinet-native-screen-root){display:none!important;}' +
-              '#scinet-native-screen-root{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#05070a!important;}' +
-              '#scinet-native-screen-root .screen-card{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:none!important;margin:0!important;padding:0!important;gap:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;overflow:hidden!important;}' +
-              '#scinet-native-screen-root .screen-card>.section-head,' +
-              '#scinet-native-screen-root .screen-stream-options,' +
-              '#scinet-native-screen-root .screen-actions,' +
-              '#scinet-native-screen-root .screen-placeholder,' +
-              '#scinet-native-screen-root .screen-live-indicator,' +
-              '#scinet-native-screen-root #screenTouchControls,' +
-              '#scinet-native-screen-root .control-note{display:none!important;}' +
-              '#scinet-native-screen-root .screen-viewer{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;aspect-ratio:auto!important;overflow:hidden!important;border:0!important;border-radius:0!important;box-shadow:none!important;background:#05070a!important;}' +
-              '#scinet-native-screen-root .screen-viewer video{display:block!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;object-fit:contain!important;object-position:center center!important;background:#05070a!important;}' +
-              '#scinet-native-screen-root .screen-viewer video[hidden]{display:none!important;}';
-            document.head.appendChild(css);
-          }
-
-          if (!window.__scinetNativeStatusTimer) {
-            window.__scinetNativeStatusTimer = setInterval(() => {
-              const currentState = document.getElementById('screenState');
-              const currentMessage = document.getElementById('screenMessage');
-              const currentFrame = document.getElementById('screenFrame');
-              if (!currentState || !currentMessage || !currentFrame) return;
-
-              const label = (currentState.textContent || 'OFF').trim();
-              const active = label.toUpperCase() === 'LIVE';
-              try {
-                window.SciNETNative.onMirrorState(
-                  active,
-                  label,
-                  (currentMessage.textContent || '').trim(),
-                  currentFrame.videoWidth || 0,
-                  currentFrame.videoHeight || 0
-                );
-              } catch (_) {}
-            }, 350);
-          }
-          return true;
-        })();
-    """.trimIndent()
 
     val originalOrientation = remember(activity) {
         activity?.requestedOrientation ?: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
@@ -632,6 +529,11 @@ internal fun ScreenMirrorScreen(
                 it.window.decorView.systemUiVisibility = originalSystemUi
                 it.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(activity, host) {
+        onDispose {
+            streamJob?.cancel()
         }
     }
     androidx.compose.runtime.SideEffect {
@@ -659,111 +561,61 @@ internal fun ScreenMirrorScreen(
         onFullscreenChanged(false)
     }
 
-    androidx.compose.runtime.DisposableEffect(webView, host, bridge) {
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.mediaPlaybackRequiresUserGesture = false
-        webView.settings.allowContentAccess = false
-        webView.settings.setSupportZoom(false)
-        webView.settings.builtInZoomControls = false
-        webView.settings.displayZoomControls = false
-        webView.setBackgroundColor(android.graphics.Color.BLACK)
-        webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
-        webView.isVerticalScrollBarEnabled = false
-        webView.isHorizontalScrollBarEnabled = false
-        webView.addJavascriptInterface(bridge, "SciNETNative")
-        webView.webChromeClient = object : android.webkit.WebChromeClient() {
-            override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
-                android.util.Log.d(
-                    "SciNETMirrorWeb",
-                    "Control JS: " + message.message() + " (" + message.sourceId() + ":" + message.lineNumber() + ")"
-                )
-                return true
-            }
-        }
-        webView.webViewClient = object : android.webkit.WebViewClient() {
-            override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
-                webView.evaluateJavascript(nativeVideoSurfaceScript) { result ->
-                    if (result == "true") {
-                        webReady = true
-                        pageError = ""
-                    } else {
-                        webReady = false
-                        pageError = "The PC control page did not initialise its original WebRTC screen viewer."
-                    }
-                }
-            }
-
-            override fun onReceivedError(
-                view: android.webkit.WebView?,
-                request: android.webkit.WebResourceRequest?,
-                error: android.webkit.WebResourceError?
-            ) {
-                if (request?.isForMainFrame == true) {
-                    pageError = error?.description?.toString() ?: "Could not load the PC screen viewer."
-                    webReady = false
-                }
-            }
-
-            override fun onReceivedHttpError(
-                view: android.webkit.WebView?,
-                request: android.webkit.WebResourceRequest?,
-                errorResponse: android.webkit.WebResourceResponse?
-            ) {
-                if (request?.isForMainFrame == true) {
-                    pageError = "PC screen page returned HTTP " + (errorResponse?.statusCode ?: "error") + "."
-                    webReady = false
-                }
-            }
-        }
-        webView.loadUrl(SciNETApi.normalizeHost(host).trimEnd('/') + "/control")
-
-        onDispose {
-            try {
-                webView.evaluateJavascript(
-                    "if (typeof stopScreenStream === 'function') stopScreenStream('Leaving screen view');" +
-                        "if (window.__scinetNativeStatusTimer) clearInterval(window.__scinetNativeStatusTimer);",
-                    null
-                )
-                webView.stopLoading()
-                webView.removeJavascriptInterface("SciNETNative")
-                webView.loadUrl("about:blank")
-                webView.destroy()
-            } catch (_: Exception) { }
-        }
-    }
-
     fun startStream() {
-        if (!webReady || streamActive) return
+        if (streamJob?.isActive == true) return
         pageError = ""
-        statusMessage = "Negotiating the PC screen stream…"
-        webView.evaluateJavascript(
-            "if (typeof startScreenStream === 'function') document.getElementById('screenStart').click();",
-            null
-        )
+        streamActive = true
+        statusLabel = "CONNECTING"
+        statusMessage = "Connecting directly to the PC desktop…"
+
+        streamJob = scope.launch {
+            try {
+                ScreenStreamClient.receive(host, resolution, fps) { bitmap ->
+                    frameBitmap = bitmap
+                    videoWidth = bitmap.width
+                    videoHeight = bitmap.height
+                    hasVideo = true
+                    statusLabel = "LIVE"
+                    statusMessage = "Live desktop · ${bitmap.width} × ${bitmap.height} · $fps FPS target"
+                }
+                if (streamActive) {
+                    streamActive = false
+                    statusLabel = "OFF"
+                    statusMessage = "The PC screen stream has ended."
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                // Stop and screen navigation cancel the HTTP stream intentionally.
+            } catch (error: Exception) {
+                if (streamActive) {
+                    streamActive = false
+                    statusLabel = "ERROR"
+                    pageError = error.message ?: "Could not read the PC screen stream."
+                    statusMessage = pageError
+                    onMessage(pageError, true)
+                }
+            }
+        }
     }
 
     fun stopStream() {
-        webView.evaluateJavascript(
-            "if (typeof stopScreenStream === 'function') document.getElementById('screenStop').click();",
-            null
-        )
+        streamJob?.cancel()
+        streamJob = null
+        streamActive = false
+        hasVideo = false
+        frameBitmap = null
+        videoWidth = 0
+        videoHeight = 0
+        pageError = ""
+        statusLabel = "OFF"
+        statusMessage = "Screen stream is off"
     }
 
     fun applySettings(newResolution: String = resolution, newFps: Int = fps) {
+        val shouldRestart = streamActive
+        if (shouldRestart) stopStream()
         resolution = newResolution
         fps = newFps
-        webView.evaluateJavascript(
-            "(() => {" +
-                "const r=document.getElementById('screenResolution');" +
-                "const f=document.getElementById('screenFps');" +
-                "if(!r||!f)return;" +
-                "r.value=" + JSONObject.quote(newResolution) + ";" +
-                "f.value=" + newFps + ";" +
-                "if(typeof applyLiveScreenSettings==='function')applyLiveScreenSettings();" +
-            "})()",
-            null
-        )
+        if (shouldRestart) startStream()
     }
 
     suspend fun sendPointerPosition(point: androidx.compose.ui.geometry.Offset) {
@@ -796,7 +648,7 @@ internal fun ScreenMirrorScreen(
         verticalArrangement = Arrangement.spacedBy(if (fullscreen) 0.dp else 13.dp)
     ) {
         if (!fullscreen) {
-            PageHeading("REMOTE DISPLAY", "Screen mirroring", "A live, low-latency view of your Windows desktop.")
+            PageHeading("REMOTE DISPLAY", "Screen mirroring", "A live view of your Windows desktop, streamed directly by SciNET.")
             PanelCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     SectionHeading("LIVE DESKTOP", "PC screen")
@@ -811,7 +663,7 @@ internal fun ScreenMirrorScreen(
                         Text(statusLabel, color = if (hasVideo) Good else Ink, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     }
                 }
-                Text("The entire PC display is fitted inside the viewer. No desktop edges are cropped.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+                Text("The complete PC display is fitted inside the viewer without cropping.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
             }
         }
 
@@ -823,7 +675,15 @@ internal fun ScreenMirrorScreen(
                     .background(Color.Black).border(1.dp, Edge, RoundedCornerShape(11.dp))
             }
         ) {
-            androidx.compose.ui.viewinterop.AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+            val currentFrame = frameBitmap
+            if (currentFrame != null) {
+                Image(
+                    bitmap = currentFrame.asImageBitmap(),
+                    contentDescription = "Live PC desktop",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                )
+            }
 
             if (!hasVideo) {
                 Column(
@@ -835,7 +695,7 @@ internal fun ScreenMirrorScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        if (pageError.isNotBlank()) "VIEWER UNAVAILABLE"
+                        if (pageError.isNotBlank()) "STREAM UNAVAILABLE"
                         else if (streamActive) "CONNECTING TO YOUR PC"
                         else "DESKTOP IS NOT SHARED",
                         color = if (pageError.isNotBlank()) Bad else Ink,
@@ -845,17 +705,12 @@ internal fun ScreenMirrorScreen(
                         when {
                             pageError.isNotBlank() -> pageError
                             streamActive -> statusMessage
-                            !webReady -> "Preparing the original PC video receiver…"
-                            else -> "Start viewing to open a live stream from your PC."
+                            else -> "Start viewing to receive the desktop frames from your PC."
                         },
                         color = Muted, fontSize = 10.sp, lineHeight = 15.sp
                     )
                     if (pageError.isNotBlank()) {
-                        OutlinedButton(onClick = {
-                            webReady = false
-                            pageError = ""
-                            webView.reload()
-                        }) { Text("RELOAD VIEWER") }
+                        OutlinedButton(onClick = { startStream() }) { Text("TRY AGAIN") }
                     }
                 }
             }
@@ -961,7 +816,7 @@ internal fun ScreenMirrorScreen(
                             border = androidx.compose.foundation.BorderStroke(1.dp, Edge), shape = RoundedCornerShape(8.dp)
                         ) { Text("STOP VIEWING", fontSize = 10.sp, letterSpacing = .7.sp) }
                     } else {
-                        PrimaryButton("START VIEWING", webReady) { startStream() }
+                        PrimaryButton("START VIEWING", true) { startStream() }
                     }
                 }
                 OutlinedButton(
