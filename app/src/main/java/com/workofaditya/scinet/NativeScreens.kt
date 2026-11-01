@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -179,8 +180,6 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
                 }
                 HorizontalDivider(color = Edge)
             }
-            Text("HOST ADDRESS", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
-            Text(host, fontSize = 11.sp)
         }
         PanelCard {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -221,6 +220,9 @@ internal fun ControlScreen(host: String, onAction: (String, Map<String, Any?>) -
     var typedText by remember { mutableStateOf("") }
     val modifiers = remember { mutableStateListOf<String>() }
     var pendingPower by remember { mutableStateOf("") }
+    val padBackground by animateColorAsState(if (scrollMode) Color(0xFF17251C) else Color(0xFF0B0E12), label = "touchpad background")
+    val padBorder by animateColorAsState(if (scrollMode) Color(0xFF4D805C) else Edge, label = "touchpad border")
+    val padAccent by animateColorAsState(if (scrollMode) Color(0xFFB9E6C4) else Color(0xFF9BA5B1), label = "touchpad accent")
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PageHeading("REMOTE ACCESS", "PC Control", "Control media, input and power on the SciNET host.")
         PanelCard {
@@ -246,8 +248,8 @@ internal fun ControlScreen(host: String, onAction: (String, Map<String, Any?>) -
         PanelCard {
             SectionHeading("INPUT", "Touchpad")
             Box(
-                Modifier.fillMaxWidth().height(205.dp).background(Color(0xFF0B0E12), RoundedCornerShape(8.dp))
-                    .border(1.dp, Edge, RoundedCornerShape(8.dp))
+                Modifier.fillMaxWidth().height(205.dp).background(padBackground, RoundedCornerShape(8.dp))
+                    .border(1.dp, padBorder, RoundedCornerShape(8.dp))
                     .pointerInput(scrollMode) {
                         detectDragGestures { change, drag ->
                             change.consume()
@@ -260,18 +262,18 @@ internal fun ControlScreen(host: String, onAction: (String, Map<String, Any?>) -
                     },
                 contentAlignment = Alignment.Center
             ) {
-                Box(Modifier.fillMaxHeight().width(1.dp).background(Edge))
+                Box(Modifier.fillMaxHeight().width(1.dp).background(padBorder))
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Edge))
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text(if (scrollMode) "↕" else "＋", color = Color(0xFF9BA5B1), fontSize = 28.sp)
-                    Text(if (scrollMode) "SCROLL MODE · SWIPE UP / DOWN" else "TOUCH & DRAG TO MOVE", color = Muted, fontSize = 8.sp, letterSpacing = .6.sp)
+                    Text(if (scrollMode) "↕" else "＋", color = padAccent, fontSize = 28.sp)
+                    Text(if (scrollMode) "SCROLL MODE · SWIPE UP / DOWN" else "TOUCH & DRAG TO MOVE", color = if (scrollMode) Color(0xFFB9E6C4) else Muted, fontSize = 8.sp, letterSpacing = .6.sp)
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = { scrollMode = !scrollMode }, modifier = Modifier.weight(1f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, if (scrollMode) Accent else Edge),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = if (scrollMode) Accent else Ink),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (scrollMode) Color(0xFF4D805C) else Edge),
+                    colors = ButtonDefaults.outlinedButtonColors(containerColor = if (scrollMode) Color(0xFF17251C) else Color.Transparent, contentColor = if (scrollMode) Color(0xFFB9E6C4) else Ink),
                     shape = RoundedCornerShape(7.dp)
                 ) { Text("↕ SCROLL " + if (scrollMode) "ON" else "OFF", fontSize = 10.sp) }
                 OutlinedButton(onClick = { onAction("mouse-click", mapOf("button" to "right")) }, modifier = Modifier.weight(1f), border = androidx.compose.foundation.BorderStroke(1.dp, Edge), shape = RoundedCornerShape(7.dp)) {
@@ -285,20 +287,43 @@ internal fun ControlScreen(host: String, onAction: (String, Map<String, Any?>) -
             var lastSentText by remember { mutableStateOf("") }
             OutlinedTextField(value = typedText, onValueChange = { typedText = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Type here. Text is sent live…") }, minLines = 2, colors = fieldColors())
             LaunchedEffect(typedText) {
-                kotlinx.coroutines.delay(160)
+                kotlinx.coroutines.delay(120)
                 val old = lastSentText
                 val next = typedText.take(4000)
                 if (next != old) {
                     var common = 0
                     while (common < old.length && common < next.length && old[common] == next[common]) common++
                     val removed = old.length - common
-                    if (removed > 0) onAction("key", mapOf("key" to "backspace", "repeat" to removed.coerceAtMost(100), "modifiers" to emptyList<String>()))
+                    val activeModifiers = modifiers.toList()
+                    if (removed > 0) {
+                        repeat(removed) { index ->
+                            onAction("key", mapOf(
+                                "key" to "backspace",
+                                "modifiers" to if (index == 0) activeModifiers else emptyList<String>()
+                            ))
+                        }
+                        if (activeModifiers.isNotEmpty()) modifiers.clear()
+                    }
                     val added = next.substring(common)
-                    if (added.isNotEmpty()) onAction("type", mapOf("text" to added))
+                    if (added.isNotEmpty()) {
+                        if (activeModifiers.isNotEmpty()) {
+                            val first = added.first()
+                            val key = first.lowercaseChar().toString()
+                            if (key.matches(Regex("[a-z0-9]"))) {
+                                onAction("key", mapOf("key" to key, "modifiers" to activeModifiers))
+                            } else {
+                                onAction("type", mapOf("text" to first.toString()))
+                            }
+                            modifiers.clear()
+                            if (added.length > 1) onAction("type", mapOf("text" to added.drop(1)))
+                        } else {
+                            onAction("type", mapOf("text" to added))
+                        }
+                    }
                     lastSentText = next
                 }
             }
-            Text("Text is sent automatically as you type. Select modifiers, then tap a special key.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+            Text("Text is sent automatically as you type. Select a modifier, then type one key for a shortcut; it resets after that key.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 listOf("ctrl" to "CTRL", "alt" to "ALT", "shift" to "SHIFT", "meta" to "WIN").forEach { (key, label) ->
                     val active = modifiers.contains(key)
@@ -311,8 +336,25 @@ internal fun ControlScreen(host: String, onAction: (String, Map<String, Any?>) -
                     ) { Text(label, fontSize = 9.sp) }
                 }
             }
-            val keys = listOf("esc", "tab", "enter", "backspace", "delete", "up", "left", "down", "right", "home", "end", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12")
+            val keys = listOf("esc", "tab", "enter", "backspace", "delete", "up", "left", "down", "right", "home", "end")
             keys.chunked(4).forEach { group ->
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    group.forEach { key ->
+                        OutlinedButton(
+                            onClick = { onAction("key", mapOf("key" to key, "modifiers" to modifiers.toList())); modifiers.clear() },
+                            modifier = Modifier.weight(1f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
+                            contentPadding = PaddingValues(horizontal = 1.dp, vertical = 3.dp)
+                        ) { Text(key.uppercase(), fontSize = 9.sp) }
+                    }
+                    repeat(4 - group.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("FUNCTION KEYS", color = Muted, fontSize = 9.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.Bold)
+                Text("F1–F12", color = Muted, fontSize = 9.sp)
+            }
+            (1..12).map { "f$it" }.chunked(4).forEach { group ->
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     group.forEach { key ->
                         OutlinedButton(
