@@ -906,7 +906,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(maxWidth * (9f / 16f) + 245.dp)
+                    .height(maxWidth * (9f / 16f) + 265.dp)
                     .background(Color(0xFF0A0C0F))
             ) {
                 androidx.compose.ui.viewinterop.AndroidView(
