@@ -674,6 +674,71 @@ async def pwa_manifest(): return FileResponse(WEB_DIR / "manifest.webmanifest", 
 async def service_worker():
     return FileResponse(WEB_DIR / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
 
+def _send_windows_key(vk_code, down):
+    """Inject a physical-style keyboard event using Windows SendInput scan codes."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.MapVirtualKeyW.argtypes = (ctypes.c_uint, ctypes.c_uint)
+    user32.MapVirtualKeyW.restype = ctypes.c_uint
+    # MAPVK_VK_TO_VSC_EX preserves the extended-key prefix (0xE0/0xE1).
+    scan_code = int(user32.MapVirtualKeyW(int(vk_code), 4))
+    if not scan_code:
+        raise OSError("Windows could not map the requested keyboard key.")
+
+    flags = 0x0008  # KEYEVENTF_SCANCODE
+    if scan_code & 0xFF00:
+        flags |= 0x0001  # KEYEVENTF_EXTENDEDKEY
+    if not down:
+        flags |= 0x0002  # KEYEVENTF_KEYUP
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.c_uint16),
+            ("wScan", ctypes.c_uint16),
+            ("dwFlags", ctypes.c_uint32),
+            ("time", ctypes.c_uint32),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", ctypes.c_int32),
+            ("dy", ctypes.c_int32),
+            ("mouseData", ctypes.c_uint32),
+            ("dwFlags", ctypes.c_uint32),
+            ("time", ctypes.c_uint32),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", ctypes.c_uint32),
+            ("wParamL", ctypes.c_uint16),
+            ("wParamH", ctypes.c_uint16),
+        ]
+
+    class INPUTUNION(ctypes.Union):
+        _fields_ = [
+            ("ki", KEYBDINPUT),
+            ("mi", MOUSEINPUT),
+            ("hi", HARDWAREINPUT),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_uint32), ("union", INPUTUNION)]
+
+    packet = INPUT()
+    packet.type = 1  # INPUT_KEYBOARD
+    packet.union.ki = KEYBDINPUT(0, scan_code & 0xFF, flags, 0, 0)
+
+    user32.SendInput.argtypes = (ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int)
+    user32.SendInput.restype = ctypes.c_uint
+    sent = user32.SendInput(1, ctypes.byref(packet), ctypes.sizeof(INPUT))
+    if sent != 1:
+        error_code = ctypes.get_last_error()
+        raise OSError(error_code, "Windows rejected the keyboard input event.")
+    return True
+
+
 @app.post("/api/control")
 async def control_host(request: Request):
     client = request.client
@@ -699,8 +764,8 @@ async def control_host(request: Request):
     }
     if action in media_keys:
         key = media_keys[action]
-        user32.keybd_event(key, 0, 0, 0)
-        user32.keybd_event(key, 0, 2, 0)
+        _send_windows_key(key, True)
+        _send_windows_key(key, False)
         log_event(f"Remote control: {action}", "control")
         return {"ok": True, "action": action}
     modifier_codes = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "meta": 0x5B}
@@ -723,7 +788,7 @@ async def control_host(request: Request):
         flags = 0x0001 if key_name == "meta" else 0
         if not down:
             flags |= 0x0002
-        user32.keybd_event(modifier_codes[key_name], 0, flags, 0)
+        _send_windows_key(modifier_codes[key_name], down)
         return {"ok": True, "action": f"{key_name}-{'down' if down else 'up'}"}
     if action == "key":
         key_name = str(data.get("key") or "").lower()
@@ -739,18 +804,18 @@ async def control_host(request: Request):
                 # The Windows logo key is an extended key; set this flag
                 # for both key-down and key-up so Win+R / Win+E reach the shell.
                 flags = 0x0001 if name == "meta" else 0
-                user32.keybd_event(code, 0, flags, 0)
-                temporary.append((code, flags))
+                _send_windows_key(code, True)
+                temporary.append(code)
         code = key_codes[key_name]
         try:
             repeat_count = max(1, min(100, int(data.get("repeat", 1))))
         except (TypeError, ValueError):
             repeat_count = 1
         for _ in range(repeat_count):
-            user32.keybd_event(code, 0, 0, 0)
-            user32.keybd_event(code, 0, 2, 0)
-        for code, flags in reversed(temporary):
-            user32.keybd_event(code, 0, flags | 0x0002, 0)
+            _send_windows_key(code, True)
+            _send_windows_key(code, False)
+        for modifier_code in reversed(temporary):
+            _send_windows_key(modifier_code, False)
         log_event(f"Remote key: {key_name}", "control")
         return {"ok": True, "action": key_name, "repeat": repeat_count}
     if action == "key-hold":
@@ -758,7 +823,8 @@ async def control_host(request: Request):
         if key_name not in key_codes:
             return JSONResponse({"error": "Unsupported held key"}, status_code=400)
         down = bool(data.get("down"))
-        user32.keybd_event(key_codes[key_name], 0, 0 if down else 0x0002, 0)
+        _send_windows_key(key_codes[key_name], down)
+        log_event(f"Controller key: {key_name} {'down' if down else 'up'}", "control")
         return {"ok": True, "action": f"{key_name}-{'down' if down else 'up'}"}
     if action == "type":
         text_to_type = str(data.get("text") or "")[:4000]
