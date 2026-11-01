@@ -79,7 +79,7 @@ private fun SciNETApp() {
     }
     LaunchedEffect(noticeVersion, noticeExpanded) {
         if (notice.isNotBlank()) {
-            delay(if (noticeExpanded) 6000 else 3500)
+            delay(if (noticeExpanded) 8000 else if (noticeBad) 5000 else 2500)
             noticeVisible = false
             noticeExpanded = false
         }
