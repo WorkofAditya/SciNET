@@ -513,17 +513,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
               box-sizing: border-box !important;
             }
             .screen-card > .section-head {
-              display: flex !important;
-              align-items: center !important;
-              justify-content: space-between !important;
-              margin: 0 0 12px !important;
-              padding: 0 1px !important;
-            }
-            .screen-card > .section-head h2 {
-              margin: 3px 0 0 !important;
-              font-size: 17px !important;
-              line-height: 1.25 !important;
-              letter-spacing: -.02em !important;
+              display: none !important;
             }
             .screen-card > .control-note {
               display: none !important;
@@ -771,7 +761,7 @@ internal fun ScreenMirrorScreen(host: String, onMessage: (String, Boolean) -> Un
         BoxWithConstraints(
             Modifier
                 .fillMaxWidth()
-                .height(maxWidth * (9f / 16f) + 160.dp)
+                .height(maxWidth * (9f / 16f) + 148.dp)
                 .background(Color(0xFF0A0C0F))
         ) {
             androidx.compose.ui.viewinterop.AndroidView(
