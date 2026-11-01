@@ -1,10 +1,9 @@
 package com.workofaditya.scinet
 
 import android.content.Context
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.webrtc.DataChannel
@@ -25,19 +24,28 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
- * Receives the host's existing WebRTC offer/answer stream. No screenshots are polled over HTTP.
- * All SDP exchange and host-side capture remain handled by SciNET's Python server.
+ * Native WebRTC receiver for SciNET's continuously captured Windows desktop video track.
+ *
+ * This deliberately follows the browser client's negotiation sequence: create a receive-only
+ * offer, set it locally, allow ICE gathering a bounded window, then submit the SDP even when
+ * the platform has not reported ICE gathering COMPLETE. The host API uses non-trickle SDP too.
  */
-internal class NativeWebRtcSession(private val context: Context, private val renderer: SurfaceViewRenderer) {
+internal class NativeWebRtcSession(
+    private val context: Context,
+    private val renderer: SurfaceViewRenderer
+) {
     private var egl: EglBase? = null
     private var factory: PeerConnectionFactory? = null
     private var peer: PeerConnection? = null
     private var initialized = false
+    private val attachedVideoTracks = mutableSetOf<VideoTrack>()
 
     fun initialize() {
         if (initialized) return
+
         PeerConnectionFactory.initialize(
-            PeerConnectionFactory.InitializationOptions.builder(context.applicationContext).createInitializationOptions()
+            PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
+                .createInitializationOptions()
         )
         egl = EglBase.create()
         renderer.init(egl!!.eglBaseContext, null)
@@ -50,59 +58,117 @@ internal class NativeWebRtcSession(private val context: Context, private val ren
     suspend fun start(host: String, resolution: String, fps: Int) {
         if (!initialized) initialize()
         stopPeerOnly()
+
+        val connectionReady = CompletableDeferred<Unit>()
         val observer = object : PeerConnection.Observer {
-            override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
-            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {}
-            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
-            override fun onIceCandidate(candidate: IceCandidate?) {}
-            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
+            override fun onSignalingChange(state: PeerConnection.SignalingState?) = Unit
+
+            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
+                when (state) {
+                    PeerConnection.IceConnectionState.CONNECTED,
+                    PeerConnection.IceConnectionState.COMPLETED -> connectionReady.complete(Unit)
+                    PeerConnection.IceConnectionState.FAILED -> connectionReady.completeExceptionally(
+                        IllegalStateException("WebRTC could not establish a direct connection to the PC. Check that both devices are on the same reachable network.")
+                    )
+                    else -> Unit
+                }
+            }
+
+            override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) = Unit
+            override fun onIceCandidate(candidate: IceCandidate?) = Unit
+            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) = Unit
+
             override fun onAddStream(stream: MediaStream?) {
-                stream?.videoTracks?.forEach { it.addSink(renderer) }
+                stream?.videoTracks?.forEach(::attachVideoTrack)
             }
+
             override fun onRemoveStream(stream: MediaStream?) {
-                stream?.videoTracks?.forEach { it.removeSink(renderer) }
+                stream?.videoTracks?.forEach(::detachVideoTrack)
             }
-            override fun onDataChannel(channel: DataChannel?) {}
-            override fun onRenegotiationNeeded() {}
+
+            override fun onDataChannel(channel: DataChannel?) = Unit
+            override fun onRenegotiationNeeded() = Unit
+
             override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
-                (receiver?.track() as? VideoTrack)?.addSink(renderer)
+                attachVideoTrack(receiver?.track() as? VideoTrack)
             }
+
             override fun onTrack(transceiver: RtpTransceiver?) {
-                (transceiver?.receiver?.track() as? VideoTrack)?.addSink(renderer)
+                attachVideoTrack(transceiver?.receiver?.track() as? VideoTrack)
             }
         }
+
+        // The desktop web client intentionally uses an empty ICE server list for the trusted
+        // LAN connection. Keep the native peer identical: local host candidates are preferred.
         val configuration = PeerConnection.RTCConfiguration(emptyList())
         val connection = factory?.createPeerConnection(configuration, observer)
             ?: throw IllegalStateException("Could not create the WebRTC connection.")
         peer = connection
-        connection.addTransceiver(
+
+        val transceiver = connection.addTransceiver(
             MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
             RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
-        )
+        ) ?: throw IllegalStateException("Could not create the receive-only desktop video track.")
+
         val offer = createOffer(connection)
         setDescription(connection, offer, local = true)
-        val gathered = withTimeoutOrNull(8000) {
-            while (connection.iceGatheringState() != PeerConnection.IceGatheringState.COMPLETE) delay(50)
-            true
-        } ?: false
-        if (!gathered) throw IllegalStateException("WebRTC ICE gathering timed out. Check the local network.")
-        val local = connection.localDescription ?: throw IllegalStateException("WebRTC did not produce a local offer.")
+
+        // Android's ICE gatherer can remain in GATHERING even when usable LAN candidates have
+        // already been added to localDescription. The browser implementation also continues
+        // after its five-second gather window instead of treating this state as fatal.
+        withTimeoutOrNull(5000) {
+            while (connection.iceGatheringState() != PeerConnection.IceGatheringState.COMPLETE) {
+                delay(50)
+            }
+        }
+
+        val local = connection.localDescription
+            ?: throw IllegalStateException("WebRTC did not produce a local offer.")
+        if (!local.description.contains("m=video")) {
+            throw IllegalStateException("The WebRTC offer does not contain a video media track.")
+        }
+
         val answer = SciNETApi.post(
             host,
             "/api/screen/offer",
-            JSONObject().put("sdp", local.description).put("type", local.type.canonicalForm()).put("resolution", resolution).put("fps", fps)
+            JSONObject()
+                .put("sdp", local.description)
+                .put("type", local.type.canonicalForm())
+                .put("resolution", resolution)
+                .put("fps", fps)
         )
+        val answerSdp = answer.optString("sdp")
+        if (answerSdp.isBlank()) {
+            throw IllegalStateException("The PC returned an empty WebRTC answer.")
+        }
         val remote = SessionDescription(
             SessionDescription.Type.fromCanonicalForm(answer.optString("type", "answer")),
-            answer.optString("sdp")
+            answerSdp
         )
         setDescription(connection, remote, local = false)
+
+        // Do not label the view LIVE just because the SDP exchange returned. Wait for ICE to
+        // connect so the UI only reports success once the actual real-time video path is up.
+        val connected = withTimeoutOrNull(20000) {
+            connectionReady.await()
+            true
+        } ?: false
+        if (!connected) {
+            throw IllegalStateException("WebRTC did not connect to the PC. Check the Wi-Fi/hotspot connection and try again.")
+        }
+
+        // Keep a reference to the negotiated receive-only transceiver and make sure it remains
+        // enabled for incoming frames while this peer is active.
+        transceiver.setDirection(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
     }
 
     suspend fun stop(host: String) {
         stopPeerOnly()
-        try { SciNETApi.post(host, "/api/screen/stop", JSONObject()) } catch (_: Exception) { }
+        try {
+            SciNETApi.post(host, "/api/screen/stop", JSONObject())
+        } catch (_: Exception) {
+        }
     }
 
     fun close() {
@@ -117,7 +183,32 @@ internal class NativeWebRtcSession(private val context: Context, private val ren
         initialized = false
     }
 
+    private fun attachVideoTrack(track: VideoTrack?) {
+        if (track == null) return
+        val newlyAttached = synchronized(attachedVideoTracks) { attachedVideoTracks.add(track) }
+        if (newlyAttached) {
+            track.setEnabled(true)
+            track.addSink(renderer)
+        }
+    }
+
+    private fun detachVideoTrack(track: VideoTrack?) {
+        if (track == null) return
+        val wasAttached = synchronized(attachedVideoTracks) { attachedVideoTracks.remove(track) }
+        if (wasAttached) {
+            try { track.removeSink(renderer) } catch (_: Exception) { }
+        }
+    }
+
     private fun stopPeerOnly() {
+        val tracks = synchronized(attachedVideoTracks) {
+            val copy = attachedVideoTracks.toList()
+            attachedVideoTracks.clear()
+            copy
+        }
+        tracks.forEach { track ->
+            try { track.removeSink(renderer) } catch (_: Exception) { }
+        }
         try { peer?.close() } catch (_: Exception) { }
         try { peer?.dispose() } catch (_: Exception) { }
         peer = null
@@ -128,24 +219,42 @@ internal class NativeWebRtcSession(private val context: Context, private val ren
             connection.createOffer(object : SdpObserver {
                 override fun onCreateSuccess(description: SessionDescription?) {
                     if (description != null && continuation.isActive) continuation.resume(description)
-                    else if (continuation.isActive) continuation.resumeWithException(IllegalStateException("WebRTC offer was empty."))
+                    else if (continuation.isActive) continuation.resumeWithException(
+                        IllegalStateException("WebRTC offer was empty.")
+                    )
                 }
-                override fun onSetSuccess() {}
+
+                override fun onSetSuccess() = Unit
+
                 override fun onCreateFailure(error: String?) {
-                    if (continuation.isActive) continuation.resumeWithException(IllegalStateException(error ?: "Could not create WebRTC offer."))
+                    if (continuation.isActive) continuation.resumeWithException(
+                        IllegalStateException(error ?: "Could not create WebRTC offer.")
+                    )
                 }
-                override fun onSetFailure(error: String?) {}
+
+                override fun onSetFailure(error: String?) = Unit
             }, MediaConstraints())
         }
 
-    private suspend fun setDescription(connection: PeerConnection, description: SessionDescription, local: Boolean) {
+    private suspend fun setDescription(
+        connection: PeerConnection,
+        description: SessionDescription,
+        local: Boolean
+    ) {
         suspendCancellableCoroutine<Unit> { continuation ->
             val observer = object : SdpObserver {
-                override fun onCreateSuccess(description: SessionDescription?) {}
-                override fun onSetSuccess() { if (continuation.isActive) continuation.resume(Unit) }
-                override fun onCreateFailure(error: String?) {}
+                override fun onCreateSuccess(description: SessionDescription?) = Unit
+
+                override fun onSetSuccess() {
+                    if (continuation.isActive) continuation.resume(Unit)
+                }
+
+                override fun onCreateFailure(error: String?) = Unit
+
                 override fun onSetFailure(error: String?) {
-                    if (continuation.isActive) continuation.resumeWithException(IllegalStateException(error ?: "Could not apply WebRTC session description."))
+                    if (continuation.isActive) continuation.resumeWithException(
+                        IllegalStateException(error ?: "Could not apply WebRTC session description.")
+                    )
                 }
             }
             if (local) connection.setLocalDescription(observer, description)
