@@ -1202,6 +1202,45 @@ async def clipboard_socket(websocket: WebSocket):
     finally:
         clipboard_clients.discard(websocket)
 
+@app.websocket("/ws/controller")
+async def controller_socket(websocket: WebSocket):
+    """Persistent private-LAN channel for low-latency relative game-camera input."""
+    client = websocket.client
+    if not client:
+        await websocket.close(code=1008, reason="Could not identify this device")
+        return
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            await websocket.close(code=1008, reason="Controller is available on a private local network only")
+            return
+    except ValueError:
+        await websocket.close(code=1008, reason="Invalid client address")
+        return
+    if platform.system() != "Windows":
+        await websocket.close(code=1011, reason="Host controls are supported on Windows only")
+        return
+
+    await websocket.accept()
+    user32 = ctypes.windll.user32
+    try:
+        while True:
+            data = await websocket.receive_json()
+            try:
+                dx = max(-1200, min(1200, int(data.get("dx", 0))))
+                dy = max(-1200, min(1200, int(data.get("dy", 0))))
+            except (TypeError, ValueError):
+                await websocket.send_json({"error": "Invalid camera movement"})
+                continue
+            if dx or dy:
+                # Relative mouse input is what games use for camera-look movement.
+                user32.mouse_event(0x0001, dx, dy, 0, 0)  # MOUSEEVENTF_MOVE
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+
+
 @app.websocket("/ws")
 async def system_socket(websocket: WebSocket):
     await websocket.accept(); client=websocket.client; ip=client.host if client else "unknown"; device_id=f"web:{ip}"
