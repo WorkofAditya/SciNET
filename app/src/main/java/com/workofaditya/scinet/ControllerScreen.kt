@@ -57,10 +57,45 @@ private data class ControllerProfile(
     val movementScheme: String = "WASD",
     val movementMode: String = "wasd",
     val cameraSensitivity: Float = 3.0f,
-    val positions: Map<String, Offset> = defaultPadPositions
+    val positions: Map<String, Offset> = defaultPadPositions,
+    val cheatPack: String = ""
+)
+
+private data class GameCheat(
+    val title: String,
+    val code: String,
+    val category: String,
+    val detail: String
+)
+
+private val gtaVStoryModeCheats = listOf(
+    GameCheat("Invincibility", "PAINKILLER", "PLAYER", "Temporary protection for five minutes."),
+    GameCheat("Max health & armor", "TURTLE", "PLAYER", "Restores health and armor."),
+    GameCheat("Recharge special ability", "POWERUP", "PLAYER", "Refills the character's special ability."),
+    GameCheat("Fast run", "CATCHME", "PLAYER", "Increases running speed."),
+    GameCheat("Fast swim", "GOTGILLS", "PLAYER", "Increases swimming speed."),
+    GameCheat("Get parachute", "SKYDIVE", "PLAYER", "Adds a parachute to your inventory."),
+    GameCheat("Super jump", "HOPTOIT", "PLAYER", "Enables higher jumps."),
+    GameCheat("Moon gravity", "FLOATER", "WORLD", "Reduces gravity."),
+    GameCheat("Slippery tires", "SNOWDAY", "WORLD", "Makes vehicles slide more easily."),
+    GameCheat("Slow motion", "SLOWMO", "WORLD", "Cycles through slow-motion levels."),
+    GameCheat("Change weather", "MAKEITRAIN", "WORLD", "Cycles to the next weather condition."),
+    GameCheat("Spawn BMX", "BANDIT", "VEHICLES", "Spawns a BMX bicycle."),
+    GameCheat("Spawn Caddy", "HOLEIN1", "VEHICLES", "Spawns a golf caddy."),
+    GameCheat("Spawn Comet", "COMET", "VEHICLES", "Spawns a Comet sports car."),
+    GameCheat("Spawn Duster", "FLYSPRAY", "VEHICLES", "Spawns a Duster aircraft."),
+    GameCheat("Spawn Mallard", "BARNSTORM", "VEHICLES", "Spawns a Mallard stunt plane."),
+    GameCheat("Spawn PCJ-600", "ROCKET", "VEHICLES", "Spawns a PCJ-600 motorcycle."),
+    GameCheat("Spawn Rapid GT", "RAPIDGT", "VEHICLES", "Spawns a Rapid GT sports car."),
+    GameCheat("Spawn Sanchez", "OFFROAD", "VEHICLES", "Spawns a Sanchez dirt bike."),
+    GameCheat("Spawn Stretch limo", "VINEWOOD", "VEHICLES", "Spawns a Stretch limousine."),
+    GameCheat("Spawn Trashmaster", "TRASHED", "VEHICLES", "Spawns a garbage truck."),
+    GameCheat("Spawn Dodo", "EXTINCT", "VEHICLES", "Requires the Dodo to be unlocked first."),
+    GameCheat("Spawn Kraken", "BUBBLES", "VEHICLES", "Requires the Kraken to be unlocked first.")
 )
 
 private const val PROFILE_STORAGE_KEY = "controller_profiles_v1"
+private const val GTA_V_STORY_CHEAT_PACK = "gta_v_story"
 
 private fun movementKey(slot: String, scheme: String): String = when (scheme) {
     "ARROWS" -> when (slot) { "up" -> "up"; "left" -> "left"; "down" -> "down"; else -> "right" }
@@ -101,7 +136,10 @@ private fun loadControllerProfiles(prefs: SharedPreferences): List<ControllerPro
                     movementScheme = scheme,
                     movementMode = mode,
                     cameraSensitivity = item.optDouble("cameraSensitivity", 3.0).toFloat().coerceIn(.5f, 8f),
-                    positions = readProfilePositions(item.optJSONObject("positions"))
+                    positions = readProfilePositions(item.optJSONObject("positions")),
+                    cheatPack = item.optString("cheatPack").ifBlank {
+                        if (name.equals("Default", ignoreCase = true)) GTA_V_STORY_CHEAT_PACK else ""
+                    }
                 )
             }
         }.getOrNull()
@@ -120,7 +158,8 @@ private fun loadControllerProfiles(prefs: SharedPreferences): List<ControllerPro
         movementMode = prefs.getString("movement_mode", "wasd")
             ?.lowercase()?.takeIf { it == "joystick" } ?: "wasd",
         cameraSensitivity = prefs.getFloat("camera_sensitivity", 3.0f).coerceIn(.5f, 8f),
-        positions = readProfilePositions(legacyPositions)
+        positions = readProfilePositions(legacyPositions),
+        cheatPack = GTA_V_STORY_CHEAT_PACK
     )
     saveControllerProfiles(prefs, listOf(migrated))
     return listOf(migrated)
@@ -139,7 +178,8 @@ private fun saveControllerProfiles(prefs: SharedPreferences, profiles: List<Cont
             .put("movementScheme", profile.movementScheme)
             .put("movementMode", profile.movementMode)
             .put("cameraSensitivity", profile.cameraSensitivity)
-            .put("positions", positions))
+            .put("positions", positions)
+            .put("cheatPack", profile.cheatPack))
     }
     prefs.edit().putString(PROFILE_STORAGE_KEY, array.toString()).apply()
 }
@@ -163,6 +203,10 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     var editMode by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var profilesOpen by remember { mutableStateOf(false) }
+    var cheatsOpen by remember { mutableStateOf(false) }
+    var cheatStatus by remember(activeProfileId) { mutableStateOf("") }
+    var cheatStatusBad by remember(activeProfileId) { mutableStateOf(false) }
+    var sendingCheatCode by remember { mutableStateOf<String?>(null) }
     var createProfileOpen by remember { mutableStateOf(false) }
     var newProfileName by remember { mutableStateOf("") }
     var profileNameError by remember { mutableStateOf("") }
@@ -215,6 +259,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
         editMode = false
         settingsOpen = false
         profilesOpen = false
+        cheatsOpen = false
     }
 
     fun createProfile() {
@@ -262,6 +307,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             prefs.edit().putString("active_profile_id", next.id).apply()
             editMode = false
             settingsOpen = false
+            cheatsOpen = false
         }
         deleteProfileId = null
     }
@@ -467,9 +513,21 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     saveCurrentLayout()
                     editMode = false
                     settingsOpen = false
+                    cheatsOpen = false
                     profilesOpen = true
                 }) {
                     Text("PROFILES", color = Color(0xFFB8DDF0), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+                TextButton(onClick = {
+                    saveCurrentLayout()
+                    editMode = false
+                    settingsOpen = false
+                    profilesOpen = false
+                    cheatStatus = ""
+                    cheatStatusBad = false
+                    cheatsOpen = true
+                }) {
+                    Text("CHEATS", color = Color(0xFFB8DDF0), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
                 TextButton(onClick = { settingsOpen = !settingsOpen }) {
                     Text("⚙ SETTINGS", color = Color(0xFFB8DDF0), fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -478,6 +536,117 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             }
         }
 
+
+        if (cheatsOpen) {
+            Dialog(onDismissRequest = { cheatsOpen = false }) {
+                Surface(
+                    modifier = Modifier.width(500.dp).heightIn(max = areaHeight - 48.dp),
+                    color = Color(0xFF111922),
+                    contentColor = Color(0xFFEAF0F4),
+                    shape = RoundedCornerShape(18.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF344653)),
+                    shadowElevation = 18.dp
+                ) {
+                    Column(
+                        Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text("CHEAT PRESETS", color = Color(0xFFEAF0F4), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
+                                Text(
+                                    "${activeProfile.name}  /  ${if (activeProfile.cheatPack == GTA_V_STORY_CHEAT_PACK) "GTA V STORY MODE" else "NO PRESET ASSIGNED"}",
+                                    color = Color(0xFF82909B), fontSize = 9.sp, letterSpacing = .5.sp
+                                )
+                            }
+                            TextButton(onClick = { cheatsOpen = false }) {
+                                Text("CLOSE", color = Color(0xFF9FBFD1), fontSize = 10.sp)
+                            }
+                        }
+                        HorizontalDivider(color = Color(0xFF2B3944))
+                        if (activeProfile.cheatPack != GTA_V_STORY_CHEAT_PACK) {
+                            Spacer(Modifier.height(8.dp))
+                            Text("This profile has no cheat preset yet.", color = Color(0xFFEAF0F4), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Attach the GTA V Story Mode preset to keep its shortcuts with this profile.", color = Color(0xFF82909B), fontSize = 10.sp, lineHeight = 15.sp)
+                            Button(
+                                onClick = {
+                                    updateProfile(activeProfileId) { it.copy(cheatPack = GTA_V_STORY_CHEAT_PACK) }
+                                    cheatStatus = "GTA V Story Mode preset added."
+                                    cheatStatusBad = false
+                                },
+                                modifier = Modifier.fillMaxWidth().height(43.dp),
+                                shape = RoundedCornerShape(9.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB8DDF0), contentColor = Color(0xFF101820))
+                            ) {
+                                Text("ADD GTA V PRESET", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
+                            }
+                        } else {
+                            Column(
+                                Modifier.heightIn(max = (areaHeight - 180.dp).coerceAtLeast(110.dp)).verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(9.dp)
+                            ) {
+                                listOf("PLAYER", "WORLD", "VEHICLES").forEach { category ->
+                                    Text(category, color = Color(0xFF9CC8E0), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                                    gtaVStoryModeCheats.filter { it.category == category }.forEach { cheat ->
+                                        Row(
+                                            Modifier.fillMaxWidth()
+                                                .clip(RoundedCornerShape(9.dp))
+                                                .background(Color(0xFF151E27))
+                                                .border(1.dp, Color(0xFF26333D), RoundedCornerShape(9.dp))
+                                                .padding(start = 11.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                Text(cheat.title, color = Color(0xFFEAF0F4), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                                Text(cheat.detail, color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 12.sp)
+                                                Text(cheat.code, color = Color(0xFF9CC8E0), fontSize = 9.sp, letterSpacing = .8.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                            Button(
+                                                onClick = {
+                                                    sendingCheatCode = cheat.code
+                                                    cheatStatus = "Sending " + cheat.title + "…"
+                                                    cheatStatusBad = false
+                                                    onCheat(cheat.code) { error ->
+                                                        sendingCheatCode = null
+                                                        cheatStatus = error ?: (cheat.title + " submitted.")
+                                                        cheatStatusBad = error != null
+                                                    }
+                                                },
+                                                enabled = sendingCheatCode == null,
+                                                contentPadding = PaddingValues(horizontal = 13.dp, vertical = 6.dp),
+                                                shape = RoundedCornerShape(7.dp),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = Color(0xFF263B49),
+                                                    contentColor = Color(0xFFDCECF5),
+                                                    disabledContainerColor = Color(0xFF202A33),
+                                                    disabledContentColor = Color(0xFF74818D)
+                                                )
+                                            ) {
+                                                Text(if (sendingCheatCode == cheat.code) "SENDING" else "RUN", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (cheatStatus.isNotBlank()) {
+                            Text(
+                                cheatStatus,
+                                color = if (cheatStatusBad) Color(0xFFE0A0A0) else Color(0xFF9CBBA8),
+                                fontSize = 9.sp,
+                                lineHeight = 13.sp
+                            )
+                        }
+                        Text(
+                            "GTA V Story Mode only. Keep the game focused. Cheats can disable achievements for the current session.",
+                            color = Color(0xFF82909B),
+                            fontSize = 9.sp,
+                            lineHeight = 13.sp
+                        )
+                    }
+                }
+            }
+        }
 
         if (profilesOpen) {
             Dialog(onDismissRequest = { profilesOpen = false }) {
