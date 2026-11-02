@@ -194,7 +194,14 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     }
 
     fun saveCurrentLayout() {
-        updateProfile(activeProfileId) { it.copy(positions = positions.toMap()) }
+        updateProfile(activeProfileId) {
+            it.copy(
+                positions = positions.toMap(),
+                cameraSensitivity = sensitivity,
+                movementMode = movementMode,
+                movementScheme = movementScheme
+            )
+        }
     }
 
     fun activateProfile(profileId: String) {
@@ -407,7 +414,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     .clip(CircleShape)
                     .background(if (editMode) Color(0xFF273847) else if (button.accent) Color(0xFF344C5B) else Color(0xCC171E26))
                     .border(if (editMode) 2.dp else 1.dp, if (editMode) Color(0xFF80C5E8) else Color(0xFF52616F), CircleShape)
-                    .pointerInput(button.id, editMode, settingsOpen) {
+                    .pointerInput(button.id, button.key, editMode, settingsOpen) {
                         if (editMode) {
                             detectDragGestures { change, drag ->
                                 change.consume()
