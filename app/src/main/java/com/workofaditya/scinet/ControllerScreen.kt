@@ -1233,6 +1233,9 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                             TextButton(onClick = {
                                 positions.clear()
                                 positions.putAll(defaultPadPositions)
+                                activeProfile.customKeys.forEachIndexed { index, key ->
+                                    positions["custom-$key"] = customKeyDefaultPosition(index)
+                                }
                             }) {
                                 Text("RESET", color = Color(0xFF9AA7B2), fontSize = 10.sp)
                             }
