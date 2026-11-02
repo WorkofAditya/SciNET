@@ -2,6 +2,7 @@ package com.workofaditya.scinet
 
 import android.app.Activity
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.view.View
@@ -32,7 +33,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 private data class PadButton(val id: String, val label: String, val key: String, val size: Int = 56, val accent: Boolean = false)
 
@@ -47,15 +51,127 @@ private val defaultPadPositions = mapOf(
     "mouse-right" to Offset(.76f, .83f), "esc" to Offset(.91f, .17f)
 )
 
+private data class ControllerProfile(
+    val id: String,
+    val name: String,
+    val movementScheme: String = "WASD",
+    val movementMode: String = "wasd",
+    val cameraSensitivity: Float = 3.0f,
+    val positions: Map<String, Offset> = defaultPadPositions
+)
+
+private const val PROFILE_STORAGE_KEY = "controller_profiles_v1"
+
+private fun movementKey(slot: String, scheme: String): String = when (scheme) {
+    "ARROWS" -> when (slot) { "up" -> "up"; "left" -> "left"; "down" -> "down"; else -> "right" }
+    "IJKL" -> when (slot) { "up" -> "i"; "left" -> "j"; "down" -> "k"; else -> "l" }
+    else -> when (slot) { "up" -> "w"; "left" -> "a"; "down" -> "s"; else -> "d" }
+}
+
+private fun movementLabel(slot: String, scheme: String): String =
+    if (scheme == "ARROWS") when (slot) {
+        "up" -> "↑"; "left" -> "←"; "down" -> "↓"; else -> "→"
+    } else movementKey(slot, scheme).uppercase()
+
+private fun readProfilePositions(value: JSONObject?): Map<String, Offset> =
+    defaultPadPositions.mapValues { (id, default) ->
+        val saved = value?.optJSONObject(id)
+        if (saved == null) default else Offset(
+            saved.optDouble("x", default.x.toDouble()).toFloat().coerceIn(.03f, .97f),
+            saved.optDouble("y", default.y.toDouble()).toFloat().coerceIn(.08f, .92f)
+        )
+    }
+
+private fun loadControllerProfiles(prefs: SharedPreferences): List<ControllerProfile> {
+    val stored = prefs.getString(PROFILE_STORAGE_KEY, null)
+    if (!stored.isNullOrBlank()) {
+        val decoded = runCatching {
+            val array = JSONArray(stored)
+            (0 until array.length()).mapNotNull { index ->
+                val item = array.optJSONObject(index) ?: return@mapNotNull null
+                val id = item.optString("id").ifBlank { UUID.randomUUID().toString() }
+                val name = item.optString("name").trim().ifBlank { "Profile" }
+                val scheme = item.optString("movementScheme", "WASD").uppercase()
+                    .takeIf { it in setOf("WASD", "ARROWS", "IJKL") } ?: "WASD"
+                val mode = item.optString("movementMode", "wasd").lowercase()
+                    .takeIf { it == "joystick" } ?: "wasd"
+                ControllerProfile(
+                    id = id,
+                    name = name,
+                    movementScheme = scheme,
+                    movementMode = mode,
+                    cameraSensitivity = item.optDouble("cameraSensitivity", 3.0).toFloat().coerceIn(.5f, 8f),
+                    positions = readProfilePositions(item.optJSONObject("positions"))
+                )
+            }
+        }.getOrNull()
+        if (!decoded.isNullOrEmpty()) return decoded
+    }
+
+    // Migrate the existing single controller setup into a Default profile.
+    val legacyPositions = runCatching {
+        JSONObject(prefs.getString("positions", "{}") ?: "{}")
+    }.getOrNull()
+    val migrated = ControllerProfile(
+        id = "default",
+        name = "Default",
+        movementScheme = prefs.getString("movement_scheme", "WASD")?.uppercase()
+            ?.takeIf { it in setOf("WASD", "ARROWS", "IJKL") } ?: "WASD",
+        movementMode = prefs.getString("movement_mode", "wasd")
+            ?.lowercase()?.takeIf { it == "joystick" } ?: "wasd",
+        cameraSensitivity = prefs.getFloat("camera_sensitivity", 3.0f).coerceIn(.5f, 8f),
+        positions = readProfilePositions(legacyPositions)
+    )
+    saveControllerProfiles(prefs, listOf(migrated))
+    return listOf(migrated)
+}
+
+private fun saveControllerProfiles(prefs: SharedPreferences, profiles: List<ControllerProfile>) {
+    val array = JSONArray()
+    profiles.forEach { profile ->
+        val positions = JSONObject()
+        profile.positions.forEach { (id, point) ->
+            positions.put(id, JSONObject().put("x", point.x).put("y", point.y))
+        }
+        array.put(JSONObject()
+            .put("id", profile.id)
+            .put("name", profile.name)
+            .put("movementScheme", profile.movementScheme)
+            .put("movementMode", profile.movementMode)
+            .put("cameraSensitivity", profile.cameraSensitivity)
+            .put("positions", positions))
+    }
+    prefs.edit().putString(PROFILE_STORAGE_KEY, array.toString()).apply()
+}
+
 @Composable
 internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>) -> Unit, onExit: () -> Unit, onError: (String) -> Unit) {
     val context = LocalContext.current
     val activity = context as? Activity
     val prefs = remember { context.getSharedPreferences("scinet-controller", Context.MODE_PRIVATE) }
+    val profiles = remember {
+        mutableStateListOf<ControllerProfile>().apply { addAll(loadControllerProfiles(prefs)) }
+    }
+    var activeProfileId by remember {
+        mutableStateOf(
+            prefs.getString("active_profile_id", null)
+                ?.takeIf { savedId -> profiles.any { it.id == savedId } }
+                ?: profiles.first().id
+        )
+    }
+    val activeProfile = profiles.first { it.id == activeProfileId }
     var editMode by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
-    var sensitivity by remember { mutableFloatStateOf(prefs.getFloat("camera_sensitivity", 3.0f).coerceIn(0.5f, 8.0f)) }
-    var movementMode by remember { mutableStateOf(prefs.getString("movement_mode", "wasd") ?: "wasd") }
+    var profilesOpen by remember { mutableStateOf(false) }
+    var createProfileOpen by remember { mutableStateOf(false) }
+    var newProfileName by remember { mutableStateOf("") }
+    var profileNameError by remember { mutableStateOf("") }
+    var deleteProfileId by remember { mutableStateOf<String?>(null) }
+    var sensitivity by remember(activeProfileId) {
+        mutableFloatStateOf(activeProfile.cameraSensitivity.coerceIn(0.5f, 8.0f))
+    }
+    var movementMode by remember(activeProfileId) { mutableStateOf(activeProfile.movementMode) }
+    var movementScheme by remember(activeProfileId) { mutableStateOf(activeProfile.movementScheme) }
     var joystickOffset by remember { mutableStateOf(Offset.Zero) }
     val currentOnError by rememberUpdatedState(onError)
     val cameraClient = remember(host) { CameraInputClient(host) { message -> currentOnError(message) } }
@@ -63,28 +179,88 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
         if (movementMode == "joystick") JoystickInputClient(host) { message -> currentOnError(message) } else null
     }
     val activeSensitivity = rememberUpdatedState(sensitivity)
-    val positions = remember {
-        mutableStateMapOf<String, Offset>().apply {
-            putAll(defaultPadPositions)
-            runCatching {
-                val saved = JSONObject(prefs.getString("positions", "{}") ?: "{}")
-                defaultPadPositions.keys.forEach { id ->
-                    if (saved.has(id)) {
-                        val p = saved.getJSONObject(id)
-                        this[id] = Offset(p.optDouble("x", defaultPadPositions.getValue(id).x.toDouble()).toFloat().coerceIn(.03f, .97f),
-                            p.optDouble("y", defaultPadPositions.getValue(id).y.toDouble()).toFloat().coerceIn(.08f, .92f))
-                    }
-                }
-            }
+    val positions = remember(activeProfileId) {
+        mutableStateMapOf<String, Offset>().apply { putAll(activeProfile.positions) }
+    }
+
+    fun updateProfile(profileId: String, transform: (ControllerProfile) -> ControllerProfile) {
+        val index = profiles.indexOfFirst { it.id == profileId }
+        if (index < 0) return
+        val updated = transform(profiles[index])
+        if (updated != profiles[index]) {
+            profiles[index] = updated
+            saveControllerProfiles(prefs, profiles)
+        }
+    }
+
+    fun saveCurrentLayout() {
+        updateProfile(activeProfileId) { it.copy(positions = positions.toMap()) }
+    }
+
+    fun activateProfile(profileId: String) {
+        if (profileId == activeProfileId) {
+            profilesOpen = false
+            return
+        }
+        saveCurrentLayout()
+        activeProfileId = profileId
+        prefs.edit().putString("active_profile_id", profileId).apply()
+        editMode = false
+        settingsOpen = false
+        profilesOpen = false
+    }
+
+    fun createProfile() {
+        val name = newProfileName.trim().take(32)
+        if (name.isBlank()) {
+            profileNameError = "Enter a name for this profile."
+            return
+        }
+        if (profiles.any { it.name.equals(name, ignoreCase = true) }) {
+            profileNameError = "A profile with this name already exists."
+            return
+        }
+        saveCurrentLayout()
+        val profile = ControllerProfile(id = UUID.randomUUID().toString(), name = name)
+        profiles.add(profile)
+        saveControllerProfiles(prefs, profiles)
+        activeProfileId = profile.id
+        prefs.edit().putString("active_profile_id", profile.id).apply()
+        editMode = false
+        settingsOpen = false
+        profilesOpen = false
+        createProfileOpen = false
+        newProfileName = ""
+        profileNameError = ""
+    }
+
+    fun deleteProfile(profileId: String) {
+        if (profiles.size <= 1) return
+        val index = profiles.indexOfFirst { it.id == profileId }
+        if (index < 0) return
+        profiles.removeAt(index)
+        saveControllerProfiles(prefs, profiles)
+        if (profileId == activeProfileId) {
+            val next = profiles[index.coerceAtMost(profiles.lastIndex)]
+            activeProfileId = next.id
+            prefs.edit().putString("active_profile_id", next.id).apply()
+            editMode = false
+            settingsOpen = false
+        }
+        deleteProfileId = null
+    }
+
+    LaunchedEffect(activeProfileId) {
+        prefs.edit().putString("active_profile_id", activeProfileId).apply()
+    }
+    LaunchedEffect(activeProfileId, sensitivity, movementMode, movementScheme) {
+        updateProfile(activeProfileId) {
+            it.copy(cameraSensitivity = sensitivity, movementMode = movementMode, movementScheme = movementScheme)
         }
     }
     val originalOrientation = remember(activity) { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     val originalUi = remember(activity) { activity?.window?.decorView?.systemUiVisibility ?: 0 }
-    LaunchedEffect(sensitivity) {
-        prefs.edit().putFloat("camera_sensitivity", sensitivity).apply()
-    }
     LaunchedEffect(movementMode) {
-        prefs.edit().putString("movement_mode", movementMode).apply()
         joystickOffset = Offset.Zero
     }
 
@@ -130,7 +306,10 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     BackHandler { onExit() }
 
     val buttons = listOf(
-        PadButton("w", "W", "w"), PadButton("a", "A", "a"), PadButton("s", "S", "s"), PadButton("d", "D", "d"),
+        PadButton("w", movementLabel("up", movementScheme), movementKey("up", movementScheme)),
+        PadButton("a", movementLabel("left", movementScheme), movementKey("left", movementScheme)),
+        PadButton("s", movementLabel("down", movementScheme), movementKey("down", movementScheme)),
+        PadButton("d", movementLabel("right", movementScheme), movementKey("right", movementScheme)),
         PadButton("space", "JUMP", "space", 60, true), PadButton("shift", "SPRINT", "shift"),
         PadButton("e", "E", "e"), PadButton("f", "F", "f"), PadButton("r", "R", "r"),
         PadButton("q", "Q", "q"), PadButton("ctrl", "C", "ctrl"),
