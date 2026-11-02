@@ -744,7 +744,9 @@ def _send_windows_key(vk_code, down):
     user32.MapVirtualKeyW.argtypes = (ctypes.c_uint, ctypes.c_uint)
     user32.MapVirtualKeyW.restype = ctypes.c_uint
     # MAPVK_VK_TO_VSC_EX preserves the extended-key prefix (0xE0/0xE1).
-    scan_code = int(user32.MapVirtualKeyW(int(vk_code), 4))
+    vk_code = int(vk_code)
+    # VK_RETURN has a distinct extended scan code on the numeric keypad.
+    scan_code = 0xE01C if vk_code == 0x10D else int(user32.MapVirtualKeyW(vk_code, 4))
     if not scan_code:
         raise OSError("Windows could not map the requested keyboard key.")
 
@@ -921,12 +923,24 @@ async def control_host(request: Request):
     modifier_codes = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "meta": 0x5B}
     key_codes = {
         "esc": 0x1B, "tab": 0x09, "enter": 0x0D, "backspace": 0x08,
-        "delete": 0x2E, "space": 0x20, "shift": 0x10, "ctrl": 0x11, "alt": 0x12, "meta": 0x5B,
-        "up": 0x26, "down": 0x28, "left": 0x25,
-        "right": 0x27, "home": 0x24, "end": 0x23,
-        **{f"f{i}": 0x70 + i - 1 for i in range(1, 13)},
+        "delete": 0x2E, "insert": 0x2D, "space": 0x20,
+        "shift": 0x10, "ctrl": 0x11, "alt": 0x12, "meta": 0x5B,
+        "capslock": 0x14, "apps": 0x5D,
+        "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+        "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+        "printscreen": 0x2C, "scrolllock": 0x91, "pause": 0x13, "numlock": 0x90,
+        "grave": 0xC0, "minus": 0xBD, "equal": 0xBB,
+        "left-bracket": 0xDB, "right-bracket": 0xDD,
+        "backslash": 0xDC, "semicolon": 0xBA, "apostrophe": 0xDE,
+        "comma": 0xBC, "period": 0xBE, "slash": 0xBF, "oem-102": 0xE2,
+        "numpad-divide": 0x6F, "numpad-multiply": 0x6A,
+        "numpad-subtract": 0x6D, "numpad-add": 0x6B,
+        "numpad-enter": 0x10D, "numpad-decimal": 0x6E,
+        "numpad-separator": 0x6C,
+        **{f"f{i}": 0x70 + i - 1 for i in range(1, 25)},
         **{chr(i): i - 32 for i in range(ord("a"), ord("z") + 1)},
         **{str(i): 0x30 + i for i in range(10)},
+        **{f"numpad{i}": 0x60 + i for i in range(10)},
     }
     if action == "modifier":
         key_name = str(data.get("key") or "").lower()
