@@ -441,13 +441,185 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("SCINET  /  GAMEPAD", color = Color(0xFFB8C7D2), fontSize = 9.sp, letterSpacing = 1.8.sp, fontWeight = FontWeight.Bold)
-                Text(if (editMode) "DRAG ANY CONTROL TO REPOSITION" else "TOUCH AND HOLD TO PRESS", color = Color(0xFF74818D), fontSize = 8.sp, letterSpacing = 1.sp)
+                Text(
+                    if (editMode) "DRAG ANY CONTROL TO REPOSITION" else "PROFILE  /  ${activeProfile.name.uppercase()}",
+                    color = Color(0xFF74818D), fontSize = 8.sp, letterSpacing = 1.sp, maxLines = 1
+                )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    saveCurrentLayout()
+                    editMode = false
+                    settingsOpen = false
+                    profilesOpen = true
+                }) {
+                    Text("PROFILES", color = Color(0xFFB8DDF0), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
                 TextButton(onClick = { settingsOpen = !settingsOpen }) {
                     Text("⚙ SETTINGS", color = Color(0xFFB8DDF0), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
                 TextButton(onClick = onExit) { Text("EXIT  ✕", color = Color.White, fontSize = 10.sp) }
+            }
+        }
+
+
+        if (profilesOpen) {
+            Dialog(onDismissRequest = { profilesOpen = false }) {
+                Surface(
+                    modifier = Modifier.width(360.dp),
+                    color = Color(0xFF111922),
+                    contentColor = Color(0xFFEAF0F4),
+                    shape = RoundedCornerShape(18.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF344653)),
+                    shadowElevation = 18.dp
+                ) {
+                    Column(
+                        Modifier.padding(19.dp),
+                        verticalArrangement = Arrangement.spacedBy(13.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text("CONTROLLER PROFILES", color = Color(0xFFEAF0F4), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
+                                Text("${profiles.size} saved  ·  Select a setup for this game", color = Color(0xFF82909B), fontSize = 10.sp)
+                            }
+                            TextButton(onClick = { profilesOpen = false }) {
+                                Text("CLOSE", color = Color(0xFF9FBFD1), fontSize = 10.sp)
+                            }
+                        }
+                        Button(
+                            onClick = {
+                                newProfileName = ""
+                                profileNameError = ""
+                                createProfileOpen = true
+                            },
+                            modifier = Modifier.fillMaxWidth().height(43.dp),
+                            shape = RoundedCornerShape(9.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFB8DDF0),
+                                contentColor = Color(0xFF101820)
+                            )
+                        ) {
+                            Text("+  NEW PROFILE", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
+                        }
+                        HorizontalDivider(color = Color(0xFF2B3944))
+                        Column(
+                            Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(7.dp)
+                        ) {
+                            profiles.forEach { profile ->
+                                val selected = profile.id == activeProfileId
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (selected) Color(0xFF1C2B36) else Color(0xFF151E27))
+                                        .border(1.dp, if (selected) Color(0xFF55758A) else Color(0xFF26333D), RoundedCornerShape(10.dp))
+                                        .clickable { activateProfile(profile.id) }
+                                        .padding(start = 12.dp, top = 10.dp, end = 5.dp, bottom = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Text(profile.name, color = Color(0xFFEAF0F4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                        Text(
+                                            if (selected) "ACTIVE  ·  ${profile.movementScheme}  ·  ${profile.movementMode.uppercase()}"
+                                            else "${profile.movementScheme}  ·  ${profile.movementMode.uppercase()}",
+                                            color = if (selected) Color(0xFF9CC8E0) else Color(0xFF82909B),
+                                            fontSize = 9.sp,
+                                            letterSpacing = .35.sp
+                                        )
+                                    }
+                                    if (selected) {
+                                        Text("IN USE", color = Color(0xFF9CC8E0), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                                    } else {
+                                        TextButton(onClick = { activateProfile(profile.id) }) {
+                                            Text("USE", color = Color(0xFFB8DDF0), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                    TextButton(
+                                        onClick = { deleteProfileId = profile.id },
+                                        enabled = profiles.size > 1,
+                                        contentPadding = PaddingValues(horizontal = 7.dp, vertical = 3.dp)
+                                    ) {
+                                        Text("×", color = if (profiles.size > 1) Color(0xFFCC9696) else Color(0xFF53606A), fontSize = 18.sp)
+                                    }
+                                }
+                            }
+                        }
+                        Text("Each profile keeps its own controls, key set and sensitivity.", color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 13.sp)
+                    }
+                }
+            }
+        }
+
+        if (createProfileOpen) {
+            Dialog(onDismissRequest = { createProfileOpen = false }) {
+                Surface(
+                    modifier = Modifier.width(330.dp),
+                    color = Color(0xFF111922),
+                    contentColor = Color(0xFFEAF0F4),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF344653)),
+                    shadowElevation = 18.dp
+                ) {
+                    Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("CREATE PROFILE", color = Color(0xFFEAF0F4), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        Text("Start with a clean controller layout and configure it for a game.", color = Color(0xFF82909B), fontSize = 10.sp, lineHeight = 15.sp)
+                        OutlinedTextField(
+                            value = newProfileName,
+                            onValueChange = { newProfileName = it.take(32); profileNameError = "" },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Profile name") },
+                            placeholder = { Text("e.g. GTA V, Minecraft, RDR2") },
+                            isError = profileNameError.isNotBlank(),
+                            supportingText = {
+                                if (profileNameError.isNotBlank()) Text(profileNameError)
+                                else Text("${newProfileName.length}/32")
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF9CC8E0),
+                                unfocusedBorderColor = Color(0xFF43515D),
+                                focusedLabelColor = Color(0xFF9CC8E0),
+                                cursorColor = Color(0xFF9CC8E0)
+                            )
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { createProfileOpen = false }) {
+                                Text("CANCEL", color = Color(0xFF9BAAB5), fontSize = 10.sp)
+                            }
+                            Button(
+                                onClick = { createProfile() },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB8DDF0), contentColor = Color(0xFF101820))
+                            ) {
+                                Text("CREATE", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        deleteProfileId?.let { targetId ->
+            val target = profiles.firstOrNull { it.id == targetId }
+            if (target != null) {
+                AlertDialog(
+                    onDismissRequest = { deleteProfileId = null },
+                    containerColor = Color(0xFF111922),
+                    titleContentColor = Color(0xFFEAF0F4),
+                    textContentColor = Color(0xFF9BAAB5),
+                    title = { Text("Delete profile?") },
+                    text = { Text("Delete ${target.name} and its saved controller layout? This cannot be undone.") },
+                    confirmButton = {
+                        TextButton(onClick = { deleteProfile(targetId) }) {
+                            Text("DELETE", color = Color(0xFFE0A0A0), fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { deleteProfileId = null }) {
+                            Text("CANCEL", color = Color(0xFF9BAAB5))
+                        }
+                    }
+                )
             }
         }
 
@@ -472,10 +644,22 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     HorizontalDivider(color = Color(0xFF34414C))
                     Text("MOVEMENT INPUT", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = movementMode == "wasd", onClick = { movementMode = "wasd" }, label = { Text("WASD") })
+                        FilterChip(selected = movementMode == "wasd", onClick = { movementMode = "wasd" }, label = { Text("KEYS") })
                         FilterChip(selected = movementMode == "joystick", onClick = { movementMode = "joystick" }, label = { Text("JOYSTICK") })
                     }
                     Text("Joystick mode sends a true analog Xbox stick to Windows.", color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 13.sp)
+                    HorizontalDivider(color = Color(0xFF34414C))
+                    Text("DIRECTIONAL KEYS", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf("WASD", "ARROWS", "IJKL").forEach { scheme ->
+                            FilterChip(
+                                selected = movementScheme == scheme,
+                                onClick = { movementScheme = scheme },
+                                label = { Text(scheme, fontSize = 10.sp) }
+                            )
+                        }
+                    }
+                    Text("Choose the key set used for up, left, down and right.", color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 13.sp)
                     HorizontalDivider(color = Color(0xFF34414C))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("CAMERA SENSITIVITY", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
@@ -500,9 +684,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                         Text("LAYOUT EDITING", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = {
-                                val saved = JSONObject()
-                                positions.forEach { (id, p) -> saved.put(id, JSONObject().put("x", p.x).put("y", p.y)) }
-                                prefs.edit().putString("positions", saved.toString()).apply()
+                                saveCurrentLayout()
                                 editMode = false
                                 settingsOpen = false
                             }) {
