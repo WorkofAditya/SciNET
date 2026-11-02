@@ -803,6 +803,84 @@ def _send_windows_key(vk_code, down):
     return True
 
 
+# Fixed GTA V Story Mode presets exposed by the Android controller.
+# The allowlist intentionally excludes weapon, explosive and intoxication effects.
+_GTA_V_CONTROLLER_CHEATS = {
+    "PAINKILLER", "TURTLE", "POWERUP", "CATCHME", "GOTGILLS",
+    "SKYDIVE", "HOPTOIT", "FLOATER", "SNOWDAY", "SLOWMO", "MAKEITRAIN",
+    "BANDIT", "HOLEIN1", "COMET", "FLYSPRAY", "BARNSTORM", "ROCKET",
+    "RAPIDGT", "OFFROAD", "VINEWOOD", "TRASHED", "EXTINCT", "BUBBLES",
+}
+
+
+def _is_gta_v_foreground():
+    """Only inject game shortcuts while a supported GTA V executable is focused."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return False
+    process_id = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    if not process_id.value:
+        return False
+    try:
+        process_name = psutil.Process(process_id.value).name().lower()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+    return process_name in {"gta5.exe", "gta5_enhanced.exe"}
+
+
+def _send_windows_unicode_text(text):
+    """Type ASCII cheat text through the Windows Unicode keyboard input path."""
+    user32 = ctypes.windll.user32
+    for char in text:
+        code_unit = ord(char)
+        user32.keybd_event(0, code_unit, 0x0004, 0)
+        user32.keybd_event(0, code_unit, 0x0004 | 0x0002, 0)
+
+
+@app.post("/api/game/cheat")
+async def activate_gta_v_cheat(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Game shortcuts are only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    if platform.system() != "Windows":
+        return JSONResponse({"error": "GTA V shortcuts are supported on Windows only"}, status_code=501)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
+
+    code = str(data.get("code") or "").strip().upper()
+    if code not in _GTA_V_CONTROLLER_CHEATS:
+        return JSONResponse({"error": "That GTA V shortcut is not available"}, status_code=400)
+    if not _is_gta_v_foreground():
+        return JSONResponse({"error": "Bring GTA V Story Mode to the foreground first"}, status_code=409)
+
+    try:
+        # VK_OEM_3 is the grave/tilde key on the standard US keyboard layout.
+        _send_windows_key(0xC0, True)
+        await asyncio.sleep(0.08)
+        _send_windows_key(0xC0, False)
+        await asyncio.sleep(0.12)
+        _send_windows_unicode_text(code)
+        await asyncio.sleep(0.06)
+        _send_windows_key(0x0D, True)
+        await asyncio.sleep(0.03)
+        _send_windows_key(0x0D, False)
+    except OSError as exc:
+        return JSONResponse({"error": str(exc) or "Windows rejected the game shortcut"}, status_code=500)
+
+    log_event(f"GTA V Story Mode shortcut submitted: {code}", "control")
+    return {"ok": True, "code": code}
+
+
 @app.post("/api/control")
 async def control_host(request: Request):
     client = request.client
