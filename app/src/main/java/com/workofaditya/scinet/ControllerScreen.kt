@@ -974,7 +974,10 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("${activeProfile.customKeys.size} EXTRA KEYS ACTIVE", modifier = Modifier.weight(1f), color = Color(0xFF9CC8E0), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
                         TextButton(onClick = {
-                            activeProfile.customKeys.toList().forEach { setCustomKeyEnabled(it, false) }
+                            activeProfile.customKeys.forEach { key -> positions.remove("custom-$key") }
+                            updateProfile(activeProfileId) {
+                                it.copy(customKeys = emptyList(), positions = positions.toMap())
+                            }
                         }) {
                             Text("CLEAR ALL", color = Color(0xFFCC9696), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                         }
