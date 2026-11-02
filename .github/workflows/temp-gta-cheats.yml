@@ -1,0 +1,89 @@
+name: Update GTA V cheat menu
+
+on:
+  push:
+    branches:
+      - feature/native-android-app
+
+permissions:
+  contents: write
+
+jobs:
+  update-cheats:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/native-android-app
+          fetch-depth: 0
+
+      - name: Add complete GTA V Story Mode cheat list
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path("app/src/main/java/com/workofaditya/scinet/ControllerScreen.kt")
+          text = path.read_text(encoding="utf-8")
+
+          replacement = '''private val gtaVStoryModeCheats = listOf(
+              GameCheat("Invincibility", "PAINKILLER", "PLAYER", "Temporary protection for five minutes."),
+              GameCheat("Max health & armor", "TURTLE", "PLAYER", "Restores health and armor."),
+              GameCheat("Recharge special ability", "POWERUP", "PLAYER", "Refills the character's special ability."),
+              GameCheat("Fast run", "CATCHME", "PLAYER", "Increases running speed."),
+              GameCheat("Fast swim", "GOTGILLS", "PLAYER", "Increases swimming speed."),
+              GameCheat("Super jump", "HOPTOIT", "PLAYER", "Makes the player jump much higher."),
+              GameCheat("Drunk mode", "LIQUOR", "PLAYER", "Makes the player intoxicated."),
+              GameCheat("Skyfall", "SKYFALL", "PLAYER", "Drops the player from the sky."),
+              GameCheat("Parachute", "SKYDIVE", "PLAYER", "Gives the player a parachute."),
+              GameCheat("Slow-motion aim", "DEADEYE", "PLAYER", "Slows time while aiming. Re-enter to cycle intensity."),
+              GameCheat("Give weapons & ammo", "TOOLUP", "COMBAT", "Gives the player weapons and ammunition."),
+              GameCheat("Explosive melee", "HOTHANDS", "COMBAT", "Makes melee attacks explosive."),
+              GameCheat("Explosive ammo", "HIGHEX", "COMBAT", "Makes fired ammunition explosive."),
+              GameCheat("Flaming bullets", "INCENDIARY", "COMBAT", "Sets fired bullets on fire."),
+              GameCheat("Raise wanted level", "FUGITIVE", "POLICE", "Increases the wanted level."),
+              GameCheat("Lower wanted level", "LAWYERUP", "POLICE", "Decreases the wanted level."),
+              GameCheat("Change weather", "MAKEITRAIN", "WORLD", "Cycles to the next weather condition."),
+              GameCheat("Moon gravity", "FLOATER", "WORLD", "Reduces gravity."),
+              GameCheat("Slidey cars", "SNOWDAY", "WORLD", "Makes vehicles lose traction."),
+              GameCheat("Slow motion", "SLOWMO", "WORLD", "Slows the game world. Re-enter to cycle intensity."),
+              GameCheat("Spawn Buzzard", "BUZZOFF", "VEHICLES", "Spawns a Buzzard attack helicopter."),
+              GameCheat("Spawn Comet", "COMET", "VEHICLES", "Spawns a Comet sports car."),
+              GameCheat("Spawn Rapid GT", "RAPIDGT", "VEHICLES", "Spawns a Rapid GT."),
+              GameCheat("Spawn PCJ-600", "ROCKET", "VEHICLES", "Spawns a PCJ-600 motorcycle."),
+              GameCheat("Spawn Sanchez", "OFFROAD", "VEHICLES", "Spawns a Sanchez dirt bike."),
+              GameCheat("Spawn BMX", "BANDIT", "VEHICLES", "Spawns a BMX."),
+              GameCheat("Spawn Caddy", "HOLEIN1", "VEHICLES", "Spawns a golf caddy."),
+              GameCheat("Spawn Limo", "VINEWOOD", "VEHICLES", "Spawns a limousine."),
+              GameCheat("Spawn Trashmaster", "TRASHED", "VEHICLES", "Spawns a Trashmaster."),
+              GameCheat("Spawn Stunt Plane", "BARNSTORM", "VEHICLES", "Spawns a stunt plane."),
+              GameCheat("Spawn Duster", "FLYSPRAY", "VEHICLES", "Spawns a Duster crop duster."),
+              GameCheat("Spawn Dodo", "EXTINCT", "VEHICLES", "Spawns a Dodo seaplane. Requires unlock."),
+              GameCheat("Spawn Duke O'Death", "DEATHCAR", "VEHICLES", "Spawns the Duke O'Death. Requires unlock."),
+              GameCheat("Spawn Kraken", "BUBBLES", "VEHICLES", "Spawns the Kraken submarine. Requires unlock."),
+              GameCheat("Director mode", "JRTALENT", "SPECIAL", "Opens Director Mode."),
+          )'''
+
+          pattern = r'private val gtaVStoryModeCheats = listOf\(.*?\n\)\n\nprivate const val PROFILE_STORAGE_KEY'
+          new_text, count = re.subn(pattern, replacement + "\n\nprivate const val PROFILE_STORAGE_KEY", text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit("Could not locate GTA V cheat list")
+
+          new_text = new_text.replace(
+              'listOf("PLAYER", "WORLD").forEach { category ->',
+              'listOf("PLAYER", "COMBAT", "POLICE", "WORLD", "VEHICLES", "SPECIAL").forEach { category ->'
+          )
+
+          path.write_text(new_text, encoding="utf-8")
+
+      - name: Commit changes and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/workofaditya/scinet/ControllerScreen.kt
+          git rm .github/workflows/temp-gta-cheats.yml
+          git commit -m "Add complete GTA V Story Mode cheat menu"
+          git push origin HEAD:feature/native-android-app
