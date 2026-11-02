@@ -45,6 +45,69 @@ import java.util.UUID
 
 private data class PadButton(val id: String, val label: String, val key: String, val size: Int = 56, val accent: Boolean = false)
 
+private data class ControllerKeyOption(val key: String, val label: String, val category: String)
+
+private val controllerKeyOptions = buildList {
+    addAll(('a'..'z').map { ControllerKeyOption(it.toString(), it.uppercase(), "LETTERS") })
+    addAll((0..9).map { ControllerKeyOption(it.toString(), it.toString(), "NUMBER ROW") })
+    addAll((1..24).map { ControllerKeyOption("f$it", "F$it", "FUNCTION KEYS") })
+    addAll(listOf(
+        ControllerKeyOption("esc", "ESC", "NAVIGATION & EDITING"),
+        ControllerKeyOption("tab", "TAB", "NAVIGATION & EDITING"),
+        ControllerKeyOption("enter", "ENTER", "NAVIGATION & EDITING"),
+        ControllerKeyOption("backspace", "BACKSPACE", "NAVIGATION & EDITING"),
+        ControllerKeyOption("space", "SPACE", "NAVIGATION & EDITING"),
+        ControllerKeyOption("insert", "INSERT", "NAVIGATION & EDITING"),
+        ControllerKeyOption("delete", "DELETE", "NAVIGATION & EDITING"),
+        ControllerKeyOption("home", "HOME", "NAVIGATION & EDITING"),
+        ControllerKeyOption("end", "END", "NAVIGATION & EDITING"),
+        ControllerKeyOption("pageup", "PAGE UP", "NAVIGATION & EDITING"),
+        ControllerKeyOption("pagedown", "PAGE DOWN", "NAVIGATION & EDITING"),
+        ControllerKeyOption("up", "↑", "NAVIGATION & EDITING"),
+        ControllerKeyOption("down", "↓", "NAVIGATION & EDITING"),
+        ControllerKeyOption("left", "←", "NAVIGATION & EDITING"),
+        ControllerKeyOption("right", "→", "NAVIGATION & EDITING"),
+        ControllerKeyOption("capslock", "CAPS LOCK", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("shift", "SHIFT", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("ctrl", "CTRL", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("alt", "ALT", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("meta", "WIN", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("apps", "MENU", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("printscreen", "PRINT SCREEN", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("scrolllock", "SCROLL LOCK", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("pause", "PAUSE", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("numlock", "NUM LOCK", "MODIFIERS & SYSTEM"),
+        ControllerKeyOption("grave", "`", "PUNCTUATION"),
+        ControllerKeyOption("minus", "-", "PUNCTUATION"),
+        ControllerKeyOption("equal", "=", "PUNCTUATION"),
+        ControllerKeyOption("left-bracket", "[", "PUNCTUATION"),
+        ControllerKeyOption("right-bracket", "]", "PUNCTUATION"),
+        ControllerKeyOption("backslash", "\\", "PUNCTUATION"),
+        ControllerKeyOption("semicolon", ";", "PUNCTUATION"),
+        ControllerKeyOption("apostrophe", "'", "PUNCTUATION"),
+        ControllerKeyOption("comma", ",", "PUNCTUATION"),
+        ControllerKeyOption("period", ".", "PUNCTUATION"),
+        ControllerKeyOption("slash", "/", "PUNCTUATION"),
+        ControllerKeyOption("oem-102", "ISO \\", "PUNCTUATION")
+    ))
+    addAll((0..9).map { ControllerKeyOption("numpad$it", "NUM $it", "NUMERIC KEYPAD") })
+    addAll(listOf(
+        ControllerKeyOption("numpad-divide", "NUM ÷", "NUMERIC KEYPAD"),
+        ControllerKeyOption("numpad-multiply", "NUM ×", "NUMERIC KEYPAD"),
+        ControllerKeyOption("numpad-subtract", "NUM −", "NUMERIC KEYPAD"),
+        ControllerKeyOption("numpad-add", "NUM +", "NUMERIC KEYPAD"),
+        ControllerKeyOption("numpad-enter", "NUM ENTER", "NUMERIC KEYPAD"),
+        ControllerKeyOption("numpad-decimal", "NUM .", "NUMERIC KEYPAD"),
+        ControllerKeyOption("numpad-separator", "NUM SEP", "NUMERIC KEYPAD")
+    ))
+}
+
+private fun customKeyDefaultPosition(index: Int): Offset {
+    val column = index.coerceAtLeast(0) % 4
+    val row = index.coerceAtLeast(0) / 4
+    return Offset(0.29f + column * 0.115f, (0.84f - row * 0.13f).coerceAtLeast(0.14f))
+}
+
 private val defaultPadPositions = mapOf(
     "joystick" to Offset(.13f, .49f),
     "w" to Offset(.13f, .32f), "a" to Offset(.075f, .49f),
@@ -63,7 +126,8 @@ private data class ControllerProfile(
     val movementMode: String = "wasd",
     val cameraSensitivity: Float = 3.0f,
     val positions: Map<String, Offset> = defaultPadPositions,
-    val cheatPack: String = ""
+    val cheatPack: String = "",
+    val customKeys: List<String> = emptyList()
 )
 
 private data class GameCheat(
@@ -125,14 +189,22 @@ private fun movementLabel(slot: String, scheme: String): String =
         "up" -> "↑"; "left" -> "←"; "down" -> "↓"; else -> "→"
     } else movementKey(slot, scheme).uppercase()
 
-private fun readProfilePositions(value: JSONObject?): Map<String, Offset> =
-    defaultPadPositions.mapValues { (id, default) ->
-        val saved = value?.optJSONObject(id)
-        if (saved == null) default else Offset(
-            saved.optDouble("x", default.x.toDouble()).toFloat().coerceIn(.03f, .97f),
-            saved.optDouble("y", default.y.toDouble()).toFloat().coerceIn(.08f, .92f)
-        )
+private fun readProfilePositions(value: JSONObject?): Map<String, Offset> {
+    val result = defaultPadPositions.toMutableMap()
+    if (value != null) {
+        val keys = value.keys()
+        while (keys.hasNext()) {
+            val id = keys.next()
+            val saved = value.optJSONObject(id) ?: continue
+            val default = result[id] ?: Offset(.5f, .5f)
+            result[id] = Offset(
+                saved.optDouble("x", default.x.toDouble()).toFloat().coerceIn(.03f, .97f),
+                saved.optDouble("y", default.y.toDouble()).toFloat().coerceIn(.08f, .92f)
+            )
+        }
     }
+    return result
+}
 
 private fun loadControllerProfiles(prefs: SharedPreferences): List<ControllerProfile> {
     val stored = prefs.getString(PROFILE_STORAGE_KEY, null)
@@ -156,7 +228,14 @@ private fun loadControllerProfiles(prefs: SharedPreferences): List<ControllerPro
                     positions = readProfilePositions(item.optJSONObject("positions")),
                     cheatPack = item.optString("cheatPack").ifBlank {
                         if (name.equals("Default", ignoreCase = true)) GTA_V_STORY_CHEAT_PACK else ""
-                    }
+                    },
+                    customKeys = item.optJSONArray("customKeys")?.let { savedKeys ->
+                        (0 until savedKeys.length()).mapNotNull { keyIndex ->
+                            savedKeys.optString(keyIndex).takeIf { key ->
+                                controllerKeyOptions.any { it.key == key }
+                            }
+                        }.distinct()
+                    } ?: emptyList()
                 )
             }
         }.getOrNull()
@@ -196,7 +275,8 @@ private fun saveControllerProfiles(prefs: SharedPreferences, profiles: List<Cont
             .put("movementMode", profile.movementMode)
             .put("cameraSensitivity", profile.cameraSensitivity)
             .put("positions", positions)
-            .put("cheatPack", profile.cheatPack))
+            .put("cheatPack", profile.cheatPack)
+            .put("customKeys", JSONArray(profile.customKeys)))
     }
     prefs.edit().putString(PROFILE_STORAGE_KEY, array.toString()).apply()
 }
@@ -221,6 +301,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     var settingsOpen by remember { mutableStateOf(false) }
     var profilesOpen by remember { mutableStateOf(false) }
     var cheatsOpen by remember { mutableStateOf(false) }
+    var customKeysOpen by remember { mutableStateOf(false) }
     var cheatStatus by remember(activeProfileId) { mutableStateOf("") }
     var cheatStatusBad by remember(activeProfileId) { mutableStateOf(false) }
     var sendingCheatCode by remember { mutableStateOf<String?>(null) }
@@ -244,7 +325,13 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     }
     val activeSensitivity = rememberUpdatedState(sensitivity)
     val positions = remember(activeProfileId) {
-        mutableStateMapOf<String, Offset>().apply { putAll(activeProfile.positions) }
+        mutableStateMapOf<String, Offset>().apply {
+            putAll(activeProfile.positions)
+            activeProfile.customKeys.forEachIndexed { index, key ->
+                val id = "custom-$key"
+                if (!containsKey(id)) this[id] = customKeyDefaultPosition(index)
+            }
+        }
     }
 
     fun updateProfile(profileId: String, transform: (ControllerProfile) -> ControllerProfile) {
@@ -263,6 +350,22 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
         prefs.edit().putStringSet("gta_v_favorite_cheats", updated).apply()
         cheatStatus = if (code in updated) "Added to favorites." else "Removed from favorites."
         cheatStatusBad = false
+    }
+
+    fun setCustomKeyEnabled(key: String, enabled: Boolean) {
+        val nextKeys = activeProfile.customKeys.toMutableList()
+        if (enabled) {
+            if (key !in nextKeys) {
+                positions["custom-$key"] = customKeyDefaultPosition(nextKeys.size)
+                nextKeys.add(key)
+            }
+        } else {
+            nextKeys.remove(key)
+            positions.remove("custom-$key")
+        }
+        updateProfile(activeProfileId) {
+            it.copy(customKeys = nextKeys, positions = positions.toMap())
+        }
     }
 
     fun saveCurrentLayout() {
@@ -288,6 +391,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
         settingsOpen = false
         profilesOpen = false
         cheatsOpen = false
+        customKeysOpen = false
     }
 
     fun createProfile() {
@@ -307,7 +411,8 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             movementScheme = movementScheme,
             movementMode = movementMode,
             cameraSensitivity = sensitivity,
-            positions = positions.toMap()
+            positions = positions.toMap(),
+            customKeys = activeProfile.customKeys
         )
         profiles.add(profile)
         saveControllerProfiles(prefs, profiles)
@@ -336,6 +441,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             editMode = false
             settingsOpen = false
             cheatsOpen = false
+            customKeysOpen = false
         }
         deleteProfileId = null
     }
@@ -393,7 +499,16 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             }
         }
     }
-    BackHandler { onExit() }
+    BackHandler {
+        when {
+            customKeysOpen -> customKeysOpen = false
+            cheatsOpen -> cheatsOpen = false
+            profilesOpen -> profilesOpen = false
+            settingsOpen -> settingsOpen = false
+            editMode -> editMode = false
+            else -> onExit()
+        }
+    }
 
     val buttons = listOf(
         PadButton("w", movementLabel("up", movementScheme), movementKey("up", movementScheme)),
@@ -405,7 +520,9 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
         PadButton("q", "Q", "q"), PadButton("ctrl", "C", "ctrl"),
         PadButton("esc", "ESC", "esc", 48), PadButton("mouse-left", "LMB", "mouse-left", 54, true),
         PadButton("mouse-right", "RMB", "mouse-right", 54)
-    )
+    ) + activeProfile.customKeys.map { key ->
+        PadButton("custom-$key", controllerKeyOptions.first { it.key == key }.label, key, 48)
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF080B0F))) {
         val areaWidth = maxWidth
@@ -489,7 +606,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             }
         }
         buttons.filterNot { movementMode == "joystick" && it.id in setOf("w", "a", "s", "d") }.forEach { button ->
-            val pos = positions[button.id] ?: defaultPadPositions.getValue(button.id)
+            val pos = positions[button.id] ?: customKeyDefaultPosition(activeProfile.customKeys.indexOf(button.key))
             val diameter = button.size.dp
             Box(
                 Modifier.offset(x = areaWidth * pos.x - diameter / 2, y = areaHeight * pos.y - diameter / 2)
@@ -795,6 +912,78 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             }
         }
 
+
+        if (customKeysOpen) {
+            Surface(
+                modifier = Modifier.fillMaxSize().padding(8.dp),
+                color = Color(0xFF111922),
+                contentColor = Color(0xFFEAF0F4),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF344653)),
+                shadowElevation = 18.dp
+            ) {
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("CONTROLLER  /  CUSTOM KEYS", color = Color(0xFFEAF0F4), fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
+                            Text("SELECT KEYS TO ADD TO ${activeProfile.name.uppercase()}", color = Color(0xFF82909B), fontSize = 9.sp, letterSpacing = .6.sp)
+                        }
+                        TextButton(
+                            onClick = { saveCurrentLayout(); customKeysOpen = false },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Text("DONE  ×", color = Color(0xFFB8DDF0), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    HorizontalDivider(color = Color(0xFF2B3944))
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 150.dp),
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        controllerKeyOptions.groupBy { it.category }.forEach { (category, categoryKeys) ->
+                            item(key = "custom-key-category-$category", span = { GridItemSpan(maxLineSpan) }) {
+                                Text(category, color = Color(0xFF9CC8E0), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp, modifier = Modifier.padding(top = 5.dp, bottom = 1.dp))
+                            }
+                            items(categoryKeys, key = { "custom-key-${it.key}" }) { option ->
+                                val selected = option.key in activeProfile.customKeys
+                                Row(
+                                    Modifier.fillMaxWidth().height(43.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (selected) Color(0xFF1B2B36) else Color(0xFF151E27))
+                                        .border(1.dp, if (selected) Color(0xFF55758A) else Color(0xFF2B3944), RoundedCornerShape(8.dp))
+                                        .clickable { setCustomKeyEnabled(option.key, !selected) }
+                                        .padding(start = 10.dp, end = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(option.label, modifier = Modifier.weight(1f), color = Color(0xFFEAF0F4), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Checkbox(
+                                        checked = selected,
+                                        onCheckedChange = { setCustomKeyEnabled(option.key, it) },
+                                        colors = CheckboxDefaults.colors(checkedColor = Color(0xFF9CC8E0), uncheckedColor = Color(0xFF657785), checkmarkColor = Color(0xFF101820))
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${activeProfile.customKeys.size} EXTRA KEYS ACTIVE", modifier = Modifier.weight(1f), color = Color(0xFF9CC8E0), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+                        TextButton(onClick = {
+                            activeProfile.customKeys.toList().forEach { setCustomKeyEnabled(it, false) }
+                        }) {
+                            Text("CLEAR ALL", color = Color(0xFFCC9696), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Text("Changes are saved to this controller profile automatically. Use EDIT LAYOUT to reposition added buttons.", color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 13.sp)
+                }
+            }
+        }
+
         if (profilesOpen) {
             Dialog(onDismissRequest = { profilesOpen = false }) {
                 Surface(
@@ -992,6 +1181,22 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                         }
                     }
                     Text("Choose the key set used for up, left, down and right.", color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 13.sp)
+                    HorizontalDivider(color = Color(0xFF34414C))
+                    Text("ADDITIONAL CONTROLS", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
+                    Text("Choose extra keyboard keys to add to this profile's on-screen controller.", color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 13.sp)
+                    Button(
+                        onClick = {
+                            saveCurrentLayout()
+                            editMode = false
+                            settingsOpen = false
+                            customKeysOpen = true
+                        },
+                        modifier = Modifier.fillMaxWidth().height(38.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B2B36), contentColor = Color(0xFFB8DDF0))
+                    ) {
+                        Text("MANAGE CUSTOM KEYS  ·  ${activeProfile.customKeys.size}", fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .5.sp)
+                    }
                     HorizontalDivider(color = Color(0xFF34414C))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("CAMERA SENSITIVITY", color = Color(0xFFB8C7D2), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
