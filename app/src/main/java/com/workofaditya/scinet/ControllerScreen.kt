@@ -228,7 +228,14 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             return
         }
         saveCurrentLayout()
-        val profile = ControllerProfile(id = UUID.randomUUID().toString(), name = name)
+        val profile = ControllerProfile(
+            id = UUID.randomUUID().toString(),
+            name = name,
+            movementScheme = movementScheme,
+            movementMode = movementMode,
+            cameraSensitivity = sensitivity,
+            positions = positions.toMap()
+        )
         profiles.add(profile)
         saveControllerProfiles(prefs, profiles)
         activeProfileId = profile.id
@@ -571,7 +578,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                 ) {
                     Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("CREATE PROFILE", color = Color(0xFFEAF0F4), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                        Text("Start with a clean controller layout and configure it for a game.", color = Color(0xFF82909B), fontSize = 10.sp, lineHeight = 15.sp)
+                        Text("Starts from your current setup. Changes to this profile stay independent.", color = Color(0xFF82909B), fontSize = 10.sp, lineHeight = 15.sp)
                         OutlinedTextField(
                             value = newProfileName,
                             onValueChange = { newProfileName = it.take(32); profileNameError = "" },
