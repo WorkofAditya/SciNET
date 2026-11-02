@@ -803,10 +803,18 @@ def _send_windows_key(vk_code, down):
     return True
 
 
-# Fixed GTA V Story Mode presets exposed by the Android controller.
-# The allowlist intentionally excludes weapon, explosive and intoxication effects.
+# Fixed GTA V Story Mode cheat codes exposed by the Android controller.
+# Keep this allowlist in sync with gtaVStoryModeCheats in ControllerScreen.kt.
 _GTA_V_CONTROLLER_CHEATS = {
-    "PAINKILLER", "TURTLE", "POWERUP", "CATCHME", "GOTGILLS", "MAKEITRAIN",
+    "PAINKILLER", "TURTLE", "POWERUP", "CATCHME",
+    "GOTGILLS", "HOPTOIT", "LIQUOR", "SKYFALL",
+    "SKYDIVE", "DEADEYE", "TOOLUP", "HOTHANDS",
+    "HIGHEX", "INCENDIARY", "FUGITIVE", "LAWYERUP",
+    "MAKEITRAIN", "FLOATER", "SNOWDAY", "SLOWMO",
+    "BUZZOFF", "COMET", "RAPIDGT", "ROCKET",
+    "OFFROAD", "BANDIT", "HOLEIN1", "VINEWOOD",
+    "TRASHED", "BARNSTORM", "FLYSPRAY", "EXTINCT",
+    "DEATHCAR", "BUBBLES", "JRTALENT",
 }
 
 
