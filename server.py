@@ -816,6 +816,9 @@ _GTA_V_CONTROLLER_CHEATS = {
 def _is_gta_v_foreground():
     """Only inject game shortcuts while a supported GTA V executable is focused."""
     user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    user32.GetWindowThreadProcessId.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+    user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
         return False
