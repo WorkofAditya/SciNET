@@ -242,10 +242,12 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     }
 
     fun deleteProfile(profileId: String) {
-        if (profiles.size <= 1) return
         val index = profiles.indexOfFirst { it.id == profileId }
         if (index < 0) return
         profiles.removeAt(index)
+        if (profiles.isEmpty()) {
+            profiles.add(ControllerProfile(id = UUID.randomUUID().toString(), name = "Default"))
+        }
         saveControllerProfiles(prefs, profiles)
         if (profileId == activeProfileId) {
             val next = profiles[index.coerceAtMost(profiles.lastIndex)]
@@ -543,10 +545,9 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                                     }
                                     TextButton(
                                         onClick = { deleteProfileId = profile.id },
-                                        enabled = profiles.size > 1,
                                         contentPadding = PaddingValues(horizontal = 7.dp, vertical = 3.dp)
                                     ) {
-                                        Text("×", color = if (profiles.size > 1) Color(0xFFCC9696) else Color(0xFF53606A), fontSize = 18.sp)
+                                        Text("×", color = Color(0xFFCC9696), fontSize = 18.sp)
                                     }
                                 }
                             }
@@ -615,7 +616,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                     titleContentColor = Color(0xFFEAF0F4),
                     textContentColor = Color(0xFF9BAAB5),
                     title = { Text("Delete profile?") },
-                    text = { Text("Delete ${target.name} and its saved controller layout? This cannot be undone.") },
+                    text = { Text("Delete ${target.name} and its saved controller layout? If it is your last profile, a fresh Default profile will be created.") },
                     confirmButton = {
                         TextButton(onClick = { deleteProfile(targetId) }) {
                             Text("DELETE", color = Color(0xFFE0A0A0), fontWeight = FontWeight.Bold)
