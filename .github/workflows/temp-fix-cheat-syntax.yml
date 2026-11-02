@@ -17,10 +17,14 @@ jobs:
           p = Path('app/src/main/java/com/workofaditya/scinet/ControllerScreen.kt')
           s = p.read_text()
           old = '''                            }
+                                }
+                            }
                             }
                         }
                         if (cheatStatus.isNotBlank()) {'''
           new = '''                            }
+                                }
+                            }
                         }
                         if (cheatStatus.isNotBlank()) {'''
           if old not in s:
