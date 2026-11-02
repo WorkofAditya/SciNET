@@ -76,13 +76,13 @@ internal object SciNETApi {
     ) = withContext(Dispatchers.IO) {
         val totalBytes = runCatching {
             context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst() && !cursor.isNull(0)) {
-                    cursor.getLong(0).takeIf { it >= 0L }
-                } else null
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0).takeIf { it >= 0L }
+                else null
             }
         }.getOrNull()
 
-        val boundary = "----SciNETAndroid${System.currentTimeMillis()}"
+        val safeFileName = fileName.replace("\"", "_")
+        val boundary = "----SciNETAndroid" + System.currentTimeMillis()
         val path = "/api/files/upload?path=" + encode(folder)
         val connection = (URL(normalizeHost(host) + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -100,9 +100,9 @@ internal object SciNETApi {
             onProgress(0L, totalBytes)
 
             connection.outputStream.use { output ->
-                output.write("--$boundary\\r\\n".toByteArray())
-                output.write("Content-Disposition: form-data; name=\\"files\\"; filename=\\"\${fileName.replace("\\", "_")}\\"\\r\\n".toByteArray())
-                output.write("Content-Type: application/octet-stream\\r\\n\\r\\n".toByteArray())
+                output.write("--$boundary\r\n".toByteArray())
+                output.write("Content-Disposition: form-data; name=\"files\"; filename=\"$safeFileName\"\r\n".toByteArray())
+                output.write("Content-Type: application/octet-stream\r\n\r\n".toByteArray())
 
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     val buffer = ByteArray(64 * 1024)
@@ -122,7 +122,7 @@ internal object SciNETApi {
                     }
                 } ?: throw IllegalStateException("Android could not open the selected file.")
 
-                output.write("\\r\\n--$boundary--\\r\\n".toByteArray())
+                output.write("\r\n--$boundary--\r\n".toByteArray())
             }
 
             onProgress(transferred, totalBytes)
