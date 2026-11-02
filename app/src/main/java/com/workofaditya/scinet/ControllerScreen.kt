@@ -267,7 +267,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     }
     val originalOrientation = remember(activity) { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     val originalUi = remember(activity) { activity?.window?.decorView?.systemUiVisibility ?: 0 }
-    LaunchedEffect(movementMode) {
+    LaunchedEffect(activeProfileId, movementMode) {
         joystickOffset = Offset.Zero
     }
 
