@@ -9,6 +9,8 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.background
@@ -26,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,6 +47,15 @@ import org.json.JSONObject
 import java.util.Locale
 import java.net.HttpURLConnection
 import java.net.URL
+
+private data class FileTransferProgress(
+    val direction: String,
+    val fileName: String,
+    val transferredBytes: Long,
+    val totalBytes: Long?,
+    val fileIndex: Int = 1,
+    val fileCount: Int = 1
+)
 
 @Composable
 internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
@@ -64,6 +76,14 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
     var originalText by remember { mutableStateOf("") }
     var editorOpen by remember { mutableStateOf(false) }
     var pendingDownload by remember { mutableStateOf("") }
+    var transferProgress by remember { mutableStateOf<FileTransferProgress?>(null) }
+    val transferFraction = transferProgress?.totalBytes?.takeIf { it > 0L }?.let { total ->
+        (transferProgress!!.transferredBytes.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+    } ?: 0f
+    val animatedTransferFraction by animateFloatAsState(
+        targetValue = transferFraction,
+        animationSpec = tween(durationMillis = 160)
+    )
 
     suspend fun reload(path: String = folder) {
         loading = true
@@ -78,26 +98,59 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
     val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) scope.launch {
             var count = 0
-            for (uri in uris) {
-                try {
+            try {
+                uris.forEachIndexed { index, uri ->
                     val name = displayName(context, uri)
-                    SciNETApi.upload(context, host, uri, name, folder)
-                    count++
-                } catch (e: Exception) { onMessage(e.message ?: "Upload failed.", true) }
-            }
-            if (count > 0) {
-                onMessage("Uploaded " + count + " file(s).", false)
-                reload()
+                    try {
+                        SciNETApi.upload(context, host, uri, name, folder) { transferred, total ->
+                            withContext(Dispatchers.Main.immediate) {
+                                transferProgress = FileTransferProgress(
+                                    direction = "UPLOADING",
+                                    fileName = name,
+                                    transferredBytes = transferred,
+                                    totalBytes = total,
+                                    fileIndex = index + 1,
+                                    fileCount = uris.size
+                                )
+                            }
+                        }
+                        count++
+                    } catch (e: Exception) {
+                        onMessage(e.message ?: ("Upload failed: " + name), true)
+                    }
+                }
+                if (count > 0) {
+                    onMessage("Uploaded " + count + " file(s).", false)
+                    reload()
+                }
+            } finally {
+                transferProgress = null
             }
         }
     }
     val downloadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
         val path = pendingDownload
         if (uri != null && path.isNotBlank()) scope.launch {
+            val name = path.substringAfterLast('/').ifBlank { "download" }
             try {
-                SciNETApi.downloadTo(context, host, path, uri)
+                SciNETApi.downloadTo(context, host, path, uri) { transferred, total ->
+                    withContext(Dispatchers.Main.immediate) {
+                        transferProgress = FileTransferProgress(
+                            direction = "DOWNLOADING",
+                            fileName = name,
+                            transferredBytes = transferred,
+                            totalBytes = total
+                        )
+                    }
+                }
                 onMessage("Download saved.", false)
-            } catch (e: Exception) { onMessage(e.message ?: "Download failed.", true) }
+            } catch (e: Exception) {
+                onMessage(e.message ?: "Download failed.", true)
+            } finally {
+                transferProgress = null
+                pendingDownload = ""
+            }
+        } else {
             pendingDownload = ""
         }
     }
@@ -149,6 +202,63 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(if (loading) "SYNCING STORAGE…" else visibleItems.size.toString() + " ITEMS", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
                 if (search.isNotBlank()) Text("FILTERED", color = Accent, fontSize = 8.sp, letterSpacing = 1.sp)
+            }
+        }
+
+        transferProgress?.let { current ->
+            val percent = current.totalBytes?.takeIf { it > 0L }?.let {
+                (current.transferredBytes * 100L / it).toInt().coerceIn(0, 100)
+            }
+            PanelCard {
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            if (current.fileCount > 1) "${current.direction}  ·  ${current.fileIndex}/${current.fileCount}"
+                            else current.direction,
+                            color = Accent,
+                            fontSize = 9.sp,
+                            letterSpacing = 1.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            percent?.let { "$it%" } ?: formatBytes(current.transferredBytes),
+                            color = Ink,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Text(
+                        current.fileName,
+                        color = Ink,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (percent != null) {
+                        LinearProgressIndicator(
+                            progress = animatedTransferFraction,
+                            modifier = Modifier.fillMaxWidth().height(6.dp),
+                            color = Accent,
+                            trackColor = Edge
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().height(6.dp),
+                            color = Accent,
+                            trackColor = Edge
+                        )
+                    }
+                    Text(
+                        formatBytes(current.transferredBytes) + " / " +
+                            (current.totalBytes?.let { formatBytes(it) } ?: "size unknown"),
+                        color = Muted,
+                        fontSize = 9.sp
+                    )
+                }
             }
         }
 
