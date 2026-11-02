@@ -185,7 +185,7 @@ private fun saveControllerProfiles(prefs: SharedPreferences, profiles: List<Cont
 }
 
 @Composable
-internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>) -> Unit, onExit: () -> Unit, onError: (String) -> Unit) {
+internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>) -> Unit, onExit: () -> Unit, onError: (String) -> Unit, onCheat: (String, (String?) -> Unit) -> Unit) {
     val context = LocalContext.current
     val activity = context as? Activity
     val prefs = remember { context.getSharedPreferences("scinet-controller", Context.MODE_PRIVATE) }
