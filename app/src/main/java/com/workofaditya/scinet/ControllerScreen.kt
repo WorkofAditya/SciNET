@@ -74,7 +74,36 @@ private val gtaVStoryModeCheats = listOf(
     GameCheat("Recharge special ability", "POWERUP", "PLAYER", "Refills the character's special ability."),
     GameCheat("Fast run", "CATCHME", "PLAYER", "Increases running speed."),
     GameCheat("Fast swim", "GOTGILLS", "PLAYER", "Increases swimming speed."),
-    GameCheat("Change weather", "MAKEITRAIN", "WORLD", "Cycles to the next weather condition.")
+    GameCheat("Super jump", "HOPTOIT", "PLAYER", "Makes the player jump much higher."),
+    GameCheat("Drunk mode", "LIQUOR", "PLAYER", "Makes the player intoxicated."),
+    GameCheat("Skyfall", "SKYFALL", "PLAYER", "Drops the player from the sky."),
+    GameCheat("Parachute", "SKYDIVE", "PLAYER", "Gives the player a parachute."),
+    GameCheat("Slow-motion aim", "DEADEYE", "PLAYER", "Slows time while aiming. Re-enter to cycle intensity."),
+    GameCheat("Give weapons & ammo", "TOOLUP", "COMBAT", "Gives the player weapons and ammunition."),
+    GameCheat("Explosive melee", "HOTHANDS", "COMBAT", "Makes melee attacks explosive."),
+    GameCheat("Explosive ammo", "HIGHEX", "COMBAT", "Makes fired ammunition explosive."),
+    GameCheat("Flaming bullets", "INCENDIARY", "COMBAT", "Sets fired bullets on fire."),
+    GameCheat("Raise wanted level", "FUGITIVE", "POLICE", "Increases the wanted level."),
+    GameCheat("Lower wanted level", "LAWYERUP", "POLICE", "Decreases the wanted level."),
+    GameCheat("Change weather", "MAKEITRAIN", "WORLD", "Cycles to the next weather condition."),
+    GameCheat("Moon gravity", "FLOATER", "WORLD", "Reduces gravity."),
+    GameCheat("Slidey cars", "SNOWDAY", "WORLD", "Makes vehicles lose traction."),
+    GameCheat("Slow motion", "SLOWMO", "WORLD", "Slows the game world. Re-enter to cycle intensity."),
+    GameCheat("Spawn Buzzard", "BUZZOFF", "VEHICLES", "Spawns a Buzzard attack helicopter."),
+    GameCheat("Spawn Comet", "COMET", "VEHICLES", "Spawns a Comet sports car."),
+    GameCheat("Spawn Rapid GT", "RAPIDGT", "VEHICLES", "Spawns a Rapid GT."),
+    GameCheat("Spawn PCJ-600", "ROCKET", "VEHICLES", "Spawns a PCJ-600 motorcycle."),
+    GameCheat("Spawn Sanchez", "OFFROAD", "VEHICLES", "Spawns a Sanchez dirt bike."),
+    GameCheat("Spawn BMX", "BANDIT", "VEHICLES", "Spawns a BMX."),
+    GameCheat("Spawn Caddy", "HOLEIN1", "VEHICLES", "Spawns a golf caddy."),
+    GameCheat("Spawn Limo", "VINEWOOD", "VEHICLES", "Spawns a limousine."),
+    GameCheat("Spawn Trashmaster", "TRASHED", "VEHICLES", "Spawns a Trashmaster."),
+    GameCheat("Spawn Stunt Plane", "BARNSTORM", "VEHICLES", "Spawns a stunt plane."),
+    GameCheat("Spawn Duster", "FLYSPRAY", "VEHICLES", "Spawns a Duster crop duster."),
+    GameCheat("Spawn Dodo", "EXTINCT", "VEHICLES", "Spawns a Dodo seaplane. Requires unlock."),
+    GameCheat("Spawn Duke O'Death", "DEATHCAR", "VEHICLES", "Spawns the Duke O'Death. Requires unlock."),
+    GameCheat("Spawn Kraken", "BUBBLES", "VEHICLES", "Spawns the Kraken submarine. Requires unlock."),
+    GameCheat("Director mode", "JRTALENT", "SPECIAL", "Opens Director Mode."),
 )
 
 private const val PROFILE_STORAGE_KEY = "controller_profiles_v1"
@@ -568,7 +597,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                                 Modifier.heightIn(max = (areaHeight - 180.dp).coerceAtLeast(110.dp)).verticalScroll(rememberScrollState()),
                                 verticalArrangement = Arrangement.spacedBy(9.dp)
                             ) {
-                                listOf("PLAYER", "WORLD").forEach { category ->
+                                listOf("PLAYER", "COMBAT", "POLICE", "WORLD", "VEHICLES", "SPECIAL").forEach { category ->
                                     Text(category, color = Color(0xFF9CC8E0), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                                     gtaVStoryModeCheats.filter { it.category == category }.forEach { cheat ->
                                         Row(
