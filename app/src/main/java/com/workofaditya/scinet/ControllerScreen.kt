@@ -517,6 +517,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                         ) {
                             profiles.forEach { profile ->
                                 val selected = profile.id == activeProfileId
+                                val inputLabel = if (profile.movementMode == "joystick") "JOYSTICK" else "KEYS"
                                 Row(
                                     Modifier.fillMaxWidth()
                                         .clip(RoundedCornerShape(10.dp))
@@ -529,8 +530,8 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                         Text(profile.name, color = Color(0xFFEAF0F4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                                         Text(
-                                            if (selected) "ACTIVE  ·  ${profile.movementScheme}  ·  ${profile.movementMode.uppercase()}"
-                                            else "${profile.movementScheme}  ·  ${profile.movementMode.uppercase()}",
+                                            if (selected) "ACTIVE  ·  ${profile.movementScheme}  ·  ${inputLabel}"
+                                            else "${profile.movementScheme}  ·  ${inputLabel}",
                                             color = if (selected) Color(0xFF9CC8E0) else Color(0xFF82909B),
                                             fontSize = 9.sp,
                                             letterSpacing = .35.sp
