@@ -1,5 +1,6 @@
 package com.workofaditya.scinet
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -124,7 +125,7 @@ private fun SciNETApp() {
     }
 
     val qrScannerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == ComponentActivity.RESULT_OK) {
+        if (result.resultCode == Activity.RESULT_OK) {
             val scanned = result.data?.getStringExtra("scinet_host")?.trim().orEmpty()
             if (scanned.startsWith("http://") || scanned.startsWith("https://")) {
                 connect(scanned)
