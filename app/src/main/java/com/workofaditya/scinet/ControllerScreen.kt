@@ -519,7 +519,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                         }
                         HorizontalDivider(color = Color(0xFF2B3944))
                         Column(
-                            Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
+                            Modifier.heightIn(max = (areaHeight - 180.dp).coerceAtLeast(90.dp)).verticalScroll(rememberScrollState()),
                             verticalArrangement = Arrangement.spacedBy(7.dp)
                         ) {
                             profiles.forEach { profile ->
