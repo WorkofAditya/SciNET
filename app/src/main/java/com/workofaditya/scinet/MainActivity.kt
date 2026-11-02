@@ -254,7 +254,22 @@ private fun SciNETApp() {
                         "CONTROL" -> ControlScreen(host = host, onAction = { action, extra -> control(action, extra) }, onMessage = { text, bad -> notify(text, bad) })
                         "FILES" -> FilesScreen(host, onMessage = { text, bad -> notify(text, bad) })
                         "PROCESSES" -> ProcessScreen(host, onMessage = { text, bad -> notify(text, bad) })
-                        "CONTROLLER" -> ControllerScreen(host = host, onAction = { action, extra -> control(action, extra) }, onExit = { page = "CONTROL" }, onError = { message -> notify(message, true) })
+                        "CONTROLLER" -> ControllerScreen(
+                            host = host,
+                            onAction = { action, extra -> control(action, extra) },
+                            onExit = { page = "CONTROL" },
+                            onError = { message -> notify(message, true) },
+                            onCheat = { code, onComplete ->
+                                scope.launch {
+                                    try {
+                                        SciNETApi.post(host, "/api/game/cheat", JSONObject().put("code", code))
+                                        onComplete(null)
+                                    } catch (e: Exception) {
+                                        onComplete(e.message ?: "Could not send the game shortcut.")
+                                    }
+                                }
+                            }
+                        )
                         else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) }, fullscreen = screenFullscreen, onFullscreenChanged = { screenFullscreen = it })
                     }
                 }
