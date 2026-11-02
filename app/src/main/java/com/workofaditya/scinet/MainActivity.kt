@@ -1,9 +1,12 @@
 package com.workofaditya.scinet
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
@@ -102,13 +105,13 @@ private fun SciNETApp() {
             else sendRequest()
         }
     }
-    fun connect() {
-        if (host.isBlank()) { notify("Enter your PC's SciNET address first.", true); return }
+    fun connect(targetHost: String = host) {
+        if (targetHost.isBlank()) { notify("Enter your PC's SciNET address first.", true); return }
         if (busy) return
         busy = true
         scope.launch {
             try {
-                val normalized = SciNETApi.normalizeHost(host)
+                val normalized = SciNETApi.normalizeHost(targetHost)
                 system = SciNETApi.get(normalized, "/api/system")
                 host = normalized
                 prefs.edit().putString("host", normalized).apply()
@@ -117,6 +120,17 @@ private fun SciNETApp() {
                 notify("Connected to " + system.optString("hostname", "SciNET host"))
             } catch (e: Exception) { notify(e.message ?: "Connection failed.", true) }
             finally { busy = false }
+        }
+    }
+
+    val qrScannerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == ComponentActivity.RESULT_OK) {
+            val scanned = result.data?.getStringExtra("scinet_host")?.trim().orEmpty()
+            if (scanned.startsWith("http://") || scanned.startsWith("https://")) {
+                connect(scanned)
+            } else if (scanned.isNotBlank()) {
+                notify("That QR code is not a valid SciNET address.", true)
+            }
         }
     }
 
@@ -186,6 +200,15 @@ private fun SciNETApp() {
                         OutlinedTextField(value = host, onValueChange = { host = it }, modifier = Modifier.fillMaxWidth(), label = { Text("PC address") }, placeholder = { Text("http://192.168.1.25:8000") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = fieldColors())
                         Text("Use your PC's local IPv4 address and port 8000. Both devices must be on a reachable private network.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
                         PrimaryButton(if (busy) "CONNECTING…" else "CONNECT TO PC", !busy) { connect() }
+                        OutlinedButton(
+                            onClick = { qrScannerLauncher.launch(Intent(context, QrScannerActivity::class.java)) },
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth().height(47.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink)
+                        ) {
+                            Text("▣  SCAN PC QR CODE", fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp)
+                        }
                     }
                     PanelCard {
                         SectionHeading("NATIVE TOOLS", "Everything in one place")
@@ -286,8 +309,6 @@ private fun NotificationToast(
                 enter = fadeIn() + slideInVertically { it / 2 },
                 exit = fadeOut() + slideOutVertically { it / 2 }
             ) {
-                // Match the original expanding-pill interaction. The Popup floats above the
-                // screen content, and this transparent row only centers the compact pill.
                 Row(
                     Modifier
                         .fillMaxWidth()
