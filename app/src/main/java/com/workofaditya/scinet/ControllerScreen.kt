@@ -74,24 +74,7 @@ private val gtaVStoryModeCheats = listOf(
     GameCheat("Recharge special ability", "POWERUP", "PLAYER", "Refills the character's special ability."),
     GameCheat("Fast run", "CATCHME", "PLAYER", "Increases running speed."),
     GameCheat("Fast swim", "GOTGILLS", "PLAYER", "Increases swimming speed."),
-    GameCheat("Get parachute", "SKYDIVE", "PLAYER", "Adds a parachute to your inventory."),
-    GameCheat("Super jump", "HOPTOIT", "PLAYER", "Enables higher jumps."),
-    GameCheat("Moon gravity", "FLOATER", "WORLD", "Reduces gravity."),
-    GameCheat("Slippery tires", "SNOWDAY", "WORLD", "Makes vehicles slide more easily."),
-    GameCheat("Slow motion", "SLOWMO", "WORLD", "Cycles through slow-motion levels."),
-    GameCheat("Change weather", "MAKEITRAIN", "WORLD", "Cycles to the next weather condition."),
-    GameCheat("Spawn BMX", "BANDIT", "VEHICLES", "Spawns a BMX bicycle."),
-    GameCheat("Spawn Caddy", "HOLEIN1", "VEHICLES", "Spawns a golf caddy."),
-    GameCheat("Spawn Comet", "COMET", "VEHICLES", "Spawns a Comet sports car."),
-    GameCheat("Spawn Duster", "FLYSPRAY", "VEHICLES", "Spawns a Duster aircraft."),
-    GameCheat("Spawn Mallard", "BARNSTORM", "VEHICLES", "Spawns a Mallard stunt plane."),
-    GameCheat("Spawn PCJ-600", "ROCKET", "VEHICLES", "Spawns a PCJ-600 motorcycle."),
-    GameCheat("Spawn Rapid GT", "RAPIDGT", "VEHICLES", "Spawns a Rapid GT sports car."),
-    GameCheat("Spawn Sanchez", "OFFROAD", "VEHICLES", "Spawns a Sanchez dirt bike."),
-    GameCheat("Spawn Stretch limo", "VINEWOOD", "VEHICLES", "Spawns a Stretch limousine."),
-    GameCheat("Spawn Trashmaster", "TRASHED", "VEHICLES", "Spawns a garbage truck."),
-    GameCheat("Spawn Dodo", "EXTINCT", "VEHICLES", "Requires the Dodo to be unlocked first."),
-    GameCheat("Spawn Kraken", "BUBBLES", "VEHICLES", "Requires the Kraken to be unlocked first.")
+    GameCheat("Change weather", "MAKEITRAIN", "WORLD", "Cycles to the next weather condition.")
 )
 
 private const val PROFILE_STORAGE_KEY = "controller_profiles_v1"
@@ -585,7 +568,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                                 Modifier.heightIn(max = (areaHeight - 180.dp).coerceAtLeast(110.dp)).verticalScroll(rememberScrollState()),
                                 verticalArrangement = Arrangement.spacedBy(9.dp)
                             ) {
-                                listOf("PLAYER", "WORLD", "VEHICLES").forEach { category ->
+                                listOf("PLAYER", "WORLD").forEach { category ->
                                     Text(category, color = Color(0xFF9CC8E0), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                                     gtaVStoryModeCheats.filter { it.category == category }.forEach { cheat ->
                                         Row(
