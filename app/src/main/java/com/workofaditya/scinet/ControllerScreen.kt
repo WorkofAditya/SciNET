@@ -219,6 +219,9 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
     var cheatStatus by remember(activeProfileId) { mutableStateOf("") }
     var cheatStatusBad by remember(activeProfileId) { mutableStateOf(false) }
     var sendingCheatCode by remember { mutableStateOf<String?>(null) }
+    var favoriteCheatCodes by remember {
+        mutableStateOf(prefs.getStringSet("gta_v_favorite_cheats", emptySet())?.toSet() ?: emptySet())
+    }
     var createProfileOpen by remember { mutableStateOf(false) }
     var newProfileName by remember { mutableStateOf("") }
     var profileNameError by remember { mutableStateOf("") }
@@ -247,6 +250,14 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
             profiles[index] = updated
             saveControllerProfiles(prefs, profiles)
         }
+    }
+
+    fun toggleFavoriteCheat(code: String) {
+        val updated = if (code in favoriteCheatCodes) favoriteCheatCodes - code else favoriteCheatCodes + code
+        favoriteCheatCodes = updated
+        prefs.edit().putStringSet("gta_v_favorite_cheats", updated).apply()
+        cheatStatus = if (code in updated) "Added to favorites." else "Removed from favorites."
+        cheatStatusBad = false
     }
 
     fun saveCurrentLayout() {
@@ -593,18 +604,73 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                                 Text("ADD GTA V PRESET", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
                             }
                         } else {
-                            Column(
-                                Modifier.heightIn(max = (areaHeight - 180.dp).coerceAtLeast(110.dp)).verticalScroll(rememberScrollState()),
-                                verticalArrangement = Arrangement.spacedBy(9.dp)
-                            ) {
-                                listOf("PLAYER", "COMBAT", "POLICE", "WORLD", "VEHICLES", "SPECIAL").forEach { category ->
+                            val favoriteCheats = gtaVStoryModeCheats.filter { it.code in favoriteCheatCodes }
+                            val favoriteCodes = favoriteCheats.map { it.code }.toSet()
+
+                            if (favoriteCheats.isNotEmpty()) {
+                                Text("FAVORITES", color = Color(0xFFFFD36B), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                                favoriteCheats.forEach { cheat ->
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(9.dp))
+                                            .background(Color(0xFF1B2024))
+                                            .border(1.dp, Color(0xFF66552E), RoundedCornerShape(9.dp))
+                                            .pointerInput(cheat.code) {
+                                                detectTapGestures(onLongPress = { toggleFavoriteCheat(cheat.code) })
+                                            }
+                                            .padding(start = 11.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("★", color = Color(0xFFFFD36B), fontSize = 14.sp, modifier = Modifier.padding(end = 7.dp))
+                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Text(cheat.title, color = Color(0xFFEAF0F4), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                            Text(cheat.detail, color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 12.sp)
+                                            Text(cheat.code, color = Color(0xFF9CC8E0), fontSize = 9.sp, letterSpacing = .8.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        Button(
+                                            onClick = {
+                                                sendingCheatCode = cheat.code
+                                                cheatStatus = "Sending " + cheat.title + "…"
+                                                cheatStatusBad = false
+                                                onCheat(cheat.code) { error ->
+                                                    sendingCheatCode = null
+                                                    cheatStatus = error ?: (cheat.title + " submitted.")
+                                                    cheatStatusBad = error != null
+                                                }
+                                            },
+                                            enabled = sendingCheatCode == null,
+                                            contentPadding = PaddingValues(horizontal = 13.dp, vertical = 6.dp),
+                                            shape = RoundedCornerShape(7.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFF263B49),
+                                                contentColor = Color(0xFFDCECF5),
+                                                disabledContainerColor = Color(0xFF202A33),
+                                                disabledContentColor = Color(0xFF74818D)
+                                            )
+                                        ) {
+                                            Text(if (sendingCheatCode == cheat.code) "SENDING" else "RUN", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                                Text("Hold a cheat to remove it from favorites.", color = Color(0xFF82909B), fontSize = 8.sp)
+                            }
+
+                            listOf("PLAYER", "COMBAT", "POLICE", "WORLD", "VEHICLES", "SPECIAL").forEach { category ->
+                                val categoryCheats = gtaVStoryModeCheats.filter { it.category == category && it.code !in favoriteCodes }
+                                if (categoryCheats.isNotEmpty()) {
                                     Text(category, color = Color(0xFF9CC8E0), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                                    gtaVStoryModeCheats.filter { it.category == category }.forEach { cheat ->
+                                    categoryCheats.forEach { cheat ->
+                                        val isFavorite = cheat.code in favoriteCheatCodes
                                         Row(
-                                            Modifier.fillMaxWidth()
+                                            Modifier
+                                                .fillMaxWidth()
                                                 .clip(RoundedCornerShape(9.dp))
                                                 .background(Color(0xFF151E27))
                                                 .border(1.dp, Color(0xFF26333D), RoundedCornerShape(9.dp))
+                                                .pointerInput(cheat.code) {
+                                                    detectTapGestures(onLongPress = { toggleFavoriteCheat(cheat.code) })
+                                                }
                                                 .padding(start = 11.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
@@ -613,6 +679,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                                                 Text(cheat.detail, color = Color(0xFF82909B), fontSize = 9.sp, lineHeight = 12.sp)
                                                 Text(cheat.code, color = Color(0xFF9CC8E0), fontSize = 9.sp, letterSpacing = .8.sp, fontWeight = FontWeight.Bold)
                                             }
+                                            Text(if (isFavorite) "★" else "☆", color = if (isFavorite) Color(0xFFFFD36B) else Color(0xFF596873), fontSize = 15.sp, modifier = Modifier.padding(horizontal = 8.dp))
                                             Button(
                                                 onClick = {
                                                     sendingCheatCode = cheat.code
@@ -639,6 +706,7 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                                         }
                                     }
                                 }
+                            }
                             }
                         }
                         if (cheatStatus.isNotBlank()) {
