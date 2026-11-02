@@ -2,6 +2,7 @@ package com.workofaditya.scinet
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
@@ -65,66 +66,133 @@ internal object SciNETApi {
         }
     }
 
-    suspend fun upload(context: Context, host: String, uri: Uri, fileName: String, folder: String) =
-        withContext(Dispatchers.IO) {
-            val boundary = "----SciNETAndroid${System.currentTimeMillis()}"
-            val path = "/api/files/upload?path=" + encode(folder)
-            val connection = (URL(normalizeHost(host) + path).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 10000
-                readTimeout = 120000
-                doOutput = true
-                setChunkedStreamingMode(64 * 1024)
-                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-                setRequestProperty("User-Agent", "SciNET Android/0.1")
+    suspend fun upload(
+        context: Context,
+        host: String,
+        uri: Uri,
+        fileName: String,
+        folder: String,
+        onProgress: suspend (Long, Long?) -> Unit = { _, _ -> }
+    ) = withContext(Dispatchers.IO) {
+        val totalBytes = runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) {
+                    cursor.getLong(0).takeIf { it >= 0L }
+                } else null
             }
-            try {
-                connection.outputStream.use { output ->
-                    output.write("--$boundary\r\n".toByteArray())
-                    output.write("Content-Disposition: form-data; name=\"files\"; filename=\"${fileName.replace("\"", "_")}\"\r\n".toByteArray())
-                    output.write("Content-Type: application/octet-stream\r\n\r\n".toByteArray())
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        val buffer = ByteArray(64 * 1024)
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            output.write(buffer, 0, count)
-                        }
-                    } ?: throw IllegalStateException("Android could not open the selected file.")
-                    output.write("\r\n--$boundary--\r\n".toByteArray())
-                }
-                val code = connection.responseCode
-                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-                val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                val json = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
-                if (code !in 200..299) throw IllegalStateException(json.optString("error").ifBlank { "Upload failed (HTTP $code)." })
-                json
-            } finally {
-                connection.disconnect()
-            }
+        }.getOrNull()
+
+        val boundary = "----SciNETAndroid${System.currentTimeMillis()}"
+        val path = "/api/files/upload?path=" + encode(folder)
+        val connection = (URL(normalizeHost(host) + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 10000
+            readTimeout = 120000
+            doOutput = true
+            setChunkedStreamingMode(64 * 1024)
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            setRequestProperty("User-Agent", "SciNET Android/0.1")
         }
 
-    suspend fun downloadTo(context: Context, host: String, path: String, destination: Uri) =
-        withContext(Dispatchers.IO) {
-            val urlPath = "/api/download?path=" + encode(path)
-            val connection = (URL(normalizeHost(host) + urlPath).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 10000
-                readTimeout = 120000
-                setRequestProperty("User-Agent", "SciNET Android/0.1")
+        try {
+            var transferred = 0L
+            var lastProgressAt = 0L
+            onProgress(0L, totalBytes)
+
+            connection.outputStream.use { output ->
+                output.write("--$boundary\\r\\n".toByteArray())
+                output.write("Content-Disposition: form-data; name=\\"files\\"; filename=\\"\${fileName.replace("\\", "_")}\\"\\r\\n".toByteArray())
+                output.write("Content-Type: application/octet-stream\\r\\n\\r\\n".toByteArray())
+
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        transferred += count
+
+                        val now = System.nanoTime()
+                        if (now - lastProgressAt >= 120_000_000L ||
+                            (totalBytes != null && transferred >= totalBytes)
+                        ) {
+                            onProgress(transferred, totalBytes)
+                            lastProgressAt = now
+                        }
+                    }
+                } ?: throw IllegalStateException("Android could not open the selected file.")
+
+                output.write("\\r\\n--$boundary--\\r\\n".toByteArray())
             }
-            try {
-                val code = connection.responseCode
-                if (code !in 200..299) {
-                    val message = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                    throw IllegalStateException(try { JSONObject(message).optString("error") } catch (_: Exception) { "Download failed (HTTP $code)." })
-                }
-                context.contentResolver.openOutputStream(destination)?.use { output ->
-                    connection.inputStream.use { input -> input.copyTo(output) }
-                } ?: throw IllegalStateException("Android could not create the destination file.")
-            } finally {
-                connection.disconnect()
+
+            onProgress(transferred, totalBytes)
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            val json = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
+            if (code !in 200..299) {
+                throw IllegalStateException(json.optString("error").ifBlank { "Upload failed (HTTP $code)." })
             }
+            json
+        } finally {
+            connection.disconnect()
         }
+    }
+
+    suspend fun downloadTo(
+        context: Context,
+        host: String,
+        path: String,
+        destination: Uri,
+        onProgress: suspend (Long, Long?) -> Unit = { _, _ -> }
+    ) = withContext(Dispatchers.IO) {
+        val urlPath = "/api/download?path=" + encode(path)
+        val connection = (URL(normalizeHost(host) + urlPath).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 10000
+            readTimeout = 120000
+            setRequestProperty("User-Agent", "SciNET Android/0.1")
+        }
+
+        try {
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val message = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                throw IllegalStateException(
+                    try { JSONObject(message).optString("error") }
+                    catch (_: Exception) { "Download failed (HTTP $code)." }
+                )
+            }
+
+            val totalBytes = connection.contentLengthLong.takeIf { it >= 0L }
+            var transferred = 0L
+            var lastProgressAt = 0L
+            onProgress(0L, totalBytes)
+
+            context.contentResolver.openOutputStream(destination)?.use { output ->
+                connection.inputStream.use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        transferred += count
+
+                        val now = System.nanoTime()
+                        if (now - lastProgressAt >= 120_000_000L ||
+                            (totalBytes != null && transferred >= totalBytes)
+                        ) {
+                            onProgress(transferred, totalBytes)
+                            lastProgressAt = now
+                        }
+                    }
+                }
+            } ?: throw IllegalStateException("Android could not create the destination file.")
+
+            onProgress(transferred, totalBytes)
+        } finally {
+            connection.disconnect()
+        }
+    }
 
     fun jsonObject(vararg values: Pair<String, Any?>): JSONObject {
         val json = JSONObject()
