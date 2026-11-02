@@ -707,7 +707,6 @@ internal fun ControllerScreen(host: String, onAction: (String, Map<String, Any?>
                                     }
                                 }
                             }
-                            }
                         }
                         if (cheatStatus.isNotBlank()) {
                             Text(
