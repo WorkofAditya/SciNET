@@ -3,10 +3,11 @@ package com.workofaditya.scinet
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import androidx.activity.ComponentActivity
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
-class QrScannerActivity : Activity() {
+class QrScannerActivity : ComponentActivity() {
     private val scannerLauncher = registerForActivityResult(ScanContract()) { result ->
         if (result.contents.isNullOrBlank()) {
             setResult(Activity.RESULT_CANCELED)
