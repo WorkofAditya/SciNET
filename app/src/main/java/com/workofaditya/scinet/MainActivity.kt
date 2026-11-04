@@ -198,7 +198,7 @@ private fun SciNETApp() {
                     Spacer(Modifier.height(6.dp))
                     Text("LOCAL NETWORK / 01", color = Accent, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
                     Text("Your PC.\nIn your hands.", fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
-                    Text("A native Android companion for your Windows SciNET host.", color = Muted, fontSize = 14.sp)
+                    Text("Your phone is a SciNET node. Its own peer server starts automatically and discovers nearby devices.", color = Muted, fontSize = 14.sp)
                     PanelCard {
                         SectionHeading("HOST CONNECTION", "Connect to your PC")
                         OutlinedTextField(value = host, onValueChange = { host = it }, modifier = Modifier.fillMaxWidth(), label = { Text("PC address") }, placeholder = { Text("http://192.168.1.25:8000") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = fieldColors())
