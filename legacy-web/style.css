@@ -181,3 +181,25 @@
 .scroll-mode-toggle.active .scroll-mode-state{border-color:#4d805c;color:#b9e6c4}
 .trackpad.scroll-mode{cursor:ns-resize;border-color:#4d805c;background:radial-gradient(ellipse at center,#17251c 0,#0d1014 75%)}
 .trackpad.scroll-mode .trackpad-crosshair{color:#b9e6c4}
+
+
+/* Decentralized SciNET full-mesh topology */
+.mesh-card{grid-column:1/-1;padding:19px;min-width:0}
+.mesh-graph{width:100%;height:290px;overflow:hidden;border:1px solid #1c2128;border-radius:8px;background:radial-gradient(ellipse at center,#10151b 0,#0b0e12 78%)}
+.mesh-graph svg{display:block;width:100%;height:100%}
+.mesh-edge{fill:none;stroke:#8994a2;stroke-width:2;vector-effect:non-scaling-stroke;opacity:.85}
+.mesh-edge.connected{stroke:#8994a2}
+.mesh-edge.transferring{stroke:#79b98b;stroke-width:3;opacity:1;filter:drop-shadow(0 0 3px rgba(121,185,139,.45))}
+.mesh-edge.lost{stroke:#e78f87;stroke-dasharray:5 5;opacity:.95}
+.mesh-node circle{stroke:#0a0c0f;stroke-width:3;vector-effect:non-scaling-stroke;fill:#79b98b}
+.mesh-node.self circle{fill:#d5dbe3}
+.mesh-node.offline circle{fill:#e78f87}
+.mesh-node-name{fill:#e0e4e9;text-anchor:middle;font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:600;paint-order:stroke;stroke:#0b0e12;stroke-width:3px;stroke-linejoin:round}
+.mesh-node-state{fill:#828c98;text-anchor:middle;font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:1px}
+.mesh-legend{display:flex;align-items:center;gap:17px;flex-wrap:wrap;margin-top:13px}
+.mesh-legend>span{display:flex;align-items:center;gap:6px;color:#7b8490;font-size:8px;font-weight:600;letter-spacing:.08em}
+.mesh-state{width:7px;height:7px;border-radius:50%;background:#8994a2}
+.mesh-state.transferring{background:#79b98b}
+.mesh-state.lost{background:#e78f87}
+.mesh-hint{margin:10px 0 0;color:#69727e;font-size:9px;line-height:1.55}
+@media(max-width:520px){.mesh-card{padding:14px}.mesh-graph{height:240px}.mesh-legend{gap:10px}.mesh-legend>span{font-size:7px}}
