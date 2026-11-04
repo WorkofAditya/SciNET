@@ -205,7 +205,7 @@ def _peer_topology_snapshot():
         if key in direct_links:
             continue
         updated = float(link.get("updatedAt") or 0)
-        fresh = now - updated <= 20
+        fresh = now - updated <= 20000
         links[key] = {
             "a": link["a"], "b": link["b"],
             "connected": bool(link.get("connected")) and fresh,
