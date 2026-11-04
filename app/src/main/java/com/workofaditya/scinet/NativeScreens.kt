@@ -87,6 +87,8 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
         previousSample = now
     }
     val selfId = data.optString("self_device_id")
+    val hostAddress = data.optString("address").ifBlank { host }
+    val isAndroidHost = data.optString("platform") == "android"
     var renameOpen by remember { mutableStateOf(false) }
     var renameValue by remember { mutableStateOf(devices.firstOrNull { it.optString("id") == selfId }?.optString("name", "Android device") ?: "Android device") }
     Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -152,13 +154,18 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (qrBitmap != null) Image(bitmap = qrBitmap!!.asImageBitmap(), contentDescription = "SciNET connection QR code", modifier = Modifier.size(124.dp))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text(host, fontSize = 10.sp, lineHeight = 15.sp)
+                    Text(hostAddress, fontSize = 10.sp, lineHeight = 15.sp)
                     OutlinedButton(onClick = {
                         val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        manager.setPrimaryClip(ClipData.newPlainText("SciNET address", host))
+                        manager.setPrimaryClip(ClipData.newPlainText("SciNET address", hostAddress))
                     }, border = androidx.compose.foundation.BorderStroke(1.dp, Edge), contentPadding = PaddingValues(horizontal = 9.dp, vertical = 5.dp)) { Text("COPY ADDRESS", fontSize = 9.sp) }
-                    Text("FTP: " + runCatching { URL(host).host }.getOrDefault(host) + ":2121", color = Muted, fontSize = 9.sp)
-                    Text("User scinet · password scinet", color = Muted, fontSize = 9.sp)
+                    if (isAndroidHost) {
+                        Text("PHONE SERVER · PORT 8765", color = Muted, fontSize = 9.sp)
+                        Text("Scan from another SciNET phone to pair.", color = Muted, fontSize = 9.sp)
+                    } else {
+                        Text("FTP: " + runCatching { URL(host).host }.getOrDefault(host) + ":2121", color = Muted, fontSize = 9.sp)
+                        Text("User scinet · password scinet", color = Muted, fontSize = 9.sp)
+                    }
                 }
             }
         }
@@ -202,7 +209,7 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
             }
         }
         OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth(), border = androidx.compose.foundation.BorderStroke(1.dp, Edge), shape = RoundedCornerShape(8.dp)) {
-            Text("LOG OUT / CHANGE PC", color = Ink, fontSize = 10.sp, letterSpacing = 1.sp)
+            Text("SWITCH DEVICE", color = Ink, fontSize = 10.sp, letterSpacing = 1.sp)
         }
     }
     if (renameOpen) AlertDialog(
