@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import ctypes
 import ipaddress
+import math
 import getpass
 import os
 import platform
@@ -11,6 +12,7 @@ import io
 import json
 import hashlib
 import socket
+import struct
 import threading
 import time
 import uuid
@@ -38,7 +40,7 @@ try:
     device_names = json.loads(DEVICE_NAMES_FILE.read_text(encoding="utf-8")) if DEVICE_NAMES_FILE.exists() else {}
 except (OSError, ValueError):
     device_names = {}
-WEB_DIR = BASE_DIR / "web"
+WEB_DIR = BASE_DIR / "legacy-web"
 STORAGE_DIR.mkdir(exist_ok=True)
 started_at = time.time()
 mdns = None
@@ -155,7 +157,12 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 def system_info():
     memory = psutil.virtual_memory(); disk = psutil.disk_usage(str(BASE_DIR)); net = psutil.net_io_counters()
-    with connected_lock: clients = list(connected_devices.values())
+    now = time.time()
+    with connected_lock:
+        for device_id, device in list(connected_devices.items()):
+            if device.get("type") == "Android" and now - device.get("connected", now) > 12:
+                connected_devices.pop(device_id, None)
+        clients = list(connected_devices.values())
     unique = {}
     for device in clients:
         ip = device.get("ip", "unknown")
@@ -180,7 +187,8 @@ async def set_device_name(request: Request):
     client = request.client
     if not client:
         return JSONResponse({"error": "Could not identify this device"}, status_code=400)
-    device_id = f"web:{client.host}"
+    is_android = request.headers.get("user-agent", "").startswith("SciNET Android")
+    device_id = f"android:{client.host}" if is_android else f"web:{client.host}"
     data = await request.json()
     name = str(data.get("name") or "").strip()[:40]
     if not name:
@@ -198,7 +206,19 @@ async def set_device_name(request: Request):
     return {"ok": True, "name": name}
 
 @app.get("/api/system")
-async def api_system(): return system_info()
+async def api_system(request: Request):
+    client = request.client
+    if client and request.headers.get("user-agent", "").startswith("SciNET Android"):
+        device_id = f"android:{client.host}"
+        with connected_lock:
+            connected_devices[device_id] = {
+                "id": device_id, "ip": client.host, "port": client.port,
+                "type": "Android", "agent": "SciNET Android", "connected": time.time()
+            }
+    payload = system_info()
+    if client and request.headers.get("user-agent", "").startswith("SciNET Android"):
+        payload["self_device_id"] = device_id
+    return payload
 
 @app.get("/control", response_class=HTMLResponse)
 async def control_panel_page(): return (WEB_DIR / "control.html").read_text(encoding="utf-8")
@@ -268,6 +288,63 @@ class DesktopVideoTrack(VideoStreamTrack):
                 pass
             self._capture = None
         super().stop()
+
+
+@app.get("/api/screen/stream")
+async def screen_stream(request: Request, resolution: str = "720p", fps: int = 24):
+    """Stream desktop JPEG frames directly to the native Android viewer."""
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Screen viewing is only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    if platform.system() != "Windows":
+        return JSONResponse({"error": "Screen mirroring is supported on Windows only"}, status_code=501)
+
+    resolutions = {
+        "480p": (854, 480),
+        "720p": (1280, 720),
+        "1080p": (1920, 1080),
+    }
+    if resolution not in resolutions:
+        return JSONResponse({"error": "Unsupported resolution"}, status_code=400)
+    if fps not in (15, 24, 30):
+        return JSONResponse({"error": "FPS must be 15, 24, or 30"}, status_code=400)
+
+    width, height = resolutions[resolution]
+    track = DesktopVideoTrack(width, height, fps)
+
+    async def generate_frames():
+        try:
+            while not await request.is_disconnected():
+                frame = await track.recv()
+                image = frame.to_image()
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG", quality=76, optimize=False)
+                jpeg = buffer.getvalue()
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii")
+                    + jpeg
+                    + b"\r\n"
+                )
+        finally:
+            await track.stop()
+
+    return StreamingResponse(
+        generate_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/screen/offer")
@@ -599,6 +676,221 @@ async def pwa_manifest(): return FileResponse(WEB_DIR / "manifest.webmanifest", 
 async def service_worker():
     return FileResponse(WEB_DIR / "sw.js", media_type="application/javascript", headers={"Service-Worker-Allowed": "/"})
 
+def _send_windows_mouse(dx, dy):
+    """Inject uncoalesced relative mouse movement using cached Windows SendInput types."""
+    if not hasattr(_send_windows_mouse, "_api"):
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", ctypes.c_uint16),
+                ("wScan", ctypes.c_uint16),
+                ("dwFlags", ctypes.c_uint32),
+                ("time", ctypes.c_uint32),
+                ("dwExtraInfo", ctypes.c_size_t),
+            ]
+
+        class MOUSEINPUT(ctypes.Structure):
+            _fields_ = [
+                ("dx", ctypes.c_int32),
+                ("dy", ctypes.c_int32),
+                ("mouseData", ctypes.c_uint32),
+                ("dwFlags", ctypes.c_uint32),
+                ("time", ctypes.c_uint32),
+                ("dwExtraInfo", ctypes.c_size_t),
+            ]
+
+        class HARDWAREINPUT(ctypes.Structure):
+            _fields_ = [
+                ("uMsg", ctypes.c_uint32),
+                ("wParamL", ctypes.c_uint16),
+                ("wParamH", ctypes.c_uint16),
+            ]
+
+        class INPUTUNION(ctypes.Union):
+            _fields_ = [
+                ("ki", KEYBDINPUT),
+                ("mi", MOUSEINPUT),
+                ("hi", HARDWAREINPUT),
+            ]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_uint32), ("union", INPUTUNION)]
+
+        user32.SendInput.argtypes = (ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int)
+        user32.SendInput.restype = ctypes.c_uint
+        _send_windows_mouse._api = user32
+        _send_windows_mouse._input_type = INPUT
+        _send_windows_mouse._mouse_type = MOUSEINPUT
+
+    packet = _send_windows_mouse._input_type()
+    packet.type = 0  # INPUT_MOUSE
+    packet.union.mi = _send_windows_mouse._mouse_type(
+        int(dx), int(dy), 0,
+        0x0001 | 0x2000,  # MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE
+        0, 0
+    )
+    sent = _send_windows_mouse._api.SendInput(
+        1, ctypes.byref(packet), ctypes.sizeof(packet)
+    )
+    if sent != 1:
+        error_code = ctypes.get_last_error()
+        raise OSError(error_code, "Windows rejected the camera movement event.")
+
+
+def _send_windows_key(vk_code, down):
+    """Inject a physical-style keyboard event using Windows SendInput scan codes."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.MapVirtualKeyW.argtypes = (ctypes.c_uint, ctypes.c_uint)
+    user32.MapVirtualKeyW.restype = ctypes.c_uint
+    # MAPVK_VK_TO_VSC_EX preserves the extended-key prefix (0xE0/0xE1).
+    vk_code = int(vk_code)
+    # VK_RETURN has a distinct extended scan code on the numeric keypad.
+    scan_code = 0xE01C if vk_code == 0x10D else int(user32.MapVirtualKeyW(vk_code, 4))
+    if not scan_code:
+        raise OSError("Windows could not map the requested keyboard key.")
+
+    flags = 0x0008  # KEYEVENTF_SCANCODE
+    if scan_code & 0xFF00:
+        flags |= 0x0001  # KEYEVENTF_EXTENDEDKEY
+    if not down:
+        flags |= 0x0002  # KEYEVENTF_KEYUP
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.c_uint16),
+            ("wScan", ctypes.c_uint16),
+            ("dwFlags", ctypes.c_uint32),
+            ("time", ctypes.c_uint32),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", ctypes.c_int32),
+            ("dy", ctypes.c_int32),
+            ("mouseData", ctypes.c_uint32),
+            ("dwFlags", ctypes.c_uint32),
+            ("time", ctypes.c_uint32),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", ctypes.c_uint32),
+            ("wParamL", ctypes.c_uint16),
+            ("wParamH", ctypes.c_uint16),
+        ]
+
+    class INPUTUNION(ctypes.Union):
+        _fields_ = [
+            ("ki", KEYBDINPUT),
+            ("mi", MOUSEINPUT),
+            ("hi", HARDWAREINPUT),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_uint32), ("union", INPUTUNION)]
+
+    packet = INPUT()
+    packet.type = 1  # INPUT_KEYBOARD
+    packet.union.ki = KEYBDINPUT(0, scan_code & 0xFF, flags, 0, 0)
+
+    user32.SendInput.argtypes = (ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int)
+    user32.SendInput.restype = ctypes.c_uint
+    sent = user32.SendInput(1, ctypes.byref(packet), ctypes.sizeof(INPUT))
+    if sent != 1:
+        error_code = ctypes.get_last_error()
+        raise OSError(error_code, "Windows rejected the keyboard input event.")
+    return True
+
+
+# Fixed GTA V Story Mode cheat codes exposed by the Android controller.
+# Keep this allowlist in sync with gtaVStoryModeCheats in ControllerScreen.kt.
+_GTA_V_CONTROLLER_CHEATS = {
+    "PAINKILLER", "TURTLE", "POWERUP", "CATCHME",
+    "GOTGILLS", "HOPTOIT", "LIQUOR", "SKYFALL",
+    "SKYDIVE", "DEADEYE", "TOOLUP", "HOTHANDS",
+    "HIGHEX", "INCENDIARY", "FUGITIVE", "LAWYERUP",
+    "MAKEITRAIN", "FLOATER", "SNOWDAY", "SLOWMO",
+    "BUZZOFF", "COMET", "RAPIDGT", "ROCKET",
+    "OFFROAD", "BANDIT", "HOLEIN1", "VINEWOOD",
+    "TRASHED", "BARNSTORM", "FLYSPRAY", "EXTINCT",
+    "DEATHCAR", "BUBBLES", "JRTALENT",
+}
+
+
+def _is_gta_v_foreground():
+    """Only inject game shortcuts while a supported GTA V executable is focused."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    user32.GetWindowThreadProcessId.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+    user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return False
+    process_id = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    if not process_id.value:
+        return False
+    try:
+        process_name = psutil.Process(process_id.value).name().lower()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+    return process_name in {"gta5.exe", "gta5_enhanced.exe"}
+
+
+def _send_windows_unicode_text(text):
+    """Type ASCII cheat text through the Windows Unicode keyboard input path."""
+    user32 = ctypes.windll.user32
+    for char in text:
+        code_unit = ord(char)
+        user32.keybd_event(0, code_unit, 0x0004, 0)
+        user32.keybd_event(0, code_unit, 0x0004 | 0x0002, 0)
+
+
+@app.post("/api/game/cheat")
+async def activate_gta_v_cheat(request: Request):
+    client = request.client
+    if not client:
+        return JSONResponse({"error": "Could not identify this device"}, status_code=400)
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            return JSONResponse({"error": "Game shortcuts are only available on a private local network"}, status_code=403)
+    except ValueError:
+        return JSONResponse({"error": "Invalid client address"}, status_code=400)
+    if platform.system() != "Windows":
+        return JSONResponse({"error": "GTA V shortcuts are supported on Windows only"}, status_code=501)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
+
+    code = str(data.get("code") or "").strip().upper()
+    if code not in _GTA_V_CONTROLLER_CHEATS:
+        return JSONResponse({"error": "That GTA V shortcut is not available"}, status_code=400)
+    if not _is_gta_v_foreground():
+        return JSONResponse({"error": "Bring GTA V Story Mode to the foreground first"}, status_code=409)
+
+    try:
+        # VK_OEM_3 is the grave/tilde key on the standard US keyboard layout.
+        _send_windows_key(0xC0, True)
+        await asyncio.sleep(0.08)
+        _send_windows_key(0xC0, False)
+        await asyncio.sleep(0.12)
+        _send_windows_unicode_text(code)
+        await asyncio.sleep(0.06)
+        _send_windows_key(0x0D, True)
+        await asyncio.sleep(0.03)
+        _send_windows_key(0x0D, False)
+    except OSError as exc:
+        return JSONResponse({"error": str(exc) or "Windows rejected the game shortcut"}, status_code=500)
+
+    log_event(f"GTA V Story Mode shortcut submitted: {code}", "control")
+    return {"ok": True, "code": code}
+
+
 @app.post("/api/control")
 async def control_host(request: Request):
     client = request.client
@@ -631,11 +923,24 @@ async def control_host(request: Request):
     modifier_codes = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10, "meta": 0x5B}
     key_codes = {
         "esc": 0x1B, "tab": 0x09, "enter": 0x0D, "backspace": 0x08,
-        "delete": 0x2E, "up": 0x26, "down": 0x28, "left": 0x25,
-        "right": 0x27, "home": 0x24, "end": 0x23,
-        **{f"f{i}": 0x70 + i - 1 for i in range(1, 13)},
+        "delete": 0x2E, "insert": 0x2D, "space": 0x20,
+        "shift": 0x10, "ctrl": 0x11, "alt": 0x12, "meta": 0x5B,
+        "capslock": 0x14, "apps": 0x5D,
+        "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+        "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+        "printscreen": 0x2C, "scrolllock": 0x91, "pause": 0x13, "numlock": 0x90,
+        "grave": 0xC0, "minus": 0xBD, "equal": 0xBB,
+        "left-bracket": 0xDB, "right-bracket": 0xDD,
+        "backslash": 0xDC, "semicolon": 0xBA, "apostrophe": 0xDE,
+        "comma": 0xBC, "period": 0xBE, "slash": 0xBF, "oem-102": 0xE2,
+        "numpad-divide": 0x6F, "numpad-multiply": 0x6A,
+        "numpad-subtract": 0x6D, "numpad-add": 0x6B,
+        "numpad-enter": 0x10D, "numpad-decimal": 0x6E,
+        "numpad-separator": 0x6C,
+        **{f"f{i}": 0x70 + i - 1 for i in range(1, 25)},
         **{chr(i): i - 32 for i in range(ord("a"), ord("z") + 1)},
         **{str(i): 0x30 + i for i in range(10)},
+        **{f"numpad{i}": 0x60 + i for i in range(10)},
     }
     if action == "modifier":
         key_name = str(data.get("key") or "").lower()
@@ -666,12 +971,25 @@ async def control_host(request: Request):
                 user32.keybd_event(code, 0, flags, 0)
                 temporary.append((code, flags))
         code = key_codes[key_name]
-        user32.keybd_event(code, 0, 0, 0)
-        user32.keybd_event(code, 0, 2, 0)
+        try:
+            repeat_count = max(1, min(100, int(data.get("repeat", 1))))
+        except (TypeError, ValueError):
+            repeat_count = 1
+        for _ in range(repeat_count):
+            user32.keybd_event(code, 0, 0, 0)
+            user32.keybd_event(code, 0, 2, 0)
         for code, flags in reversed(temporary):
             user32.keybd_event(code, 0, flags | 0x0002, 0)
         log_event(f"Remote key: {key_name}", "control")
-        return {"ok": True, "action": key_name}
+        return {"ok": True, "action": key_name, "repeat": repeat_count}
+    if action == "key-hold":
+        key_name = str(data.get("key") or "").lower()
+        if key_name not in key_codes:
+            return JSONResponse({"error": "Unsupported held key"}, status_code=400)
+        down = bool(data.get("down"))
+        _send_windows_key(key_codes[key_name], down)
+        log_event(f"Controller key: {key_name} {'down' if down else 'up'}", "control")
+        return {"ok": True, "action": f"{key_name}-{'down' if down else 'up'}"}
     if action == "type":
         text_to_type = str(data.get("text") or "")[:4000]
         # KEYEVENTF_UNICODE sends text without relying on the host keyboard layout.
@@ -705,11 +1023,10 @@ async def control_host(request: Request):
             dy = max(-1200, min(1200, int(data.get("dy", 0))))
         except (TypeError, ValueError):
             return JSONResponse({"error": "Invalid mouse movement"}, status_code=400)
-        class POINT(ctypes.Structure):
-            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-        point = POINT()
-        if user32.GetCursorPos(ctypes.byref(point)):
-            user32.SetCursorPos(point.x + dx, point.y + dy)
+        # Send relative motion so games receive camera input rather than an
+        # absolute desktop-cursor reposition.
+        if dx or dy:
+            user32.mouse_event(0x0001, dx, dy, 0, 0)  # MOUSEEVENTF_MOVE
         return {"ok": True, "action": "mouse-move"}
     if action == "mouse-scroll":
         try:
@@ -719,6 +1036,15 @@ async def control_host(request: Request):
         if delta:
             user32.mouse_event(0x0800, 0, 0, delta, 0)  # MOUSEEVENTF_WHEEL
         return {"ok": True, "action": "mouse-scroll"}
+    if action == "mouse-hold":
+        button = str(data.get("button") or "left").lower()
+        flags = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
+        if button not in flags:
+            return JSONResponse({"error": "Unsupported mouse button"}, status_code=400)
+        down_flag, up_flag = flags[button]
+        user32.mouse_event(down_flag if bool(data.get("down")) else up_flag, 0, 0, 0, 0)
+        state = "down" if bool(data.get("down")) else "up"
+        return {"ok": True, "action": f"{button}-{state}"}
     if action == "mouse-click":
         button = str(data.get("button") or "left").lower()
         click_flags = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010)}
@@ -1002,7 +1328,12 @@ async def get_clipboard():
 @app.post("/api/clipboard")
 async def set_clipboard(request: Request):
     data=await request.json(); text=str(data.get("text") or "")
-    with clipboard_lock: clipboard.update({"text":text,"updated":time.time(),"source":str(data.get("source") or "SciNET")})
+    with clipboard_lock: clipboard.update({"text":text,"updated":time.time(),"source":str(data.get("source") or "SciNET")}); payload=dict(clipboard)
+    stale=[]
+    for client in tuple(clipboard_clients):
+        try: await client.send_json(payload)
+        except Exception: stale.append(client)
+    for client in stale: clipboard_clients.discard(client)
     log_event("Clipboard updated","system"); return {"ok":True}
 
 @app.websocket("/ws/clipboard")
@@ -1034,6 +1365,107 @@ async def clipboard_socket(websocket: WebSocket):
         pass
     finally:
         clipboard_clients.discard(websocket)
+
+@app.websocket("/ws/controller")
+async def controller_socket(websocket: WebSocket):
+    """Persistent private-LAN channel for low-latency relative game-camera input."""
+    client = websocket.client
+    if not client:
+        await websocket.close(code=1008, reason="Could not identify this device")
+        return
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            await websocket.close(code=1008, reason="Controller is available on a private local network only")
+            return
+    except ValueError:
+        await websocket.close(code=1008, reason="Invalid client address")
+        return
+    if platform.system() != "Windows":
+        await websocket.close(code=1011, reason="Host controls are supported on Windows only")
+        return
+
+    await websocket.accept()
+    user32 = ctypes.windll.user32
+    try:
+        while True:
+            payload = await websocket.receive_bytes()
+            if len(payload) != 8:
+                await websocket.send_json({"error": "Invalid camera movement packet"})
+                continue
+            dx, dy = struct.unpack("<ii", payload)
+            dx = max(-1200, min(1200, dx))
+            dy = max(-1200, min(1200, dy))
+            if dx or dy:
+                _send_windows_mouse(dx, dy)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+
+
+@app.websocket("/ws/joystick")
+async def joystick_socket(websocket: WebSocket):
+    """Expose a real analog left stick through a virtual Xbox 360 controller."""
+    client = websocket.client
+    if not client:
+        await websocket.close(code=1008, reason="Could not identify this device")
+        return
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            await websocket.close(code=1008, reason="Joystick is available on a private local network only")
+            return
+    except ValueError:
+        await websocket.close(code=1008, reason="Invalid client address")
+        return
+    if platform.system() != "Windows":
+        await websocket.close(code=1011, reason="Virtual gamepad output is supported on Windows only")
+        return
+
+    await websocket.accept()
+    try:
+        import vgamepad as vg
+        gamepad = vg.VX360Gamepad()
+    except Exception:
+        await websocket.send_json({"error": "Joystick mode needs the ViGEmBus virtual gamepad driver installed on this PC. Install ViGEmBus, then restart SciNET."})
+        await websocket.close(code=1011, reason="Virtual Xbox controller unavailable")
+        return
+
+    try:
+        while True:
+            payload = await websocket.receive_bytes()
+            if len(payload) != 8:
+                await websocket.send_json({"error": "Invalid joystick input packet"})
+                continue
+            axis_x, axis_y = struct.unpack("<ff", payload)
+            if not (math.isfinite(axis_x) and math.isfinite(axis_y)):
+                axis_x = axis_y = 0.0
+            axis_x = max(-1.0, min(1.0, axis_x))
+            axis_y = max(-1.0, min(1.0, axis_y))
+            magnitude = math.hypot(axis_x, axis_y)
+            if magnitude < 0.06:
+                axis_x = axis_y = 0.0
+            elif magnitude > 0.0:
+                scaled = min(1.0, (magnitude - 0.06) / 0.94) / magnitude
+                axis_x *= scaled
+                axis_y *= scaled
+            gamepad.left_joystick(
+                x_value=round(axis_x * 32767),
+                y_value=round(axis_y * 32767)
+            )
+            gamepad.update()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        try:
+            gamepad.reset()
+            gamepad.update()
+        except Exception:
+            pass
+
 
 @app.websocket("/ws")
 async def system_socket(websocket: WebSocket):
