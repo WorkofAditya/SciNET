@@ -67,14 +67,17 @@ class MainActivity : ComponentActivity() {
 private fun SciNETApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { context.getSharedPreferences("scinet-native", Context.MODE_PRIVATE) }
-    var host by remember { mutableStateOf(prefs.getString("host", "") ?: "") }
-    var connected by remember { mutableStateOf(false) }
-    var peerNodeReady by remember { mutableStateOf(PeerNetworkState.serverRunning) }
+    val localHost = "http://127.0.0.1:8765"
+    var pcHost by remember { mutableStateOf(prefs.getString("host", "") ?: "") }
+    var pcAddress by remember { mutableStateOf(pcHost) }
+    var host by remember { mutableStateOf(localHost) }
+    var connected by remember { mutableStateOf(true) }
     var peerDevices by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var activePeer by remember { mutableStateOf<JSONObject?>(null) }
+    var targetMenuExpanded by remember { mutableStateOf(false) }
+    var showPcDialog by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         while (true) {
-            peerNodeReady = PeerNetworkState.serverRunning
             val trustedPeers = context.getSharedPreferences("scinet-trust", Context.MODE_PRIVATE)
             peerDevices = PeerNetworkState.peers.values
                 .map { peer -> JSONObject(peer.toString()).put("trusted", trustedPeers.contains(peer.optString("id"))) }
@@ -123,21 +126,72 @@ private fun SciNETApp() {
             else sendRequest()
         }
     }
-    fun connect(targetHost: String = host) {
-        if (targetHost.isBlank()) { notify("Enter your PC's SciNET address first.", true); return }
+    fun connect(targetHost: String = pcAddress) {
+        if (targetHost.isBlank()) { notify("Enter the PC's SciNET address first.", true); return }
         if (busy) return
         busy = true
         scope.launch {
             try {
                 val normalized = SciNETApi.normalizeHost(targetHost)
-                system = SciNETApi.get(normalized, "/api/system")
+                val snapshot = SciNETApi.get(normalized, "/api/system")
                 host = normalized
+                activePeer = null
+                pcHost = normalized
+                pcAddress = normalized
                 prefs.edit().putString("host", normalized).apply()
+                system = snapshot
+                events = SciNETApi.get(normalized, "/api/events").optJSONArray("events").objects()
                 connected = true
                 page = "HOME"
-                notify("Connected to " + system.optString("hostname", "SciNET host"))
+                targetMenuExpanded = false
+                notify("Connected to " + system.optString("hostname", "SciNET PC"))
             } catch (e: Exception) { notify(e.message ?: "Connection failed.", true) }
             finally { busy = false }
+        }
+    }
+
+    fun selectLocalTarget() {
+        activePeer = null
+        host = localHost
+        connected = true
+        page = "HOME"
+        targetMenuExpanded = false
+        scope.launch {
+            try {
+                system = SciNETApi.get(localHost, "/api/system")
+                events = SciNETApi.get(localHost, "/api/events").optJSONArray("events").objects()
+            } catch (_: Exception) {
+                system = JSONObject().put("hostname", "THIS PHONE")
+            }
+        }
+    }
+
+    fun selectPeerTarget(peer: JSONObject) {
+        val peerId = peer.optString("id")
+        if (!peer.optBoolean("trusted") && !context.getSharedPreferences("scinet-trust", Context.MODE_PRIVATE).contains(peerId)) {
+            notify("Pair with this device by scanning its SciNET QR code first.", true)
+            return
+        }
+        val peerHost = peer.optString("host")
+        val port = peer.optInt("port", 8765)
+        if (peerHost.isBlank()) {
+            notify("This device has no reachable local-network address yet.", true)
+            return
+        }
+        val endpoint = JSONObject(peer.toString()).put("trusted", true)
+        activePeer = endpoint
+        host = "http://$peerHost:$port"
+        connected = true
+        targetMenuExpanded = false
+        page = "HOME"
+        scope.launch {
+            try {
+                system = SciNETApi.get(host, "/api/system")
+                events = SciNETApi.get(host, "/api/events").optJSONArray("events").objects()
+                notify("Selected " + peer.optString("name", "SciNET device"))
+            } catch (e: Exception) {
+                notify(e.message ?: "Could not reach this device.", true)
+            }
         }
     }
 
@@ -196,17 +250,30 @@ private fun SciNETApp() {
     }
 
     LaunchedEffect(Unit) {
-        if (host.isNotBlank()) connect()
-    }
-
-    fun logout() {
-        connected = false
-        page = "HOME"
-        host = ""
-        prefs.edit().remove("host").apply()
-        system = JSONObject()
-        events = emptyList()
-        notify("Logged out. Enter another SciNET PC address.")
+        scope.launch {
+            repeat(20) {
+                try {
+                    system = SciNETApi.get(localHost, "/api/system")
+                    events = SciNETApi.get(localHost, "/api/events").optJSONArray("events").objects()
+                    connected = true
+                    return@launch
+                } catch (_: Exception) {
+                    delay(500)
+                }
+            }
+            system = JSONObject().put("hostname", "THIS PHONE")
+        }
+        if (pcHost.isNotBlank()) {
+            scope.launch {
+                runCatching { SciNETApi.get(pcHost, "/api/system") }
+                    .onSuccess {
+                        host = pcHost
+                        activePeer = null
+                        system = it
+                        connected = true
+                    }
+            }
+        }
     }
 
     LaunchedEffect(connected, host, page) {
