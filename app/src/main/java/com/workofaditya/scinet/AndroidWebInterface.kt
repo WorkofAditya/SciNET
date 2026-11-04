@@ -264,7 +264,7 @@ internal class AndroidWebInterface(private val context: Context) {
             if (item.status != "uploading") { call.errorJson(HttpStatusCode.Conflict, "Upload is not active"); return@post }
             val chunk = call.receive<ByteArray>()
             val supplied = call.request.headers["X-Chunk-SHA256"].orEmpty().lowercase()
-            val actual = MessageDigest.getInstance("SHA-256").digest(chunk).joinToString("") { "%02x".format(it) }
+            val actual = MessageDigest.getInstance("SHA-256").digest(chunk).joinToString("") { "%02x".format(it.toInt() and 0xff) }
             if (chunk.isEmpty() || supplied != actual) { call.errorJson(HttpStatusCode(422, "Unprocessable Entity"), "Chunk integrity check failed; retry this chunk"); return@post }
             var exceedsExpectedSize = false
             synchronized(item) {
