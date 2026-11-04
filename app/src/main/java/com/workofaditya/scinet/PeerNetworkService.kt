@@ -10,7 +10,7 @@ import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
-import android.os.ServiceInfo
+import android.content.pm.ServiceInfo
 import io.ktor.server.application.*
 import io.ktor.server.cio.*
 import io.ktor.server.engine.*
@@ -224,11 +224,11 @@ class PeerNetworkService : Service() {
             serviceName = "SciNET-${deviceId.take(8)}"
             serviceType = PEER_SERVICE_TYPE
             port = PEER_PORT
-            setAttribute("id", deviceId)
-            setAttribute("name", deviceName.take(60))
-            setAttribute("platform", "android")
-            setAttribute("protocol", PEER_PROTOCOL_VERSION.toString())
-            setAttribute("ws", "/ws/peer")
+            setAttribute("id", deviceId.toByteArray(Charsets.UTF_8))
+            setAttribute("name", deviceName.take(60).toByteArray(Charsets.UTF_8))
+            setAttribute("platform", "android".toByteArray(Charsets.UTF_8))
+            setAttribute("protocol", PEER_PROTOCOL_VERSION.toString().toByteArray(Charsets.UTF_8))
+            setAttribute("ws", "/ws/peer".toByteArray(Charsets.UTF_8))
         }
 
         registrationListener = object : NsdManager.RegistrationListener {
@@ -277,7 +277,10 @@ class PeerNetworkService : Service() {
                 val id = service.serviceName.substringAfter("SciNET-", "").takeIf { it.isNotBlank() }
                 if (id != null) {
                     val peerId = endpoints.keys.firstOrNull { it.startsWith(id, ignoreCase = true) }
-                    if (peerId != null) endpoints.remove(peerId)
+                    if (peerId != null) {
+                        endpoints.remove(peerId)
+                        sockets[peerId]?.cancel()
+                    }
                 }
             }
         }
