@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -15,6 +16,7 @@ import io.ktor.server.application.*
 import io.ktor.server.cio.*
 import io.ktor.server.engine.*
 import io.ktor.server.response.*
+import io.ktor.http.*
 import io.ktor.server.request.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
@@ -35,6 +37,10 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.net.InetAddress
+import java.io.File
+import java.io.FileOutputStream
+import java.security.SecureRandom
+import java.net.URLDecoder
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -49,7 +55,41 @@ private const val PEER_NOTIFICATION_ID = 8765
 internal object PeerNetworkState {
     @Volatile var localDeviceId: String = ""
     @Volatile var serverRunning: Boolean = false
+    @Volatile var pairingToken: String = ""
+    @Volatile var pairingTokenExpiresAt: Long = 0L
     val peers = ConcurrentHashMap<String, JSONObject>()
+    val incomingTransfers = ConcurrentHashMap<String, JSONObject>()
+
+    fun rotatePairingToken() {
+        val bytes = ByteArray(24)
+        SecureRandom().nextBytes(bytes)
+        pairingToken = bytes.joinToString("") { "%02x".format(it) }
+        pairingTokenExpiresAt = System.currentTimeMillis() + 5 * 60 * 1000L
+    }
+
+    fun persistIncoming(context: Context) {
+        val items = org.json.JSONArray(incomingTransfers.values.toList())
+        context.getSharedPreferences("scinet-peer-inbox", Context.MODE_PRIVATE)
+            .edit().putString("items", items.toString()).apply()
+    }
+
+    fun restoreIncoming(context: Context) {
+        val encoded = context.getSharedPreferences("scinet-peer-inbox", Context.MODE_PRIVATE)
+            .getString("items", "[]") ?: "[]"
+        val items = runCatching { org.json.JSONArray(encoded) }.getOrNull() ?: org.json.JSONArray()
+        val directory = File(context.filesDir, "peer-inbox")
+        for (index in 0 until items.length()) {
+            val item = items.optJSONObject(index) ?: continue
+            val id = item.optString("id")
+            if (id.isNotBlank() && File(directory, id).isFile) incomingTransfers[id] = item
+        }
+    }
+
+    fun removeIncoming(context: Context, id: String) {
+        incomingTransfers.remove(id)
+        File(File(context.filesDir, "peer-inbox"), id).delete()
+        persistIncoming(context)
+    }
 }
 
 /**
@@ -103,6 +143,8 @@ class PeerNetworkService : Service() {
             }
         deviceName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android device"
         PeerNetworkState.localDeviceId = deviceId
+        PeerNetworkState.rotatePairingToken()
+        PeerNetworkState.restoreIncoming(this)
         nsdManager = getSystemService(NsdManager::class.java)
         createNotificationChannel()
         acquireMulticastLock()
@@ -178,8 +220,135 @@ class PeerNetworkService : Service() {
                             io.ktor.http.ContentType.Application.Json
                         )
                     }
+                    post("/api/pair/claim") {
+                        val payload = runCatching { JSONObject(call.receiveText()) }.getOrNull()
+                        val remoteId = payload?.optString("deviceId").orEmpty()
+                        val token = payload?.optString("token").orEmpty()
+                        val now = System.currentTimeMillis()
+                        val validId = remoteId.length in 16..64 &&
+                            remoteId.all { it.isLetterOrDigit() || it == '-' || it == '_' } &&
+                            remoteId != deviceId
+                        if (!validId || token.isBlank() || token != PeerNetworkState.pairingToken ||
+                            now > PeerNetworkState.pairingTokenExpiresAt
+                        ) {
+                            call.respondText(
+                                JSONObject().put("error", "Pairing QR is invalid, expired, or already used. Refresh the QR on the other phone.").toString(),
+                                ContentType.Application.Json,
+                                HttpStatusCode.Unauthorized
+                            )
+                            return@post
+                        }
+
+                        val remoteName = payload.optString("deviceName").take(80).ifBlank { "SciNET device" }
+                        val remotePlatform = payload.optString("platform").take(24).ifBlank { "android" }
+                        val peerKey = UUID.randomUUID().toString().replace("-", "") +
+                            UUID.randomUUID().toString().replace("-", "")
+                        getSharedPreferences("scinet-trust", MODE_PRIVATE)
+                            .edit().putString(remoteId, peerKey).apply()
+
+                        val remoteHost = call.request.local.remoteHost
+                        if (remoteHost.isNotBlank() && !remoteHost.contains(':')) {
+                            val endpoint = PeerEndpoint(remoteId, remoteName, remotePlatform, remoteHost, PEER_PORT)
+                            endpoints[remoteId] = endpoint
+                            startPeerConnection(endpoint)
+                        }
+
+                        PeerNetworkState.rotatePairingToken()
+                        call.respondText(
+                            JSONObject()
+                                .put("ok", true)
+                                .put("deviceId", deviceId)
+                                .put("deviceName", deviceName)
+                                .put("peerKey", peerKey)
+                                .toString(),
+                            ContentType.Application.Json
+                        )
+                    }
+                    post("/api/peer/transfers") {
+                        val peerId = call.request.headers["X-SciNET-Peer-ID"].orEmpty()
+                        val suppliedKey = call.request.headers[HttpHeaders.Authorization]
+                            ?.removePrefix("Bearer ")?.trim().orEmpty()
+                        val trustedKey = getSharedPreferences("scinet-trust", MODE_PRIVATE)
+                            .getString(peerId, null)
+                        val authorized = !peerId.isBlank() && trustedKey != null &&
+                            java.security.MessageDigest.isEqual(
+                                trustedKey.toByteArray(Charsets.UTF_8),
+                                suppliedKey.toByteArray(Charsets.UTF_8)
+                            )
+                        if (!authorized) {
+                            call.respondText(
+                                JSONObject().put("error", "This device is not paired with the sender.").toString(),
+                                ContentType.Application.Json,
+                                HttpStatusCode.Unauthorized
+                            )
+                            return@post
+                        }
+
+                        val rawName = call.request.headers["X-SciNET-File-Name"].orEmpty()
+                        val fileName = URLDecoder.decode(rawName, Charsets.UTF_8.name())
+                            .replace("/", "_").replace("\\", "_").replace("..", "_")
+                            .filter { it >= ' ' && it != '\u007f' }
+                            .take(180).ifBlank { "scinet-transfer.bin" }
+                        val expectedSize = call.request.headers["X-SciNET-File-Size"]?.toLongOrNull() ?: -1L
+                        if (expectedSize > 2L * 1024L * 1024L * 1024L) {
+                            call.respondText(
+                                JSONObject().put("error", "Files larger than 2 GB are not supported yet.").toString(),
+                                ContentType.Application.Json,
+                                HttpStatusCode.PayloadTooLarge
+                            )
+                            return@post
+                        }
+
+                        val transferId = UUID.randomUUID().toString().replace("-", "")
+                        val directory = File(filesDir, "peer-inbox").apply { mkdirs() }
+                        val destination = File(directory, transferId)
+                        var received = 0L
+                        try {
+                            call.receiveStream().use { input ->
+                                FileOutputStream(destination).use { output ->
+                                    val buffer = ByteArray(64 * 1024)
+                                    while (true) {
+                                        val count = input.read(buffer)
+                                        if (count < 0) break
+                                        received += count
+                                        if (received > 2L * 1024L * 1024L * 1024L) {
+                                            throw IllegalStateException("Transfer exceeded the 2 GB limit.")
+                                        }
+                                        output.write(buffer, 0, count)
+                                    }
+                                }
+                            }
+                            if (expectedSize >= 0L && received != expectedSize) {
+                                throw IllegalStateException("Transfer size mismatch. The file was not saved.")
+                            }
+                        } catch (error: Exception) {
+                            destination.delete()
+                            call.respondText(
+                                JSONObject().put("error", error.message ?: "File transfer failed.").toString(),
+                                ContentType.Application.Json,
+                                HttpStatusCode.BadRequest
+                            )
+                            return@post
+                        }
+
+                        val senderName = PeerNetworkState.peers[peerId]?.optString("name")
+                            ?.takeIf { it.isNotBlank() } ?: "Paired SciNET device"
+                        val item = JSONObject()
+                            .put("id", transferId)
+                            .put("name", fileName)
+                            .put("size", received)
+                            .put("senderId", peerId)
+                            .put("senderName", senderName)
+                            .put("receivedAt", System.currentTimeMillis())
+                        PeerNetworkState.incomingTransfers[transferId] = item
+                        PeerNetworkState.persistIncoming(this@PeerNetworkService)
+                        call.respondText(
+                            JSONObject().put("ok", true).put("transferId", transferId).put("receivedBytes", received).toString(),
+                            ContentType.Application.Json
+                        )
+                    }
                     webSocket("/ws/peer") {
-                        val remoteAddress = call.request.local.remoteAddress
+                        val remoteAddress = call.request.local.remoteHost
                         val remoteIp = runCatching { InetAddress.getByName(remoteAddress) }.getOrNull()
                         if (remoteIp == null ||
                             !(remoteIp.isSiteLocalAddress || remoteIp.isLoopbackAddress || remoteIp.isLinkLocalAddress)
@@ -208,7 +377,10 @@ class PeerNetworkService : Service() {
                             .put("id", remoteId)
                             .put("name", remoteName.ifBlank { "SciNET device" })
                             .put("platform", remotePlatform)
+                            .put("host", remoteAddress)
+                            .put("port", call.request.local.remotePort)
                             .put("connected", true)
+                            .put("trusted", getSharedPreferences("scinet-trust", MODE_PRIVATE).contains(remoteId))
                             .put("lastSeen", System.currentTimeMillis())
                         PeerNetworkState.peers[remoteId] = peerRecord
 
@@ -378,7 +550,10 @@ class PeerNetworkService : Service() {
                                     .put("id", peer.id)
                                     .put("name", message.optString("deviceName", peer.name))
                                     .put("platform", message.optString("platform", peer.platform))
+                                    .put("host", peer.host)
+                                    .put("port", peer.port)
                                     .put("connected", true)
+                                    .put("trusted", getSharedPreferences("scinet-trust", MODE_PRIVATE).contains(peer.id))
                                     .put("lastSeen", System.currentTimeMillis())
                                 opened.complete(true)
                             }
