@@ -66,21 +66,23 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun SciNETApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val prefs = remember { context.getSharedPreferences("scinet-native", Context.MODE_PRIVATE) }
     val localHost = "http://127.0.0.1:8765"
-    var pcHost by remember { mutableStateOf(prefs.getString("host", "") ?: "") }
-    var pcAddress by remember { mutableStateOf(pcHost) }
     var host by remember { mutableStateOf(localHost) }
     var connected by remember { mutableStateOf(true) }
     var peerDevices by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var activePeer by remember { mutableStateOf<JSONObject?>(null) }
     var targetMenuExpanded by remember { mutableStateOf(false) }
-    var showPcDialog by remember { mutableStateOf(false) }
+    var meshTopology by remember { mutableStateOf(JSONObject()) }
     LaunchedEffect(Unit) {
         while (true) {
             val trustedPeers = context.getSharedPreferences("scinet-trust", Context.MODE_PRIVATE)
-            peerDevices = PeerNetworkState.peers.values
-                .map { peer -> JSONObject(peer.toString()).put("trusted", trustedPeers.contains(peer.optString("id"))) }
+            peerDevices = (PeerNetworkState.knownPeers.values + PeerNetworkState.peers.values)
+                .associateBy { it.optString("id") }.values
+                .map { peer ->
+                    val copy = JSONObject(peer.toString())
+                    copy.put("connected", PeerNetworkState.peers[peer.optString("id")]?.optBoolean("connected") == true)
+                    copy.put("trusted", trustedPeers.contains(peer.optString("id")))
+                }
                 .sortedBy { it.optString("name").lowercase() }
             delay(1000)
         }
@@ -126,8 +128,8 @@ private fun SciNETApp() {
             else sendRequest()
         }
     }
-    fun connect(targetHost: String = pcAddress) {
-        if (targetHost.isBlank()) { notify("Enter the PC's SciNET address first.", true); return }
+    fun connect(targetHost: String) {
+        if (targetHost.isBlank()) { notify("Invalid SciNET address.", true); return }
         if (busy) return
         busy = true
         scope.launch {
@@ -136,9 +138,6 @@ private fun SciNETApp() {
                 val snapshot = SciNETApi.get(normalized, "/api/system")
                 host = normalized
                 activePeer = null
-                pcHost = normalized
-                pcAddress = normalized
-                prefs.edit().putString("host", normalized).apply()
                 system = snapshot
                 events = SciNETApi.get(normalized, "/api/events").optJSONArray("events").objects()
                 connected = true
@@ -168,10 +167,6 @@ private fun SciNETApp() {
 
     fun selectPeerTarget(peer: JSONObject) {
         val peerId = peer.optString("id")
-        if (!peer.optBoolean("trusted") && !context.getSharedPreferences("scinet-trust", Context.MODE_PRIVATE).contains(peerId)) {
-            notify("Pair with this device by scanning its SciNET QR code first.", true)
-            return
-        }
         val peerHost = peer.optString("host")
         val port = peer.optInt("port", 8765)
         if (peerHost.isBlank()) {
@@ -272,15 +267,13 @@ private fun SciNETApp() {
             }
             system = JSONObject().put("hostname", "THIS PHONE")
         }
-        if (pcHost.isNotBlank()) {
-            scope.launch {
-                runCatching { SciNETApi.get(pcHost, "/api/system") }
-                    .onSuccess {
-                        host = pcHost
-                        activePeer = null
-                        system = it
-                        connected = true
-                    }
+    }
+
+    LaunchedEffect(page) {
+        if (page == "HOME") {
+            while (true) {
+                try { meshTopology = SciNETApi.get(localHost, "/api/peer/topology") } catch (_: Exception) { }
+                delay(1000)
             }
         }
     }
@@ -335,10 +328,6 @@ private fun SciNETApp() {
                             onClick = { selectLocalTarget() }
                         )
                         DropdownMenuItem(
-                            text = { Text("CONNECT TO PC…") },
-                            onClick = { targetMenuExpanded = false; pcAddress = pcHost; showPcDialog = true }
-                        )
-                        DropdownMenuItem(
                             text = { Text("SCAN DEVICE QR CODE") },
                             onClick = {
                                 targetMenuExpanded = false
@@ -346,16 +335,16 @@ private fun SciNETApp() {
                             }
                         )
                         HorizontalDivider(color = Edge)
-                        if (peerDevices.none { it.optBoolean("trusted") }) {
+                        if (peerDevices.isEmpty()) {
                             DropdownMenuItem(
-                                text = { Text("NO PAIRED DEVICES", color = Muted) },
+                                text = { Text("NO LAN DEVICES DISCOVERED", color = Muted) },
                                 enabled = false,
                                 onClick = {}
                             )
                         }
-                        peerDevices.filter { it.optBoolean("trusted") }.forEach { peer ->
+                        peerDevices.forEach { peer ->
                             DropdownMenuItem(
-                                text = { Text(peer.optString("name", "SciNET device")) },
+                                text = { Text(peer.optString("name", "SciNET device") + if (peer.optBoolean("connected")) " · ONLINE" else " · OFFLINE") },
                                 onClick = { selectPeerTarget(peer) }
                             )
                         }
@@ -372,7 +361,7 @@ private fun SciNETApp() {
                 verticalArrangement = if (screenFullscreen || page == "CONTROLLER") Arrangement.Top else Arrangement.spacedBy(13.dp)
             ) {
                 when (page) {
-                    "HOME" -> DashboardScreen(system, events, host, onRefresh = {
+                    "HOME" -> DashboardScreen(system, events, host, meshTopology, onRefresh = {
                         scope.launch {
                             try {
                                 system = SciNETApi.get(host, "/api/system")
