@@ -239,6 +239,19 @@ class PeerNetworkService : Service() {
                             return@post
                         }
 
+                        val remoteHost = call.request.local.remoteHost
+                        val remoteIp = runCatching { InetAddress.getByName(remoteHost) }.getOrNull()
+                        if (remoteIp == null ||
+                            !(remoteIp.isSiteLocalAddress || remoteIp.isLoopbackAddress || remoteIp.isLinkLocalAddress)
+                        ) {
+                            call.respondText(
+                                JSONObject().put("error", "SciNET pairing is available on a private local network only.").toString(),
+                                ContentType.Application.Json,
+                                HttpStatusCode.Forbidden
+                            )
+                            return@post
+                        }
+
                         val remoteName = payload?.optString("deviceName").orEmpty().take(80).ifBlank { "SciNET device" }
                         val remotePlatform = payload?.optString("platform").orEmpty().take(24).ifBlank { "android" }
                         val peerKey = UUID.randomUUID().toString().replace("-", "") +
@@ -246,7 +259,6 @@ class PeerNetworkService : Service() {
                         getSharedPreferences("scinet-trust", MODE_PRIVATE)
                             .edit().putString(remoteId, peerKey).apply()
 
-                        val remoteHost = call.request.local.remoteHost
                         if (remoteHost.isNotBlank() && !remoteHost.contains(':')) {
                             val endpoint = PeerEndpoint(remoteId, remoteName, remotePlatform, remoteHost, PEER_PORT)
                             endpoints[remoteId] = endpoint
