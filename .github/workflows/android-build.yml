@@ -3,11 +3,13 @@ name: Android build
 on:
   push:
     branches:
+      - main
       - feature/native-android-app
+      - feature/multi-device-peer-network
   pull_request:
     branches:
       - main
-      - feature/native-android-app
+      - feature/multi-device-peer-network
   workflow_dispatch:
 
 jobs:
