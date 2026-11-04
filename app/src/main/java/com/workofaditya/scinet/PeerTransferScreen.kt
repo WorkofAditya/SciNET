@@ -122,7 +122,8 @@ internal fun PeerTransferScreen(
                     }
                 }
                 PeerNetworkState.removeIncoming(context, transferId)
-                onMessage("Downloaded ${item.optString("name")} to your chosen location.", false)
+                val savedName = item.optString("name")
+                onMessage("Downloaded $savedName to your chosen location.", false)
             } catch (error: Exception) {
                 onMessage(error.message ?: "Could not save the incoming file.", true)
             } finally {
