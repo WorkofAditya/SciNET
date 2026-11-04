@@ -71,11 +71,13 @@ private fun SciNETApp() {
     var connected by remember { mutableStateOf(false) }
     var peerNodeReady by remember { mutableStateOf(PeerNetworkState.serverRunning) }
     var peerDevices by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var activePeer by remember { mutableStateOf<JSONObject?>(null) }
     LaunchedEffect(Unit) {
         while (true) {
             peerNodeReady = PeerNetworkState.serverRunning
+            val trustedPeers = context.getSharedPreferences("scinet-trust", Context.MODE_PRIVATE)
             peerDevices = PeerNetworkState.peers.values
-                .map { JSONObject(it.toString()) }
+                .map { peer -> JSONObject(peer.toString()).put("trusted", trustedPeers.contains(peer.optString("id"))) }
                 .sortedBy { it.optString("name").lowercase() }
             delay(1000)
         }
@@ -146,15 +148,44 @@ private fun SciNETApp() {
                 val scannedUri = android.net.Uri.parse(scanned)
                 val peerId = scannedUri.getQueryParameter("deviceId")
                 if (scannedUri.port == 8765 && scannedUri.getQueryParameter("scinet") == "peer" && !peerId.isNullOrBlank()) {
-                    val peerIntent = Intent(context, PeerNetworkService::class.java).apply {
-                        action = PeerNetworkService.ACTION_CONNECT_PEER
-                        putExtra(PeerNetworkService.EXTRA_PEER_ID, peerId)
-                        putExtra(PeerNetworkService.EXTRA_PEER_NAME, scannedUri.getQueryParameter("name") ?: "SciNET phone")
-                        putExtra(PeerNetworkService.EXTRA_PEER_HOST, scannedUri.host ?: "")
-                        putExtra(PeerNetworkService.EXTRA_PEER_PORT, 8765)
+                    val pairingToken = scannedUri.getQueryParameter("token").orEmpty()
+                    if (pairingToken.isBlank()) {
+                        notify("This phone QR has no pairing token. Refresh the QR on the other phone.", true)
+                    } else if (!busy) {
+                        busy = true
+                        scope.launch {
+                            try {
+                                val remoteHost = "http://" + (scannedUri.host ?: throw IllegalStateException("QR has no device address")) + ":8765"
+                                val localName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android device"
+                                val pairing = SciNETApi.post(
+                                    remoteHost,
+                                    "/api/pair/claim",
+                                    JSONObject()
+                                        .put("deviceId", PeerNetworkState.localDeviceId)
+                                        .put("deviceName", localName)
+                                        .put("platform", "android")
+                                        .put("token", pairingToken)
+                                )
+                                val peerKey = pairing.optString("peerKey")
+                                if (peerKey.isBlank()) throw IllegalStateException("The other phone did not return a pairing key.")
+                                context.getSharedPreferences("scinet-trust", Context.MODE_PRIVATE)
+                                    .edit().putString(peerId, peerKey).apply()
+                                val peerIntent = Intent(context, PeerNetworkService::class.java).apply {
+                                    action = PeerNetworkService.ACTION_CONNECT_PEER
+                                    putExtra(PeerNetworkService.EXTRA_PEER_ID, peerId)
+                                    putExtra(PeerNetworkService.EXTRA_PEER_NAME, pairing.optString("deviceName", scannedUri.getQueryParameter("name") ?: "SciNET phone"))
+                                    putExtra(PeerNetworkService.EXTRA_PEER_HOST, scannedUri.host ?: "")
+                                    putExtra(PeerNetworkService.EXTRA_PEER_PORT, 8765)
+                                }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(peerIntent) else context.startService(peerIntent)
+                                notify("Paired with " + pairing.optString("deviceName", "SciNET phone") + ". Connecting…")
+                            } catch (error: Exception) {
+                                notify(error.message ?: "Could not pair with this phone.", true)
+                            } finally {
+                                busy = false
+                            }
+                        }
                     }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(peerIntent) else context.startService(peerIntent)
-                    notify("Connecting to SciNET phone…")
                 } else {
                     connect(scanned)
                 }
@@ -219,7 +250,23 @@ private fun SciNETApp() {
             }
             HorizontalDivider(color = Color(0xFF20242A))
             }
-            if (!connected) {
+            if (activePeer != null) {
+                Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(15.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+                    PeerTransferScreen(
+                        peer = activePeer!!,
+                        onBack = { activePeer = null },
+                        onMessage = { text, bad -> notify(text, bad) }
+                    )
+                }
+                NotificationToast(
+                    message = notice,
+                    isError = noticeBad,
+                    visible = noticeVisible,
+                    connected = false,
+                    expanded = noticeExpanded,
+                    onClick = { noticeExpanded = !noticeExpanded }
+                )
+            } else if (!connected) {
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
                     Spacer(Modifier.height(6.dp))
                     Text("LOCAL NETWORK / 01", color = Accent, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
@@ -236,12 +283,16 @@ private fun SciNETApp() {
                             Text("No peers detected yet. This phone keeps advertising itself while your PC is offline.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
                         } else {
                             peerDevices.forEach { peer ->
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    Modifier.fillMaxWidth().clickable(enabled = peer.optBoolean("trusted")) { activePeer = peer },
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                         Text(peer.optString("name", "SciNET device"), color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                                         Text(peer.optString("platform", "device").uppercase(), color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
                                     }
-                                    Text("CONNECTED", color = Good, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                                    Text(if (peer.optBoolean("trusted")) "OPEN" else "UNPAIRED", color = if (peer.optBoolean("trusted")) Good else Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -249,16 +300,21 @@ private fun SciNETApp() {
                     PanelCard {
                         SectionHeading("CONNECT TO THIS PHONE", "Open SciNET from any device")
                         val localAddress = remember { mutableStateOf(localNetworkIpv4()) }
+                        var pairingToken by remember { mutableStateOf(PeerNetworkState.pairingToken) }
                         LaunchedEffect(Unit) {
                             while (true) {
                                 localAddress.value = localNetworkIpv4()
-                                delay(3000)
+                                if (PeerNetworkState.pairingTokenExpiresAt <= System.currentTimeMillis()) {
+                                    PeerNetworkState.rotatePairingToken()
+                                }
+                                pairingToken = PeerNetworkState.pairingToken
+                                delay(1000)
                             }
                         }
-                        val phoneQr = remember(localAddress.value, PeerNetworkState.localDeviceId) {
+                        val phoneQr = remember(localAddress.value, PeerNetworkState.localDeviceId, pairingToken) {
                             val address = localAddress.value
-                            if (address.isBlank() || PeerNetworkState.localDeviceId.isBlank()) null else runCatching {
-                                val payload = "http://$address:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET"
+                            if (address.isBlank() || PeerNetworkState.localDeviceId.isBlank() || pairingToken.isBlank()) null else runCatching {
+                                val payload = "http://$address:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET&token=$pairingToken"
                                 val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(payload, com.google.zxing.BarcodeFormat.QR_CODE, 640, 640)
                                 android.graphics.Bitmap.createBitmap(640, 640, android.graphics.Bitmap.Config.ARGB_8888).also { bitmap ->
                                     for (y in 0 until 640) for (x in 0 until 640) {
@@ -275,10 +331,10 @@ private fun SciNETApp() {
                                     modifier = Modifier.size(210.dp).background(Color.White, RoundedCornerShape(12.dp)).padding(9.dp)
                                 )
                             }
-                            Text("Scan with SciNET to connect as a peer, or scan with any camera to open this phone's browser portal.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                            Text("Scan this QR from another SciNET phone to pair. The short-lived token can only be used once.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
                             Text("http://${localAddress.value}:8765", color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             TextButton(onClick = {
-                                val link = "http://${localAddress.value}:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET"
+                                val link = "http://${localAddress.value}:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET&token=$pairingToken"
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                 clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SciNET phone link", link))
                                 notify("Phone link copied")
@@ -326,6 +382,10 @@ private fun SciNETApp() {
                     verticalArrangement = if (screenFullscreen || page == "CONTROLLER") Arrangement.Top else Arrangement.spacedBy(13.dp)
                 ) {
                     when (page) {
+                        "PEERS" -> PeerDevicesScreen(
+                            peers = peerDevices,
+                            onOpen = { selected -> activePeer = selected }
+                        )
                         "HOME" -> DashboardScreen(system, events, host, onRefresh = {
                             scope.launch {
                                 try { system = SciNETApi.get(host, "/api/system"); events = SciNETApi.get(host, "/api/events").optJSONArray("events").objects(); notify("Dashboard refreshed") }
@@ -381,7 +441,7 @@ private fun SciNETApp() {
                     onClick = { noticeExpanded = !noticeExpanded }
                 )
                 Row(Modifier.fillMaxWidth().background(Color(0xFF0C0F13)).padding(horizontal = 3.dp, vertical = 5.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                    listOf("HOME" to "⌂", "CONTROL" to "⌁", "FILES" to "▤", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
+                    listOf("HOME" to "⌂", "PEERS" to "⌘", "CONTROL" to "⌁", "FILES" to "▤", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
                         Column(Modifier.weight(1f).background(if (page == key) Raised else Color.Transparent, RoundedCornerShape(7.dp)).padding(vertical = 7.dp).pointerInput(key) { detectTapGestures { page = key } }, horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(symbol, color = if (page == key) Accent else Muted, fontSize = 17.sp)
                             Text(key, color = if (page == key) Ink else Muted, fontSize = 6.sp, maxLines = 1)
