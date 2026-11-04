@@ -43,7 +43,9 @@ import java.security.SecureRandom
 import java.net.URLDecoder
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.seconds
 
 private const val PEER_PORT = 8765
@@ -236,6 +238,8 @@ class PeerNetworkService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val endpoints = ConcurrentHashMap<String, PeerEndpoint>()
+    private val serviceResolutionQueue = ConcurrentLinkedQueue<NsdServiceInfo>()
+    private val resolvingService = AtomicBoolean(false)
     private val connectionJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     private val sockets = ConcurrentHashMap<String, WebSocket>()
     private lateinit var nsdManager: NsdManager
@@ -598,35 +602,11 @@ class PeerNetworkService : Service() {
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
             override fun onServiceFound(service: NsdServiceInfo) {
                 if (service.serviceName == serviceInfo.serviceName) return
-                runCatching {
-                    nsdManager.resolveService(service, object : NsdManager.ResolveListener {
-                        override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) = Unit
-                        override fun onServiceResolved(info: NsdServiceInfo) {
-                            val id = info.attributes["id"]?.toString(Charsets.UTF_8).orEmpty()
-                            val host = info.host?.hostAddress.orEmpty()
-                            val version = info.attributes["protocol"]?.toString(Charsets.UTF_8)?.toIntOrNull()
-                            if (id.isBlank() || id == deviceId || host.isBlank() || host.contains(':') ||
-                                version != PEER_PROTOCOL_VERSION || info.port <= 0
-                            ) return
-                            val endpoint = PeerEndpoint(
-                                id = id,
-                                name = info.attributes["name"]?.toString(Charsets.UTF_8).orEmpty()
-                                    .ifBlank { info.serviceName },
-                                platform = info.attributes["platform"]?.toString(Charsets.UTF_8).orEmpty(),
-                                host = host,
-                                port = info.port
-                            )
-                            endpoints[id] = endpoint
-                            PeerNetworkState.knownPeers[id] = JSONObject()
-                                .put("id", id).put("name", endpoint.name).put("platform", endpoint.platform)
-                                .put("host", host).put("port", endpoint.port).put("connected", PeerNetworkState.peers[id]?.optBoolean("connected") == true)
-                                .put("updatedAt", System.currentTimeMillis())
-                            startPeerConnection(endpoint)
-                        }
-                    })
-                }
+                serviceResolutionQueue.add(service)
+                resolveNextService()
             }
             override fun onServiceLost(service: NsdServiceInfo) {
+                serviceResolutionQueue.removeIf { it.serviceName == service.serviceName }
                 // A service can be re-resolved when it returns to the LAN. Existing
                 // sockets are allowed to close naturally before the retry loop exits.
                 val id = service.serviceName.substringAfter("SciNET-", "").takeIf { it.isNotBlank() }
@@ -651,6 +631,59 @@ class PeerNetworkService : Service() {
             NsdManager.PROTOCOL_DNS_SD,
             discoveryListener!!
         )
+    }
+
+    private fun resolveNextService() {
+        if (!resolvingService.compareAndSet(false, true)) return
+        val service = serviceResolutionQueue.poll()
+        if (service == null) {
+            resolvingService.set(false)
+            if (serviceResolutionQueue.isNotEmpty()) resolveNextService()
+            return
+        }
+
+        fun finishResolution() {
+            resolvingService.set(false)
+            if (serviceResolutionQueue.isNotEmpty()) resolveNextService()
+        }
+
+        try {
+            nsdManager.resolveService(service, object : NsdManager.ResolveListener {
+                override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                    finishResolution()
+                }
+
+                override fun onServiceResolved(info: NsdServiceInfo) {
+                    try {
+                        val id = info.attributes["id"]?.toString(Charsets.UTF_8).orEmpty()
+                        val host = info.host?.hostAddress.orEmpty()
+                        val version = info.attributes["protocol"]?.toString(Charsets.UTF_8)?.toIntOrNull()
+                        if (id.isBlank() || id == deviceId || host.isBlank() || host.contains(':') ||
+                            version != PEER_PROTOCOL_VERSION || info.port <= 0
+                        ) return
+                        val endpoint = PeerEndpoint(
+                            id = id,
+                            name = info.attributes["name"]?.toString(Charsets.UTF_8).orEmpty()
+                                .ifBlank { info.serviceName },
+                            platform = info.attributes["platform"]?.toString(Charsets.UTF_8).orEmpty(),
+                            host = host,
+                            port = info.port
+                        )
+                        endpoints[id] = endpoint
+                        PeerNetworkState.knownPeers[id] = JSONObject()
+                            .put("id", id).put("name", endpoint.name).put("platform", endpoint.platform)
+                            .put("host", host).put("port", endpoint.port)
+                            .put("connected", PeerNetworkState.peers[id]?.optBoolean("connected") == true)
+                            .put("updatedAt", System.currentTimeMillis())
+                        startPeerConnection(endpoint)
+                    } finally {
+                        finishResolution()
+                    }
+                }
+            })
+        } catch (_: Exception) {
+            finishResolution()
+        }
     }
 
     private fun startPeerConnection(peer: PeerEndpoint) {
@@ -800,6 +833,8 @@ class PeerNetworkService : Service() {
         PeerNetworkState.serverRunning = false
         runCatching { discoveryListener?.let { nsdManager.stopServiceDiscovery(it) } }
         runCatching { registrationListener?.let { nsdManager.unregisterService(it) } }
+        serviceResolutionQueue.clear()
+        resolvingService.set(false)
         sockets.values.forEach { it.close(1001, "SciNET service stopped") }
         connectionJobs.values.forEach { it.cancel() }
         runCatching { httpServer?.stop(250, 1000) }
