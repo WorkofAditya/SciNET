@@ -187,15 +187,7 @@ class PeerNetworkService : Service() {
                     maxFrameSize = 64L * 1024L
                 }
                 routing {
-                    get("/") {
-                        val html = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0a0c0f"><title>SciNET Phone</title>
-<style>
-*{box-sizing:border-box}body{margin:0;background:#0a0c0f;color:#e7e9ed;font:16px system-ui,sans-serif;min-height:100vh;display:grid;place-items:center;padding:24px}.panel{width:min(100%,520px);background:#101419;border:1px solid #292f37;border-radius:18px;padding:28px}h1{letter-spacing:.16em;font-size:18px}p{color:#9aa3ae;line-height:1.6}.status{color:#79b98b;font-weight:700;font-size:12px;letter-spacing:.12em}.device{padding:14px;background:#15191e;border-radius:10px;margin-top:18px}.small{font-size:12px;color:#858d98}</style></head>
-<body><main class="panel"><div class="status">● PHONE SERVER ONLINE</div><h1>SCINET</h1><p>This phone is running a SciNET peer node on your local network.</p><div class="device"><strong id="name">SciNET phone</strong><p class="small" id="identity">Loading device information…</p><p class="small" id="peers"></p></div><p class="small">To connect another Android device, install SciNET and use <b>SCAN PC QR CODE</b> to scan the QR shown on this phone. Browser access currently provides device status only.</p></main>
-<script>fetch('/api/peer/info').then(r=>r.json()).then(d=>{document.getElementById('name').textContent=d.deviceName||'SciNET phone';document.getElementById('identity').textContent='Device ID: '+d.deviceId;document.getElementById('peers').textContent='Connected SciNET peers: '+(d.peers||[]).filter(p=>p.connected).length}).catch(()=>{document.getElementById('identity').textContent='Could not load device information'})</script></body></html>"""
-                        call.respondText(html, io.ktor.http.ContentType.Text.Html)
-                    }
+                    AndroidWebInterface(this@PeerNetworkService).install(this)
                     get("/health") {
                         call.respondText(
                             JSONObject()
