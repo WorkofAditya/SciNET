@@ -58,7 +58,7 @@ private data class FileTransferProgress(
 )
 
 @Composable
-internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
+internal fun FilesScreen(host: String, peerTarget: JSONObject? = null, onMessage: (String, Boolean) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var folder by remember { mutableStateOf("") }
@@ -77,6 +77,10 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
     var editorOpen by remember { mutableStateOf(false) }
     var pendingDownload by remember { mutableStateOf("") }
     var transferProgress by remember { mutableStateOf<FileTransferProgress?>(null) }
+    val peerId = peerTarget?.optString("id").orEmpty()
+    val peerKey = remember(peerId) {
+        if (peerId.isBlank()) "" else context.getSharedPreferences("scinet-trust", Context.MODE_PRIVATE).getString(peerId, "").orEmpty()
+    }
     val transferFraction = transferProgress?.totalBytes?.takeIf { it > 0L }?.let { total ->
         (transferProgress!!.transferredBytes.toFloat() / total.toFloat()).coerceIn(0f, 1f)
     } ?: 0f
@@ -88,8 +92,15 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
     suspend fun reload(path: String = folder) {
         loading = true
         try {
-            val result = SciNETApi.get(host, "/api/files?path=" + SciNETApi.encode(path))
-            items = result.optJSONArray("files").objects()
+            if (peerTarget != null) {
+                items = PeerNetworkState.incomingTransfers.values
+                    .filter { it.optString("senderId") == peerId }
+                    .sortedByDescending { it.optLong("receivedAt") }
+                    .map { JSONObject(it.toString()).put("path", it.optString("id")).put("type", "peer-transfer") }
+            } else {
+                val result = SciNETApi.get(host, "/api/files?path=" + SciNETApi.encode(path))
+                items = result.optJSONArray("files").objects()
+            }
         } catch (e: Exception) {
             onMessage(e.message ?: "Could not load files.", true)
         } finally { loading = false }
@@ -102,16 +113,39 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                 uris.forEachIndexed { index, uri ->
                     val name = displayName(context, uri)
                     try {
-                        SciNETApi.upload(context, host, uri, name, folder) { transferred, total ->
-                            withContext(Dispatchers.Main.immediate) {
-                                transferProgress = FileTransferProgress(
-                                    direction = "UPLOADING",
-                                    fileName = name,
-                                    transferredBytes = transferred,
-                                    totalBytes = total,
-                                    fileIndex = index + 1,
-                                    fileCount = uris.size
-                                )
+                        if (peerTarget != null) {
+                            require(peerKey.isNotBlank()) { "Pair with this device before sending files." }
+                            SciNETApi.uploadToPeer(
+                                context = context,
+                                host = "http://" + peerTarget.optString("host") + ":" + peerTarget.optInt("port", 8765),
+                                senderId = PeerNetworkState.localDeviceId,
+                                peerKey = peerKey,
+                                uri = uri,
+                                fileName = name
+                            ) { transferred, total ->
+                                withContext(Dispatchers.Main.immediate) {
+                                    transferProgress = FileTransferProgress(
+                                        direction = "SENDING",
+                                        fileName = name,
+                                        transferredBytes = transferred,
+                                        totalBytes = total,
+                                        fileIndex = index + 1,
+                                        fileCount = uris.size
+                                    )
+                                }
+                            }
+                        } else {
+                            SciNETApi.upload(context, host, uri, name, folder) { transferred, total ->
+                                withContext(Dispatchers.Main.immediate) {
+                                    transferProgress = FileTransferProgress(
+                                        direction = "UPLOADING",
+                                        fileName = name,
+                                        transferredBytes = transferred,
+                                        totalBytes = total,
+                                        fileIndex = index + 1,
+                                        fileCount = uris.size
+                                    )
+                                }
                             }
                         }
                         count++
@@ -120,7 +154,7 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                     }
                 }
                 if (count > 0) {
-                    onMessage("Uploaded " + count + " file(s).", false)
+                    onMessage(if (peerTarget != null) "Sent " + count + " file(s) to " + peerTarget.optString("name", "device") + "." else "Uploaded " + count + " file(s).", false)
                     reload()
                 }
             } finally {
@@ -133,17 +167,52 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
         if (uri != null && path.isNotBlank()) scope.launch {
             val name = path.substringAfterLast('/').ifBlank { "download" }
             try {
-                SciNETApi.downloadTo(context, host, path, uri) { transferred, total ->
-                    withContext(Dispatchers.Main.immediate) {
-                        transferProgress = FileTransferProgress(
-                            direction = "DOWNLOADING",
-                            fileName = name,
-                            transferredBytes = transferred,
-                            totalBytes = total
-                        )
+                if (peerTarget != null) {
+                    val item = PeerNetworkState.incomingTransfers[path]
+                        ?: throw IllegalStateException("This incoming transfer is no longer available.")
+                    val stagedFile = java.io.File(java.io.File(context.filesDir, "peer-inbox"), path)
+                    if (!stagedFile.isFile) throw IllegalStateException("The incoming file is missing.")
+                    val total = stagedFile.length()
+                    var copied = 0L
+                    withContext(Dispatchers.IO) {
+                        val output = context.contentResolver.openOutputStream(uri)
+                            ?: throw IllegalStateException("Android could not create the destination file.")
+                        java.io.FileInputStream(stagedFile).use { input ->
+                            output.use { sink ->
+                                val buffer = ByteArray(64 * 1024)
+                                while (true) {
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    sink.write(buffer, 0, count)
+                                    copied += count
+                                    withContext(Dispatchers.Main.immediate) {
+                                        transferProgress = FileTransferProgress(
+                                            direction = "DOWNLOADING",
+                                            fileName = name,
+                                            transferredBytes = copied,
+                                            totalBytes = total
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
+                    PeerNetworkState.removeIncoming(context, path)
+                    onMessage("Downloaded " + item.optString("name") + " to your chosen location.", false)
+                    reload()
+                } else {
+                    SciNETApi.downloadTo(context, host, path, uri) { transferred, total ->
+                        withContext(Dispatchers.Main.immediate) {
+                            transferProgress = FileTransferProgress(
+                                direction = "DOWNLOADING",
+                                fileName = name,
+                                transferredBytes = transferred,
+                                totalBytes = total
+                            )
+                        }
+                    }
+                    onMessage("Download saved.", false)
                 }
-                onMessage("Download saved.", false)
             } catch (e: Exception) {
                 onMessage(e.message ?: "Download failed.", true)
             } finally {
@@ -155,21 +224,45 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
         }
     }
 
-    LaunchedEffect(host, folder) { reload(folder) }
+    LaunchedEffect(host, folder, peerId) {
+        folder = ""
+        reload("")
+    }
+    LaunchedEffect(peerId) {
+        if (peerId.isNotBlank()) {
+            while (true) {
+                items = PeerNetworkState.incomingTransfers.values
+                    .filter { it.optString("senderId") == peerId }
+                    .sortedByDescending { it.optLong("receivedAt") }
+                    .map { JSONObject(it.toString()).put("path", it.optString("id")).put("type", "peer-transfer") }
+                delay(1000)
+            }
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PageHeading("STORAGE", "File manager", "Browse and manage files stored on the SciNET PC.")
+        PageHeading(
+            "STORAGE",
+            "File manager",
+            if (peerTarget != null) "Send files directly to " + peerTarget.optString("name", "this device") + " and download files received from it."
+            else if (host == "http://127.0.0.1:8765") "Browse files stored on this phone's SciNET web storage."
+            else "Browse and manage files stored on the SciNET PC."
+        )
         PanelCard {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("SHARED STORAGE", color = Muted, fontSize = 9.sp, letterSpacing = 1.4.sp, fontWeight = FontWeight.Bold)
-                    Text(if (folder.isBlank()) "All files" else folder, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text(if (peerTarget != null) "DIRECT TRANSFER" else "SHARED STORAGE", color = Muted, fontSize = 9.sp, letterSpacing = 1.4.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (peerTarget != null) "Incoming from " + peerTarget.optString("name", "device")
+                        else if (folder.isBlank()) "All files" else folder,
+                        fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
+                    )
                 }
                 IconButton(onClick = { scope.launch { reload() } }, enabled = !loading) {
                     Text("↻", fontSize = 20.sp, color = Accent)
                 }
             }
-            if (folder.isNotBlank()) {
+            if (peerTarget == null && folder.isNotBlank()) {
                 TextButton(onClick = { folder = folder.substringBeforeLast('/', "") }, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)) {
                     Text("←  UP ONE LEVEL", color = Accent, fontSize = 9.sp, letterSpacing = .8.sp)
                 }
@@ -181,26 +274,32 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                     colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Bg),
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp)
-                ) { Text("↑  UPLOAD FILES", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
-                OutlinedButton(
-                    onClick = { newFolderName = ""; showNewFolder = true },
-                    modifier = Modifier.weight(1f).height(44.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp)
-                ) { Text("+  NEW FOLDER", fontSize = 10.sp) }
+                ) { Text(if (peerTarget != null) "↑  SEND FILES" else "↑  UPLOAD FILES", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                if (peerTarget == null) {
+                    OutlinedButton(
+                        onClick = { newFolderName = ""; showNewFolder = true },
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) { Text("+  NEW FOLDER", fontSize = 10.sp) }
+                }
             }
             OutlinedTextField(
                 value = search,
                 onValueChange = { search = it },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                placeholder = { Text("Search files and folders…") },
+                placeholder = { Text(if (peerTarget != null) "Search incoming transfers…" else "Search files and folders…") },
                 colors = fieldColors()
             )
             val visibleItems = items.filter { it.optString("name").contains(search.trim(), ignoreCase = true) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(if (loading) "SYNCING STORAGE…" else visibleItems.size.toString() + " ITEMS", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                Text(
+                    if (loading) "SYNCING STORAGE…"
+                    else visibleItems.size.toString() + if (peerTarget != null) " INCOMING" else " ITEMS",
+                    color = Muted, fontSize = 9.sp, letterSpacing = 1.sp
+                )
                 if (search.isNotBlank()) Text("FILTERED", color = Accent, fontSize = 8.sp, letterSpacing = 1.sp)
             }
         }
@@ -266,12 +365,23 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
         if (loading && items.isEmpty()) {
             PanelCard { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Accent, strokeWidth = 2.dp)
-                Text("Loading shared storage…", color = Muted, fontSize = 11.sp)
+                Text(if (peerTarget != null) "Loading incoming transfers…" else "Loading shared storage…", color = Muted, fontSize = 11.sp)
             } }
         } else if (visibleItems.isEmpty()) {
             PanelCard {
-                Text(if (search.isBlank()) "This folder is empty" else "No matching files", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(if (search.isBlank()) "Upload files or create a folder to get started." else "Try a different search term.", color = Muted, fontSize = 11.sp)
+                Text(
+                    if (search.isBlank()) {
+                        if (peerTarget != null) "No incoming files from this device" else "This folder is empty"
+                    } else "No matching files",
+                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    if (search.isBlank()) {
+                        if (peerTarget != null) "Files sent by this device will appear here. Use SEND FILES to transfer in the other direction."
+                        else "Upload files or create a folder to get started."
+                    } else "Try a different search term.",
+                    color = Muted, fontSize = 11.sp
+                )
             }
         } else {
             visibleItems.chunked(2).forEach { rowItems ->
@@ -281,6 +391,7 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                             val name = item.optString("name")
                             val path = item.optString("path")
                             val isFolder = item.optString("type") == "folder"
+                            val isIncomingPeerFile = item.optString("type") == "peer-transfer"
                             var menuExpanded by remember(path) { mutableStateOf(false) }
                             Column(
                                 Modifier.fillMaxWidth()
@@ -295,7 +406,13 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(7.dp)
                                 ) {
-                                    FileThumbnail(host, path, name, isFolder, Modifier.size(48.dp))
+                                    if (isIncomingPeerFile) {
+                                        Box(Modifier.size(48.dp).background(Raised, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                                            Text("FILE", color = Accent, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else {
+                                        FileThumbnail(host, path, name, isFolder, Modifier.size(48.dp))
+                                    }
                                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                         Text(name, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, lineHeight = 13.sp, softWrap = true)
                                         Text(
@@ -308,25 +425,35 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                                             Text("⋮", color = Muted, fontSize = 19.sp)
                                         }
                                         DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                                            DropdownMenuItem(
-                                                text = { Text("Rename") },
-                                                onClick = { menuExpanded = false; renameItem = item; renameName = name }
-                                            )
-                                            if (!isFolder) DropdownMenuItem(
-                                                text = { Text("Download") },
-                                                onClick = { menuExpanded = false; pendingDownload = path; downloadLauncher.launch(name) }
-                                            )
-                                            DropdownMenuItem(
-                                                text = { Text("Delete", color = Bad) },
-                                                onClick = { menuExpanded = false; deleteItem = item }
-                                            )
+                                            if (isIncomingPeerFile) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Download") },
+                                                    onClick = { menuExpanded = false; pendingDownload = path; downloadLauncher.launch(name) }
+                                                )
+                                            } else {
+                                                DropdownMenuItem(
+                                                    text = { Text("Rename") },
+                                                    onClick = { menuExpanded = false; renameItem = item; renameName = name }
+                                                )
+                                                if (!isFolder) DropdownMenuItem(
+                                                    text = { Text("Download") },
+                                                    onClick = { menuExpanded = false; pendingDownload = path; downloadLauncher.launch(name) }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Delete", color = Bad) },
+                                                    onClick = { menuExpanded = false; deleteItem = item }
+                                                )
+                                            }
                                         }
                                     }
                                 }
                                 Spacer(Modifier.weight(1f))
                                 Button(
                                     onClick = {
-                                        if (isFolder) {
+                                        if (isIncomingPeerFile) {
+                                            pendingDownload = path
+                                            downloadLauncher.launch(name)
+                                        } else if (isFolder) {
                                             folder = path
                                         } else if (isEditableText(name)) {
                                             scope.launch {
@@ -357,7 +484,7 @@ internal fun FilesScreen(host: String, onMessage: (String, Boolean) -> Unit) {
                                     contentPadding = PaddingValues(horizontal = 3.dp)
                                 ) {
                                     Text(
-                                        if (isFolder) "OPEN" else if (isEditableText(name)) "EDIT" else "PREVIEW",
+                                        if (isIncomingPeerFile) "DOWNLOAD" else if (isFolder) "OPEN" else if (isEditableText(name)) "EDIT" else "PREVIEW",
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         maxLines = 1
