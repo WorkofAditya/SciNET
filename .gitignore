@@ -12,3 +12,5 @@ shared_files/*
 local.properties
 .idea/
 *.iml
+device_identity.json
+device_identity.tmp
