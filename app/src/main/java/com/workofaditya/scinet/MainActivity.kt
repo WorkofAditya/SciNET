@@ -355,7 +355,7 @@ private fun SciNETApp() {
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink)
                         ) {
-                            Text("▣  SCAN PC QR CODE", fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp)
+                            Text("▣  SCAN DEVICE QR CODE", fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp)
                         }
                     }
                     PanelCard {
