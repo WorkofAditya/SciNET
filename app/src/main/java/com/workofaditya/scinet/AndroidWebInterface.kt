@@ -13,7 +13,7 @@ import io.ktor.http.ContentDisposition
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
-import io.ktor.http.content.PartData
+import io.ktor.http.content.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -134,7 +134,8 @@ internal class AndroidWebInterface(private val context: Context) {
         webSocket("/ws/clipboard") {
             clipboardClients.add(this)
             try {
-                synchronized(clipboardLock) { send(Frame.Text(clipboard.toString())) }
+                val initialClipboard = synchronized(clipboardLock) { clipboard.toString() }
+                send(Frame.Text(initialClipboard))
                 for (frame in incoming) {
                     if (frame !is Frame.Text) continue
                     val data = runCatching { JSONObject(frame.readText()) }.getOrNull() ?: continue
