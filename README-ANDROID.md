@@ -15,8 +15,9 @@ SciNET for Android is a native Kotlin + Jetpack Compose application. It is also 
 - Android advertises `_scinet._tcp.local.` on port `8765`; the Windows server advertises the same service type on port `8000`.
 - Both platforms use a persistent device ID and protocol version `1`.
 - Devices discover one another through mDNS/NSD. For each device pair, the lexicographically smaller device ID initiates the control WebSocket, avoiding duplicate sessions.
-- The `/ws/peer` channel currently performs a versioned hello/welcome handshake and heartbeat exchange. It does not execute remote commands or carry file payloads.
-- Android exposes `/health` and `/api/peer/info` on its embedded server. Windows exposes `/api/peer/info` and `/ws/peer` on its existing server.
+- The `/ws/peer` channel performs a versioned hello/welcome handshake and heartbeat exchange. It is the presence/control path, not a file-payload channel.
+- Phone QR pairing uses a one-time five-minute token and establishes a per-peer trust key. Presence alone does not authorize file uploads.
+- Android exposes `/health`, `/api/peer/info`, `/api/pair/claim`, and the authenticated `/api/peer/transfers` streaming receiver. Windows exposes `/api/peer/info` and `/ws/peer` on its existing server.
 
 ## Existing Android features
 
@@ -34,10 +35,8 @@ The existing PC server remains independently usable. It continues to host its cu
 SciNET is being developed around three separate paths:
 
 1. **Control:** persistent bidirectional WebSocket for peer identity, liveness, events, command coordination, and screen-session signaling.
-2. **Data:** direct HTTP streaming between peer servers for files, with resumable chunks, integrity verification, progress, and cancellation. File payloads must not be sent through the control socket.
-3. **Screen:** WebRTC media transport for low-latency screen/audio streaming. Remote input will use the platform-specific control mechanisms supported by each device.
-
-The current branch implements the discovery and control-channel presence foundation. Direct peer file transfer, authenticated pairing, screen-session negotiation, Android screen capture, and cross-platform remote input are subsequent implementation steps. The existing Windows-to-Android viewer is not being represented as full bidirectional mirroring.
+2. **Data:** direct HTTP streaming between peer servers. Android-to-Android file sending, a private incoming queue, receiver-selected downloads, and per-peer authorization are implemented. Resume, cancellation, checksums, and Windows peer-to-peer file transfer remain future work. File payloads never travel through the control socket.
+3. **Screen:** WebRTC media transport for low-latency screen/audio streaming. Peer-to-peer screen-session negotiation, Android screen capture, and cross-platform remote input remain future work. The existing Windows-to-Android viewer is not being represented as full bidirectional mirroring.
 
 ## Network and security notes
 
