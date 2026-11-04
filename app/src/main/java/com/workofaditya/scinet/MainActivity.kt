@@ -68,6 +68,17 @@ private fun SciNETApp() {
     val prefs = remember { context.getSharedPreferences("scinet-native", Context.MODE_PRIVATE) }
     var host by remember { mutableStateOf(prefs.getString("host", "") ?: "") }
     var connected by remember { mutableStateOf(false) }
+    var peerNodeReady by remember { mutableStateOf(PeerNetworkState.serverRunning) }
+    var peerDevices by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            peerNodeReady = PeerNetworkState.serverRunning
+            peerDevices = PeerNetworkState.peers.values
+                .map { JSONObject(it.toString()) }
+                .sortedBy { it.optString("name").lowercase() }
+            delay(1000)
+        }
+    }
     var busy by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf("HOME") }
     var screenFullscreen by remember { mutableStateOf(false) }
@@ -199,6 +210,27 @@ private fun SciNETApp() {
                     Text("LOCAL NETWORK / 01", color = Accent, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
                     Text("Your PC.\nIn your hands.", fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
                     Text("Your phone is a SciNET node. Its own peer server starts automatically and discovers nearby devices.", color = Muted, fontSize = 14.sp)
+                    PanelCard {
+                        SectionHeading("PEER NETWORK", if (peerNodeReady) "This phone is online" else "Starting local node")
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(Modifier.size(8.dp).background(if (peerNodeReady) Good else Muted, RoundedCornerShape(50)))
+                            Text(if (peerNodeReady) "SERVER ACTIVE · PORT 8765" else "SERVER STARTING", color = if (peerNodeReady) Good else Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Text("Nearby SciNET devices: ${peerDevices.size}", color = Muted, fontSize = 11.sp)
+                        if (peerDevices.isEmpty()) {
+                            Text("No peers detected yet. This phone keeps advertising itself while your PC is offline.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+                        } else {
+                            peerDevices.forEach { peer ->
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text(peer.optString("name", "SciNET device"), color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                        Text(peer.optString("platform", "device").uppercase(), color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
+                                    }
+                                    Text("CONNECTED", color = Good, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
                     PanelCard {
                         SectionHeading("HOST CONNECTION", "Connect to your PC")
                         OutlinedTextField(value = host, onValueChange = { host = it }, modifier = Modifier.fillMaxWidth(), label = { Text("PC address") }, placeholder = { Text("http://192.168.1.25:8000") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = fieldColors())
