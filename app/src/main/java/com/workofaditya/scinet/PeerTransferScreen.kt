@@ -66,7 +66,7 @@ internal fun PeerTransferScreen(
                     SciNETApi.uploadToPeer(
                         context = context,
                         host = "http://$peerHost:$peerPort",
-                        peerId = peerId,
+                        senderId = PeerNetworkState.localDeviceId,
                         peerKey = peerKey,
                         uri = uri,
                         fileName = fileName
@@ -173,7 +173,7 @@ internal fun PeerTransferScreen(
                 }
                 Text(current.fileName, color = Ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 LinearProgressIndicator(
-                    progress = { percent?.div(100f) ?: 0f },
+                    progress = percent?.div(100f) ?: 0f,
                     modifier = Modifier.fillMaxWidth().height(6.dp),
                     color = Accent,
                     trackColor = Edge
