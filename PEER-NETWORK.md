@@ -111,7 +111,7 @@ The Android home screen displays a QR code for the phone's current private IPv4 
 
 - Scan with SciNET on another Android phone to establish trust and connect the two peers.
 - The token is one-time and expires after five minutes; the displayed QR refreshes as tokens expire or are consumed.
-- Ordinary camera/browser scanning opens the phone's HTTP landing page on port 8765. Browser access is still a status portal, not the full remote-control or file-management interface.
+- Ordinary camera/browser scanning opens the phone's existing SciNET web dashboard on port 8765. The Android server packages and serves the same `legacy-web` HTML, CSS, JavaScript, and PWA assets used by the PC host.
 
 ## Android-to-Android file transfer
 
