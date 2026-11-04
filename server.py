@@ -119,6 +119,7 @@ def _peer_hello():
         "deviceId": DEVICE_ID,
         "deviceName": DEVICE_NAME,
         "platform": "windows",
+        "port": PEER_PORT,
         "capabilities": ["control-v1", "http-stream-v1", "webrtc-v1"],
     }
 
@@ -1676,7 +1677,7 @@ async def peer_control_socket(websocket: WebSocket):
         "name": str(hello.get("deviceName") or "SciNET device")[:80],
         "platform": str(hello.get("platform") or "unknown")[:24],
         "ip": client.host,
-        "port": client.port or 0,
+        "port": int(hello.get("port") or (8765 if str(hello.get("platform", "")).lower() == "android" else PEER_PORT)),
         "transport": "websocket",
     }
     _set_peer_presence(peer_id, peer_payload, True, connection_id)
