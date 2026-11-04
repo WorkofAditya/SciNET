@@ -115,24 +115,29 @@ internal fun FilesScreen(host: String, peerTarget: JSONObject? = null, onMessage
                     try {
                         if (peerTarget != null) {
                             require(peerKey.isNotBlank()) { "Pair with this device before sending files." }
-                            SciNETApi.uploadToPeer(
-                                context = context,
-                                host = "http://" + peerTarget.optString("host") + ":" + peerTarget.optInt("port", 8765),
-                                senderId = PeerNetworkState.localDeviceId,
-                                peerKey = peerKey,
-                                uri = uri,
-                                fileName = name
-                            ) { transferred, total ->
-                                withContext(Dispatchers.Main.immediate) {
-                                    transferProgress = FileTransferProgress(
-                                        direction = "SENDING",
-                                        fileName = name,
-                                        transferredBytes = transferred,
-                                        totalBytes = total,
-                                        fileIndex = index + 1,
-                                        fileCount = uris.size
-                                    )
+                            PeerNetworkState.activeTransfers.add(peerId)
+                            try {
+                                SciNETApi.uploadToPeer(
+                                    context = context,
+                                    host = "http://" + peerTarget.optString("host") + ":" + peerTarget.optInt("port", 8765),
+                                    senderId = PeerNetworkState.localDeviceId,
+                                    peerKey = peerKey,
+                                    uri = uri,
+                                    fileName = name
+                                ) { transferred, total ->
+                                    withContext(Dispatchers.Main.immediate) {
+                                        transferProgress = FileTransferProgress(
+                                            direction = "SENDING",
+                                            fileName = name,
+                                            transferredBytes = transferred,
+                                            totalBytes = total,
+                                            fileIndex = index + 1,
+                                            fileCount = uris.size
+                                        )
+                                    }
                                 }
+                            } finally {
+                                PeerNetworkState.activeTransfers.remove(peerId)
                             }
                         } else {
                             SciNETApi.upload(context, host, uri, name, folder) { transferred, total ->
