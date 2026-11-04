@@ -307,7 +307,7 @@ private fun SciNETApp() {
                     Box(Modifier.size(36.dp).background(Raised, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) { Text("S", fontSize = 20.sp, fontWeight = FontWeight.Black) }
                     Column {
                         Text("SCINET", fontSize = 13.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
-                        Text("ANDROID / DEVICE LINK", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                        Text("MESH NETWORK NODE", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -316,8 +316,7 @@ private fun SciNETApp() {
                     Text(if (connected) "ONLINE" else "RETRYING", color = Muted, fontSize = 9.sp)
                     TextButton(onClick = { targetMenuExpanded = true }) {
                         Text(
-                            activePeer?.optString("name")?.takeIf { it.isNotBlank() }
-                                ?: if (host == localHost) "THIS PHONE" else "PC",
+                            "MESH · " + (peerDevices.count { it.optBoolean("connected") } + 1),
                             fontSize = 10.sp,
                             color = Ink
                         )
