@@ -276,9 +276,9 @@ private fun SciNETApp() {
                                 )
                             }
                             Text("Scan with SciNET to connect as a peer, or scan with any camera to open this phone's browser portal.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
-                            Text("http://$localAddress:8765", color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            Text("http://${localAddress.value}:8765", color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             TextButton(onClick = {
-                                val link = "http://$localAddress:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET"
+                                val link = "http://${localAddress.value}:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET"
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                 clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SciNET phone link", link))
                                 notify("Phone link copied")
