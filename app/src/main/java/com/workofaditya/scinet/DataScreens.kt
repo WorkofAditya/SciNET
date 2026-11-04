@@ -140,17 +140,27 @@ internal fun FilesScreen(host: String, peerTarget: JSONObject? = null, onMessage
                                 PeerNetworkState.activeTransfers.remove(peerId)
                             }
                         } else {
-                            SciNETApi.upload(context, host, uri, name, folder) { transferred, total ->
-                                withContext(Dispatchers.Main.immediate) {
-                                    transferProgress = FileTransferProgress(
-                                        direction = "UPLOADING",
-                                        fileName = name,
-                                        transferredBytes = transferred,
-                                        totalBytes = total,
-                                        fileIndex = index + 1,
-                                        fileCount = uris.size
-                                    )
+                            val destination = Uri.parse(SciNETApi.normalizeHost(host))
+                            val meshPeerId = PeerNetworkState.knownPeers.values.firstOrNull {
+                                it.optString("host") == destination.host &&
+                                    it.optInt("port", if (it.optString("platform") == "android") 8765 else 8000) == destination.port
+                            }?.optString("id").orEmpty()
+                            if (meshPeerId.isNotBlank()) PeerNetworkState.activeTransfers.add(meshPeerId)
+                            try {
+                                SciNETApi.upload(context, host, uri, name, folder) { transferred, total ->
+                                    withContext(Dispatchers.Main.immediate) {
+                                        transferProgress = FileTransferProgress(
+                                            direction = "UPLOADING",
+                                            fileName = name,
+                                            transferredBytes = transferred,
+                                            totalBytes = total,
+                                            fileIndex = index + 1,
+                                            fileCount = uris.size
+                                        )
+                                    }
                                 }
+                            } finally {
+                                if (meshPeerId.isNotBlank()) PeerNetworkState.activeTransfers.remove(meshPeerId)
                             }
                         }
                         count++
