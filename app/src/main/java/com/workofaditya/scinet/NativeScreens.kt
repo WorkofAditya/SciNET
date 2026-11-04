@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Paint
+import android.graphics.Typeface
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -23,6 +25,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -44,7 +47,7 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: String, onRefresh: () -> Unit, onRename: (String) -> Unit, onClearEvents: () -> Unit, onLogout: () -> Unit) {
+internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: String, meshTopology: JSONObject, onRefresh: () -> Unit, onRename: (String) -> Unit, onClearEvents: () -> Unit, onLogout: () -> Unit) {
     val memory = data.optJSONObject("memory") ?: JSONObject()
     val disk = data.optJSONObject("disk") ?: JSONObject()
     val network = data.optJSONObject("network") ?: JSONObject()
@@ -149,6 +152,7 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
             }
             Text("Live traffic history · sampled every second.", color = Muted, fontSize = 10.sp)
         }
+        MeshTopologyCard(meshTopology)
         PanelCard {
             SectionHeading("CONNECTION", "Scan to open SciNET")
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -220,6 +224,106 @@ internal fun DashboardScreen(data: JSONObject, events: List<JSONObject>, host: S
         dismissButton = { TextButton(onClick = { renameOpen = false }) { Text("CANCEL") } },
         containerColor = Panel
     )
+}
+
+
+@Composable
+private fun MeshTopologyCard(topology: JSONObject) {
+    val nodeArray = topology.optJSONArray("nodes") ?: org.json.JSONArray()
+    val linkArray = topology.optJSONArray("links") ?: org.json.JSONArray()
+    val nodes = (0 until nodeArray.length()).mapNotNull { nodeArray.optJSONObject(it)?.let { node -> JSONObject(node.toString()) } }
+    val links = (0 until linkArray.length()).mapNotNull { linkArray.optJSONObject(it)?.let { link -> JSONObject(link.toString()) } }
+    val selfId = topology.optString("selfId")
+
+    PanelCard {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            SectionHeading("MESH TOPOLOGY", "Every device connected to every other")
+            Text(nodes.size.toString() + " NODES", color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
+        }
+        if (nodes.isEmpty()) {
+            EmptyText("Starting local SciNET node…")
+        } else {
+            Canvas(Modifier.fillMaxWidth().height(245.dp).background(Bg, RoundedCornerShape(8.dp))) {
+                val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
+                val radius = if (nodes.size == 1) 0f else minOf(size.width * 0.34f, size.height * 0.34f)
+                val positions = nodes.mapIndexed { index, _ ->
+                    if (nodes.size == 1) center else {
+                        val angle = (-Math.PI / 2.0) + (2.0 * Math.PI * index / nodes.size)
+                        androidx.compose.ui.geometry.Offset(
+                            center.x + kotlin.math.cos(angle).toFloat() * radius,
+                            center.y + kotlin.math.sin(angle).toFloat() * radius
+                        )
+                    }
+                }
+                fun edgeFor(a: String, b: String): JSONObject? = links.firstOrNull {
+                    (it.optString("a") == a && it.optString("b") == b) ||
+                        (it.optString("a") == b && it.optString("b") == a)
+                }
+                for (i in nodes.indices) {
+                    for (j in i + 1 until nodes.size) {
+                        val edge = edgeFor(nodes[i].optString("id"), nodes[j].optString("id"))
+                        val color = when {
+                            edge?.optBoolean("transferring") == true -> Good
+                            edge?.optBoolean("connected") == true -> Color(0xFF8994A2)
+                            else -> Bad
+                        }
+                        drawLine(
+                            color = color,
+                            start = positions[i],
+                            end = positions[j],
+                            strokeWidth = if (edge?.optBoolean("transferring") == true) 3.dp.toPx() else 1.7.dp.toPx(),
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    }
+                }
+                val native = drawContext.canvas.nativeCanvas
+                val nodePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+                val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(225, 229, 235)
+                    textSize = 10.sp.toPx()
+                    textAlign = Paint.Align.CENTER
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                }
+                val subLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(133, 143, 156)
+                    textSize = 8.sp.toPx()
+                    textAlign = Paint.Align.CENTER
+                }
+                nodes.forEachIndexed { index, node ->
+                    val point = positions[index]
+                    val isSelf = node.optString("id") == selfId || node.optBoolean("self")
+                    val online = isSelf || node.optBoolean("connected")
+                    nodePaint.color = when {
+                        isSelf -> android.graphics.Color.rgb(211, 218, 227)
+                        online -> android.graphics.Color.rgb(116, 180, 136)
+                        else -> android.graphics.Color.rgb(224, 128, 121)
+                    }
+                    val nodeRadius = if (nodes.size > 9) 8.dp.toPx() else 11.dp.toPx()
+                    drawCircle(Color(nodePaint.color), radius = nodeRadius, center = point)
+                    val rawName = node.optString("name", "SciNET").ifBlank { "SciNET" }
+                    val shownName = if (rawName.length > 14) rawName.take(12) + "…" else rawName
+                    native.drawText(shownName, point.x, point.y + nodeRadius + 14.dp.toPx(), labelPaint)
+                    native.drawText(if (isSelf) "THIS DEVICE" else if (online) "ONLINE" else "OFFLINE",
+                        point.x, point.y + nodeRadius + 25.dp.toPx(), subLabelPaint)
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Box(Modifier.size(7.dp).background(Color(0xFF8994A2), RoundedCornerShape(50)))
+                    Text("CONNECTED", color = Muted, fontSize = 8.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Box(Modifier.size(7.dp).background(Good, RoundedCornerShape(50)))
+                    Text("TRANSFERRING", color = Muted, fontSize = 8.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Box(Modifier.size(7.dp).background(Bad, RoundedCornerShape(50)))
+                    Text("LOST", color = Muted, fontSize = 8.sp)
+                }
+            }
+            Text("Every pair has a direct link. Red means the peer connection is down; green means data is moving.", color = Muted, fontSize = 9.sp, lineHeight = 14.sp)
+        }
+    }
 }
 
 @Composable
