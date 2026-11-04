@@ -57,8 +57,125 @@ internal object PeerNetworkState {
     @Volatile var serverRunning: Boolean = false
     @Volatile var pairingToken: String = ""
     @Volatile var pairingTokenExpiresAt: Long = 0L
+    @Volatile var localDeviceName: String = "Android device"
     val peers = ConcurrentHashMap<String, JSONObject>()
+    val knownPeers = ConcurrentHashMap<String, JSONObject>()
+    val reportedNodes = ConcurrentHashMap<String, JSONObject>()
+    val reportedLinks = ConcurrentHashMap<String, JSONObject>()
+    val activeTransfers = ConcurrentHashMap.newKeySet<String>()
     val incomingTransfers = ConcurrentHashMap<String, JSONObject>()
+
+    private fun linkKey(a: String, b: String): String = listOf(a, b).sorted().joinToString("|")
+
+    fun mergeTopology(topology: JSONObject?) {
+        if (topology == null) return
+        val now = System.currentTimeMillis()
+        val nodes = topology.optJSONArray("nodes") ?: org.json.JSONArray()
+        for (index in 0 until nodes.length()) {
+            val node = nodes.optJSONObject(index) ?: continue
+            val id = node.optString("id")
+            if (id.isBlank() || id == localDeviceId || id.length > 64) continue
+            val incoming = JSONObject(node.toString())
+            if (!incoming.has("updatedAt")) incoming.put("updatedAt", now)
+            val old = reportedNodes[id]
+            if (old == null || incoming.optLong("updatedAt") >= old.optLong("updatedAt")) {
+                reportedNodes[id] = incoming
+            }
+        }
+        val links = topology.optJSONArray("links") ?: org.json.JSONArray()
+        for (index in 0 until links.length()) {
+            val link = links.optJSONObject(index) ?: continue
+            val a = link.optString("a")
+            val b = link.optString("b")
+            if (a.isBlank() || b.isBlank() || a == b || a.length > 64 || b.length > 64) continue
+            val incoming = JSONObject(link.toString())
+            if (!incoming.has("updatedAt")) incoming.put("updatedAt", now)
+            val key = linkKey(a, b)
+            val old = reportedLinks[key]
+            if (old == null || incoming.optLong("updatedAt") >= old.optLong("updatedAt")) {
+                reportedLinks[key] = incoming
+            }
+        }
+    }
+
+    fun topology(): JSONObject {
+        val now = System.currentTimeMillis()
+        val nodes = LinkedHashMap<String, JSONObject>()
+        nodes[localDeviceId] = JSONObject()
+            .put("id", localDeviceId)
+            .put("name", localDeviceName)
+            .put("platform", "android")
+            .put("connected", true)
+            .put("self", true)
+            .put("updatedAt", now)
+
+        for ((id, node) in reportedNodes) nodes[id] = JSONObject(node.toString())
+        for ((id, node) in knownPeers) {
+            val current = peers[id]
+            nodes[id] = JSONObject()
+                .put("id", id)
+                .put("name", current?.optString("name")?.ifBlank { node.optString("name") } ?: node.optString("name", "SciNET device"))
+                .put("platform", current?.optString("platform")?.ifBlank { node.optString("platform") } ?: node.optString("platform", "unknown"))
+                .put("connected", current?.optBoolean("connected") == true)
+                .put("self", false)
+                .put("updatedAt", current?.optLong("lastSeen")?.takeIf { it > 0L } ?: node.optLong("updatedAt", now))
+        }
+        for ((id, node) in peers) {
+            if (!nodes.containsKey(id)) nodes[id] = JSONObject(node.toString()).put("self", false)
+        }
+
+        val links = LinkedHashMap<String, JSONObject>()
+        val allPeerIds = (knownPeers.keys + peers.keys).toSet()
+        for (id in allPeerIds) {
+            if (id.isBlank() || id == localDeviceId) continue
+            val peer = peers[id]
+            val known = knownPeers[id]
+            val connected = peer?.optBoolean("connected") == true
+            val updatedAt = peer?.optLong("lastSeen")?.takeIf { it > 0L }
+                ?: known?.optLong("updatedAt")?.takeIf { it > 0L }
+                ?: now
+            links[linkKey(localDeviceId, id)] = JSONObject()
+                .put("a", localDeviceId)
+                .put("b", id)
+                .put("connected", connected)
+                .put("transferring", activeTransfers.contains(id))
+                .put("updatedAt", updatedAt)
+        }
+
+        for ((key, remote) in reportedLinks) {
+            if (links.containsKey(key)) continue
+            val updatedAt = remote.optLong("updatedAt")
+            val fresh = updatedAt > 0L && now - updatedAt <= 20000L
+            links[key] = JSONObject(remote.toString())
+                .put("connected", remote.optBoolean("connected") && fresh)
+                .put("transferring", remote.optBoolean("transferring") && fresh)
+        }
+        for (link in links.values) {
+            for (id in listOf(link.optString("a"), link.optString("b"))) {
+                if (!nodes.containsKey(id) && id.isNotBlank() && id != localDeviceId) {
+                    val known = reportedNodes[id]
+                    nodes[id] = JSONObject()
+                        .put("id", id)
+                        .put("name", known?.optString("name", "SciNET device") ?: "SciNET device")
+                        .put("platform", known?.optString("platform", "unknown") ?: "unknown")
+                        .put("connected", false)
+                        .put("self", false)
+                        .put("updatedAt", known?.optLong("updatedAt") ?: 0L)
+                }
+            }
+        }
+        for ((id, node) in nodes) {
+            if (id == localDeviceId) continue
+            node.put("connected", links.values.any {
+                (it.optString("a") == id || it.optString("b") == id) && it.optBoolean("connected")
+            })
+        }
+        return JSONObject()
+            .put("selfId", localDeviceId)
+            .put("nodes", org.json.JSONArray(nodes.values.toList()))
+            .put("links", org.json.JSONArray(links.values.toList()))
+            .put("updatedAt", now)
+    }
 
     fun rotatePairingToken() {
         val bytes = ByteArray(24)
@@ -141,8 +258,11 @@ class PeerNetworkService : Service() {
             ?: UUID.randomUUID().toString().replace("-", "").also {
                 preferences.edit().putString("device_id", it).apply()
             }
-        deviceName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android device"
+        deviceName = getSharedPreferences("scinet-web", MODE_PRIVATE)
+            .getString("device_name", Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android device")
+            ?.ifBlank { "Android device" } ?: "Android device"
         PeerNetworkState.localDeviceId = deviceId
+        PeerNetworkState.localDeviceName = deviceName
         PeerNetworkState.rotatePairingToken()
         PeerNetworkState.restoreIncoming(this)
         nsdManager = getSystemService(NsdManager::class.java)
@@ -198,6 +318,9 @@ class PeerNetworkService : Service() {
                                 .toString(),
                             io.ktor.http.ContentType.Application.Json
                         )
+                    }
+                    get("/api/peer/topology") {
+                        call.respondText(PeerNetworkState.topology().toString(), ContentType.Application.Json)
                     }
                     get("/api/peer/info") {
                         call.respondText(
@@ -307,6 +430,7 @@ class PeerNetworkService : Service() {
                         val directory = File(filesDir, "peer-inbox").apply { mkdirs() }
                         val destination = File(directory, transferId)
                         var received = 0L
+                        PeerNetworkState.activeTransfers.add(peerId)
                         try {
                             call.receiveStream().use { input ->
                                 FileOutputStream(destination).use { output ->
@@ -333,6 +457,8 @@ class PeerNetworkService : Service() {
                                 HttpStatusCode.BadRequest
                             )
                             return@post
+                        } finally {
+                            PeerNetworkState.activeTransfers.remove(peerId)
                         }
 
                         val senderName = PeerNetworkState.peers[peerId]?.optString("name")
@@ -391,6 +517,8 @@ class PeerNetworkService : Service() {
                             .put("trusted", getSharedPreferences("scinet-trust", MODE_PRIVATE).contains(remoteId))
                             .put("lastSeen", System.currentTimeMillis())
                         PeerNetworkState.peers[remoteId] = peerRecord
+                        PeerNetworkState.knownPeers[remoteId] = JSONObject(peerRecord.toString()).put("updatedAt", System.currentTimeMillis())
+                        PeerNetworkState.mergeTopology(hello?.optJSONObject("topology"))
 
                         outgoing.send(
                             Frame.Text(
@@ -401,6 +529,7 @@ class PeerNetworkService : Service() {
                                     .put("deviceName", deviceName)
                                     .put("platform", "android")
                                     .put("capabilities", org.json.JSONArray(listOf("control-v1", "http-stream-v1", "webrtc-v1")))
+                                    .put("topology", PeerNetworkState.topology())
                                     .toString()
                             )
                         )
@@ -409,14 +538,17 @@ class PeerNetworkService : Service() {
                             for (frame in incoming) {
                                 if (frame !is Frame.Text) continue
                                 val message = runCatching { JSONObject(frame.readText()) }.getOrNull() ?: continue
+                                PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
                                 if (message.optString("type") == "heartbeat") {
                                     peerRecord.put("lastSeen", System.currentTimeMillis())
+                                    PeerNetworkState.knownPeers[remoteId]?.put("updatedAt", System.currentTimeMillis())
                                     outgoing.send(
                                         Frame.Text(
                                             JSONObject()
                                                 .put("type", "heartbeat_ack")
                                                 .put("deviceId", deviceId)
                                                 .put("sentAt", message.optLong("sentAt"))
+                                                .put("topology", PeerNetworkState.topology())
                                                 .toString()
                                         )
                                     )
@@ -424,6 +556,7 @@ class PeerNetworkService : Service() {
                             }
                         } finally {
                             PeerNetworkState.peers.remove(remoteId, peerRecord)
+                            PeerNetworkState.knownPeers[remoteId]?.put("connected", false)?.put("updatedAt", System.currentTimeMillis())
                         }
                     }
                 }
@@ -484,6 +617,10 @@ class PeerNetworkService : Service() {
                                 port = info.port
                             )
                             endpoints[id] = endpoint
+                            PeerNetworkState.knownPeers[id] = JSONObject()
+                                .put("id", id).put("name", endpoint.name).put("platform", endpoint.platform)
+                                .put("host", host).put("port", endpoint.port).put("connected", PeerNetworkState.peers[id]?.optBoolean("connected") == true)
+                                .put("updatedAt", System.currentTimeMillis())
                             startPeerConnection(endpoint)
                         }
                     })
@@ -497,6 +634,7 @@ class PeerNetworkService : Service() {
                     val peerId = endpoints.keys.firstOrNull { it.startsWith(id, ignoreCase = true) }
                     if (peerId != null) {
                         endpoints.remove(peerId)
+                        PeerNetworkState.knownPeers[peerId]?.put("connected", false)?.put("updatedAt", System.currentTimeMillis())
                         sockets[peerId]?.cancel()
                     }
                 }
@@ -541,6 +679,7 @@ class PeerNetworkService : Service() {
                                 .put("platform", "android")
                                 .put("port", PEER_PORT)
                                 .put("capabilities", org.json.JSONArray(listOf("control-v1", "http-stream-v1", "webrtc-v1")))
+                                .put("topology", PeerNetworkState.topology())
                                 .toString()
                         )
                     }
@@ -564,6 +703,7 @@ class PeerNetworkService : Service() {
                                     .put("connected", true)
                                     .put("trusted", getSharedPreferences("scinet-trust", MODE_PRIVATE).contains(peer.id))
                                     .put("lastSeen", System.currentTimeMillis())
+                                PeerNetworkState.knownPeers[peer.id] = JSONObject(PeerNetworkState.peers[peer.id].toString()).put("updatedAt", System.currentTimeMillis())
                                 opened.complete(true)
                             }
                             "heartbeat" -> webSocket.send(
@@ -580,12 +720,14 @@ class PeerNetworkService : Service() {
                         opened.complete(false)
                         closed.complete(Unit)
                         PeerNetworkState.peers.remove(peer.id)
+                        PeerNetworkState.knownPeers[peer.id]?.put("connected", false)?.put("updatedAt", System.currentTimeMillis())
                     }
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                         opened.complete(false)
                         closed.complete(Unit)
                         PeerNetworkState.peers.remove(peer.id)
+                        PeerNetworkState.knownPeers[peer.id]?.put("connected", false)?.put("updatedAt", System.currentTimeMillis())
                     }
                 })
                 sockets[peer.id] = socket
