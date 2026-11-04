@@ -142,13 +142,13 @@ internal object SciNETApi {
     suspend fun uploadToPeer(
         context: Context,
         host: String,
-        peerId: String,
+        senderId: String,
         peerKey: String,
         uri: Uri,
         fileName: String,
         onProgress: suspend (Long, Long?) -> Unit = { _, _ -> }
     ) = withContext(Dispatchers.IO) {
-        require(peerId.isNotBlank() && peerKey.isNotBlank()) { "Pair with this device before sending files." }
+        require(senderId.isNotBlank() && peerKey.isNotBlank()) { "Pair with this device before sending files." }
         val totalBytes = runCatching {
             context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0).takeIf { it >= 0L } else null
@@ -162,7 +162,7 @@ internal object SciNETApi {
             setChunkedStreamingMode(64 * 1024)
             setRequestProperty("Content-Type", "application/octet-stream")
             setRequestProperty("User-Agent", "SciNET Android/0.1")
-            setRequestProperty("X-SciNET-Peer-ID", peerId)
+            setRequestProperty("X-SciNET-Peer-ID", senderId)
             setRequestProperty("X-SciNET-File-Name", encode(fileName))
             totalBytes?.let { setRequestProperty("X-SciNET-File-Size", it.toString()) }
             setRequestProperty("Authorization", "Bearer " + peerKey)
