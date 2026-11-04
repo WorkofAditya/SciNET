@@ -440,32 +440,6 @@ private fun SciNETApp() {
                     }
                 }
             }
-            if (showPcDialog) AlertDialog(
-                onDismissRequest = { showPcDialog = false },
-                title = { Text("Connect to SciNET PC") },
-                text = {
-                    OutlinedTextField(
-                        value = pcAddress,
-                        onValueChange = { pcAddress = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("PC address") },
-                        placeholder = { Text("http://192.168.1.25:8000") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        colors = fieldColors()
-                    )
-                },
-                confirmButton = {
-                    TextButton(enabled = !busy && pcAddress.isNotBlank(), onClick = {
-                        showPcDialog = false
-                        connect(pcAddress)
-                    }) { Text(if (busy) "CONNECTING…" else "CONNECT", color = Accent) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showPcDialog = false }) { Text("CANCEL") }
-                },
-                containerColor = Panel
-            )
         }
     }
 }
