@@ -435,15 +435,27 @@ def system_info():
     unique = {}
     for device in clients:
         ip = device.get("ip", "unknown")
-        if ip not in unique or device.get("type") == "Web": unique[ip] = device
+        if ip not in unique or device.get("type") == "Web":
+            unique[ip] = device
+    with peer_lock:
+        peer_snapshot = [dict(peer) for peer in peer_devices.values()]
     host = {"id": "host", "ip": local_ip(), "port": 8000, "type": "Host", "agent": socket.gethostname(), "connected": started_at}
+    for peer in peer_snapshot:
+        if not peer.get("connected") or not peer.get("ip") or peer.get("ip") == host["ip"]:
+            continue
+        unique[peer["ip"]] = {
+            "id": peer["id"],
+            "ip": peer["ip"],
+            "port": peer.get("port", 0),
+            "type": str(peer.get("platform") or "Peer").title(),
+            "agent": peer.get("name") or "SciNET peer",
+            "connected": peer.get("connected_at") or started_at,
+        }
     devices = [host] + [d for d in unique.values() if d.get("ip") != host["ip"]]
     with device_names_lock:
         for device in devices:
             device["name"] = device_names.get(device.get("id"), device.get("agent") or device.get("type") or "Device")
     with uploads_lock: active_uploads = [dict(item) for item in uploads.values() if item["status"] in {"uploading", "paused"}]
-    with peer_lock:
-        peer_snapshot = [dict(peer) for peer in peer_devices.values()]
     return {"hostname": socket.gethostname(), "cpu": psutil.cpu_percent(interval=None), "memory": {"percent": memory.percent, "used": memory.used, "total": memory.total}, "disk": {"percent": disk.percent, "used": disk.used, "total": disk.total}, "network": {"sent": net.bytes_sent, "received": net.bytes_recv}, "uptime": int(time.time() - started_at), "devices": devices, "device_count": len(devices), "uploads": active_uploads, "peer_network": {"device_id": DEVICE_ID, "device_name": DEVICE_NAME, "protocol_version": PEER_PROTOCOL_VERSION, "peers": peer_snapshot}}
 
 
