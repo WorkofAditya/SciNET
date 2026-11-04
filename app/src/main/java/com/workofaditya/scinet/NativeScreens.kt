@@ -263,7 +263,7 @@ private fun MeshTopologyCard(topology: JSONObject) {
                     for (j in i + 1 until nodes.size) {
                         val edge = edgeFor(nodes[i].optString("id"), nodes[j].optString("id"))
                         val color = when {
-                            edge?.optBoolean("connected") == true && edge.optBoolean("transferring") -> Good
+                            edge?.optBoolean("connected") == true && edge?.optBoolean("transferring") == true -> Good
                             edge?.optBoolean("connected") == true -> Color(0xFF8994A2)
                             else -> Bad
                         }
