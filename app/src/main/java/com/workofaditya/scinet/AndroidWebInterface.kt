@@ -65,7 +65,12 @@ internal class AndroidWebInterface(private val context: Context) {
             call.respondText(rendered, ContentType.Text.Html)
         }
         get("/control") { call.respondText(asset("control.html"), ContentType.Text.Html) }
-        get("/files") { call.respondText(asset("files.html").replace("Shared files", "Phone storage"), ContentType.Text.Html) }
+        get("/files") {
+            val page = asset("files.html")
+                .replace("files stored on this SciNET PC", "files stored on this SciNET phone")
+                .replace("Shared files", "Phone storage")
+            call.respondText(page, ContentType.Text.Html)
+        }
         get("/manifest.webmanifest") { call.respondText(asset("manifest.webmanifest"), ContentType.parse("application/manifest+json")) }
         get("/sw.js") { call.respondText(asset("sw.js"), ContentType.Application.JavaScript) }
         get("/static/{file}") {
