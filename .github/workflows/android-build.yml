@@ -23,6 +23,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Check Python server syntax
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python server
+        run: python -m py_compile server.py
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
