@@ -1,41 +1,50 @@
-# SciNET Android client
+# SciNET Android peer node
 
-SciNET's Android client is a native Kotlin + Jetpack Compose application. It does not load the website in a WebView. The Python server, shared storage, Windows input injection, process enumeration, FTP service, and desktop capture remain on the Windows PC.
+SciNET for Android is a native Kotlin + Jetpack Compose application. It is also a first-class network node: when the app launches, it starts an embedded HTTP/WebSocket server in a foreground service, advertises the device over local-network mDNS, and discovers other SciNET nodes.
 
 ## Open in Android Studio
 
 1. Open this repository as a Gradle project.
 2. Use JDK 17 and install Android SDK 36 if Android Studio prompts for it.
-3. Let Gradle sync. The first sync downloads the Android Gradle Plugin, Compose dependencies, and WebRTC SDK.
-4. Select the `app` run configuration and launch it on your Android device or emulator.
+3. Let Gradle sync and download the Android and Ktor server dependencies.
+4. Select the `app` run configuration and launch it on an Android device.
 
-## Connect
+## Current peer-network foundation
 
-1. Start SciNET on the Windows PC with `start.bat`.
-2. Connect the phone and PC to the same reachable private network.
-3. Find the PC's local IPv4 address and enter `http://<PC-IP>:8000` in the app.
-4. Tap **Connect to PC** the first time. The address is saved on the phone and the app attempts to reconnect automatically on later launches. Use **Log Out / Change PC** at the end of the dashboard to clear it and choose another host.
+- The phone starts its server automatically when `MainActivity` launches. The service uses the Android `connectedDevice` foreground-service type.
+- Android advertises `_scinet._tcp.local.` on port `8765`; the Windows server advertises the same service type on port `8000`.
+- Both platforms use a persistent device ID and protocol version `1`.
+- Devices discover one another through mDNS/NSD. For each device pair, the lexicographically smaller device ID initiates the control WebSocket, avoiding duplicate sessions.
+- The `/ws/peer` channel currently performs a versioned hello/welcome handshake and heartbeat exchange. It does not execute remote commands or carry file payloads.
+- Android exposes `/health` and `/api/peer/info` on its embedded server. Windows exposes `/api/peer/info` and `/ws/peer` on its existing server.
 
-If the app cannot connect, check Windows Firewall, hotspot/client-isolation settings, and confirm that the server is listening on port 8000.
+## Existing Android features
 
-## Native modules
+- **Dashboard:** reads Windows host metrics, network traffic, connected-device information, and activity.
+- **Remote control:** touchpad, keyboard, media, volume, and power actions on the configured Windows host.
+- **Files:** browse, upload, download, rename, delete, preview, and edit files on the Windows host.
+- **Processes:** on-demand Windows process inspection and actions.
+- **Screen mirroring:** receives the existing Windows desktop stream.
+- **Game controller:** keyboard and joystick input for supported Windows games.
 
-- **Dashboard:** polls the existing system API once per second while visible and shows host metrics, a live network traffic graph, connected devices, and a compact scrollable activity log.
-- **Remote control:** touchpad, scroll-mode toggle, mouse clicks, live text input and special keys, media controls, volume, and confirmed power actions. The live shared clipboard is embedded after System Volume in this screen.
-- **Files:** browse shared folders in a thumbnail card grid, upload and download files using Android's document picker, create folders, rename/delete items, preview files externally, and edit supported UTF-8 text files up to the server's 2 MB limit.
-- **Live clipboard:** text changes sync automatically with SciNET and connected browser clients; incoming shared text updates the phone clipboard while the app is open. Android OS restrictions mean clipboard monitoring is foreground-only.
-- **Processes:** starts monitoring only after explicit user action; supports search, sorting, app grouping, window controls, end-task, and force-stop actions subject to server-side protection.
-- **Screen mirroring:** uses the Android WebRTC SDK to receive the existing on-demand desktop stream, with resolution/frame-rate selection and pointer interaction.
-- **Game controller:** choose WASD or an analog joystick in Controller Settings. Joystick mode streams continuous two-axis input to a virtual Xbox 360 controller, so games that support XInput can use full 360-degree movement. The Windows PC needs the ViGEmBus virtual gamepad driver installed; `start.bat` installs the Python `vgamepad` package automatically.
+The existing PC server remains independently usable. It continues to host its current dashboard, file service, remote-control APIs, FTP service, and screen capture even when no Android device is present.
 
-## Analog joystick prerequisite
+## Channel boundaries and implementation status
 
-Install the ViGEmBus virtual gamepad driver on the Windows PC before selecting Joystick mode. Restart SciNET after installation. Without the driver, WASD mode continues to work, but Windows cannot expose the virtual Xbox controller to games.
+SciNET is being developed around three separate paths:
 
-## Important network and security notes
+1. **Control:** persistent bidirectional WebSocket for peer identity, liveness, events, command coordination, and screen-session signaling.
+2. **Data:** direct HTTP streaming between peer servers for files, with resumable chunks, integrity verification, progress, and cancellation. File payloads must not be sent through the control socket.
+3. **Screen:** WebRTC media transport for low-latency screen/audio streaming. Remote input will use the platform-specific control mechanisms supported by each device.
 
-SciNET is intended for a trusted private network. The server does not provide a full user-account/authentication layer. Anyone who can reach the service may be able to use remote controls and shared-file APIs. Do not expose ports 8000, 2121, or FTP passive ports directly to the public internet.
+The current branch implements the discovery and control-channel presence foundation. Direct peer file transfer, authenticated pairing, screen-session negotiation, Android screen capture, and cross-platform remote input are subsequent implementation steps. The existing Windows-to-Android viewer is not being represented as full bidirectional mirroring.
 
-## Verification status
+## Network and security notes
 
-The native modules and Gradle configuration have been added on `feature/native-android-app`. The project still needs a Gradle sync and an actual Android build/device test before the branch can be considered verified. In particular, validate the native WebRTC receiver against the Windows host and test uploads/downloads on a real Android device.
+SciNET is designed for a trusted private LAN. The new peer WebSocket currently accepts only private/loopback/link-local source addresses and handles identity/liveness messages only. It is not yet an authenticated pairing system. Do not expose SciNET services to the public internet; the legacy Windows APIs still do not provide a complete user-account/authentication layer.
+
+Android may require the user to exempt SciNET from battery optimization for longer background availability. A foreground service improves continuity but cannot override a force-stop or every vendor power-management decision.
+
+## Verification
+
+The peer service and protocol have been added on `feature/multi-device-peer-network`. A Gradle build, Android device test, and Windows-to-Android / Android-to-Android LAN test are still required before this foundation is considered verified.
