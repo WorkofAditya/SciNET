@@ -9,7 +9,7 @@ SciNET uses three independent channels:
 | Channel | Transport | Purpose | Current status |
 |---|---|---|---|
 | Control | Persistent WebSocket | Identity, presence, heartbeats, events, command coordination, transfer coordination, and screen-session signaling | Discovery, handshake, and heartbeats implemented |
-| Data | Direct HTTP streaming | File listing and file payloads, including chunked/resumable transfers | Planned; do not send file bytes over the control socket |
+| Data | Direct HTTP streaming | Direct file payloads between paired devices; file bytes never travel over the control socket | Android-to-Android streaming upload and receiver inbox implemented; resumable transfers and Windows peer transfers remain future work |
 | Screen | WebRTC | Low-latency screen and optional audio media | Planned for peer-to-peer sessions; the legacy Windows-to-Android viewer remains separate |
 
 A channel may be unavailable without taking the other channels or the local device server offline.
@@ -85,13 +85,17 @@ A heartbeat is sent approximately every five seconds:
 
 The receiver replies with `heartbeat_ack`. A missing peer connection is retried; a connection that stops responding is discarded.
 
-## Trust and security boundary
+## Pairing, trust, and security boundary
 
-Protocol v1 currently provides discovery and liveness, not authentication. A device being shown as connected means only that a WebSocket handshake completed. It does **not** mean that the peer is paired, trusted, or authorized to control the device.
+Discovery and the v1 WebSocket hello/welcome exchange establish presence only. A discovered or connected device is not automatically trusted.
 
-The Android and Windows peer-control listeners reject non-private, non-loopback, and non-link-local client addresses. This is a network boundary, not an authentication mechanism. No privileged remote commands, file writes, or screen-control actions should be enabled over this channel until an authenticated pairing and authorization layer is implemented.
+Android-to-Android pairing currently uses the phone QR code:
+1. The receiving phone displays a random one-time token that expires after five minutes.
+2. The scanning phone submits its device ID and token to `POST /api/pair/claim`.
+3. The receiving phone consumes the token, creates a random per-peer key, stores it locally, and returns the key to the scanner. Both phones store the same key under the other phone's device ID.
+4. The direct file-transfer endpoint requires the sender's device ID and its paired key. A device that is merely discovered cannot upload files.
 
-SciNET is intended for trusted private networks. Do not port-forward SciNET ports or expose these services directly to the public internet.
+Pair claims and peer control connections are restricted to private, loopback, or link-local addresses. File transfer authorization uses the per-peer bearer key. This is an initial LAN trust model, not end-to-end encryption: the Android HTTP data path is currently cleartext on the local network. Do not port-forward SciNET ports or expose these services directly to the public internet. TLS and stronger device-key authentication remain future hardening work.
 
 ## Compatibility
 
@@ -103,9 +107,17 @@ SciNET is intended for trusted private networks. Do not port-forward SciNET port
 
 ## Phone QR sharing
 
-The Android home screen displays a QR code for the phone's current private IPv4 address and peer identity.
+The Android home screen displays a QR code for the phone's current private IPv4 address, peer identity, and short-lived pairing token.
 
-- Scanning it with SciNET on Android uses the existing **Scan PC QR Code** action and requests a direct peer connection to the phone's WebSocket endpoint.
-- Scanning it with an ordinary camera/browser opens the phone's HTTP landing page on port 8765. The page currently exposes basic device identity and connected-peer status.
-- The QR is intended for trusted devices on the same reachable local network. The current peer hello handshake is not authenticated; do not expose port 8765 to the public internet. Pairing and authorization remain planned work.
-- Browser access is currently a status portal, not the full remote-control or file-management interface.
+- Scan with SciNET on another Android phone to establish trust and connect the two peers.
+- The token is one-time and expires after five minutes; the displayed QR refreshes as tokens expire or are consumed.
+- Ordinary camera/browser scanning opens the phone's HTTP landing page on port 8765. Browser access is still a status portal, not the full remote-control or file-management interface.
+
+## Android-to-Android file transfer
+
+- Open the paired phone from the **PEERS** screen.
+- Choose **SEND FILES TO THIS DEVICE** and select one or more files.
+- The sender streams each file directly to the receiving phone over HTTP. The receiver stores it in SciNET's private incoming queue, not a user-shared directory.
+- The receiver chooses **DOWNLOAD TO THIS PHONE** and selects the final save location through Android's document picker.
+- Incoming items are persisted with their private staged file so they remain available after the app process restarts.
+- The initial implementation supports streamed transfers up to 2 GB per file. Resume, cancellation, checksums, and Windows peer-transfer support are not implemented yet.
