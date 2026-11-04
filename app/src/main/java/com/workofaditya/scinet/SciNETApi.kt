@@ -139,6 +139,72 @@ internal object SciNETApi {
         }
     }
 
+    suspend fun uploadToPeer(
+        context: Context,
+        host: String,
+        peerId: String,
+        peerKey: String,
+        uri: Uri,
+        fileName: String,
+        onProgress: suspend (Long, Long?) -> Unit = { _, _ -> }
+    ) = withContext(Dispatchers.IO) {
+        require(peerId.isNotBlank() && peerKey.isNotBlank()) { "Pair with this device before sending files." }
+        val totalBytes = runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0).takeIf { it >= 0L } else null
+            }
+        }.getOrNull()
+        val connection = (URL(normalizeHost(host).trimEnd('/') + "/api/peer/transfers").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 10000
+            readTimeout = 120000
+            doOutput = true
+            setChunkedStreamingMode(64 * 1024)
+            setRequestProperty("Content-Type", "application/octet-stream")
+            setRequestProperty("User-Agent", "SciNET Android/0.1")
+            setRequestProperty("X-SciNET-Peer-ID", peerId)
+            setRequestProperty("X-SciNET-File-Name", encode(fileName))
+            totalBytes?.let { setRequestProperty("X-SciNET-File-Size", it.toString()) }
+            setRequestProperty("Authorization", "Bearer " + peerKey)
+        }
+        try {
+            var transferred = 0L
+            var lastProgressAt = 0L
+            onProgress(0L, totalBytes)
+            val input = context.contentResolver.openInputStream(uri)
+                ?: throw IllegalStateException("Android could not open the selected file.")
+            input.use { source ->
+                connection.outputStream.use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = source.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        transferred += count
+                        val now = System.nanoTime()
+                        if (now - lastProgressAt >= 120_000_000L ||
+                            (totalBytes != null && transferred >= totalBytes)
+                        ) {
+                            onProgress(transferred, totalBytes)
+                            lastProgressAt = now
+                        }
+                    }
+                }
+            }
+            onProgress(transferred, totalBytes)
+            val code = connection.responseCode
+            val response = (if (code in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            val json = runCatching { JSONObject(response) }.getOrElse { JSONObject() }
+            if (code !in 200..299) {
+                throw IllegalStateException(json.optString("error").ifBlank { "Peer upload failed (HTTP $code)." })
+            }
+            json
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     suspend fun downloadTo(
         context: Context,
         host: String,
