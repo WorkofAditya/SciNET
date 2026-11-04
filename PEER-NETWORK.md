@@ -99,3 +99,13 @@ SciNET is intended for trusted private networks. Do not port-forward SciNET port
 - Future incompatible changes require a protocol version increment.
 - Capabilities are negotiated independently of the version, so later peers can add optional features without assuming every peer supports them.
 - Each peer's local server must remain usable while all remote peers are offline.
+
+
+## Phone QR sharing
+
+The Android home screen displays a QR code for the phone's current private IPv4 address and peer identity.
+
+- Scanning it with SciNET on Android uses the existing **Scan PC QR Code** action and requests a direct peer connection to the phone's WebSocket endpoint.
+- Scanning it with an ordinary camera/browser opens the phone's HTTP landing page on port 8765. The page currently exposes basic device identity and connected-peer status.
+- The QR is intended for trusted devices on the same reachable local network. The current peer hello handshake is not authenticated; do not expose port 8765 to the public internet. Pairing and authorization remain planned work.
+- Browser access is currently a status portal, not the full remote-control or file-management interface.
