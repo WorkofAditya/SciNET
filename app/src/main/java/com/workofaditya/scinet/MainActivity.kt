@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -142,7 +143,21 @@ private fun SciNETApp() {
         if (result.resultCode == Activity.RESULT_OK) {
             val scanned = result.data?.getStringExtra("scinet_host")?.trim().orEmpty()
             if (scanned.startsWith("http://") || scanned.startsWith("https://")) {
-                connect(scanned)
+                val scannedUri = android.net.Uri.parse(scanned)
+                val peerId = scannedUri.getQueryParameter("deviceId")
+                if (scannedUri.port == 8765 && scannedUri.getQueryParameter("scinet") == "peer" && !peerId.isNullOrBlank()) {
+                    val peerIntent = Intent(context, PeerNetworkService::class.java).apply {
+                        action = PeerNetworkService.ACTION_CONNECT_PEER
+                        putExtra(PeerNetworkService.EXTRA_PEER_ID, peerId)
+                        putExtra(PeerNetworkService.EXTRA_PEER_NAME, scannedUri.getQueryParameter("name") ?: "SciNET phone")
+                        putExtra(PeerNetworkService.EXTRA_PEER_HOST, scannedUri.host ?: "")
+                        putExtra(PeerNetworkService.EXTRA_PEER_PORT, 8765)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(peerIntent) else context.startService(peerIntent)
+                    notify("Connecting to SciNET phone…")
+                } else {
+                    connect(scanned)
+                }
             } else if (scanned.isNotBlank()) {
                 notify("That QR code is not a valid SciNET address.", true)
             }
@@ -229,6 +244,47 @@ private fun SciNETApp() {
                                     Text("CONNECTED", color = Good, fontSize = 8.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
+                        }
+                    }
+                    PanelCard {
+                        SectionHeading("CONNECT TO THIS PHONE", "Open SciNET from any device")
+                        val localAddress = remember { mutableStateOf(localNetworkIpv4()) }
+                        LaunchedEffect(Unit) {
+                            while (true) {
+                                localAddress.value = localNetworkIpv4()
+                                delay(3000)
+                            }
+                        }
+                        val phoneQr = remember(localAddress.value, PeerNetworkState.localDeviceId) {
+                            val address = localAddress.value
+                            if (address.isBlank() || PeerNetworkState.localDeviceId.isBlank()) null else runCatching {
+                                val payload = "http://$address:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET"
+                                val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(payload, com.google.zxing.BarcodeFormat.QR_CODE, 640, 640)
+                                android.graphics.Bitmap.createBitmap(640, 640, android.graphics.Bitmap.Config.ARGB_8888).also { bitmap ->
+                                    for (y in 0 until 640) for (x in 0 until 640) {
+                                        bitmap.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+                                    }
+                                }
+                            }.getOrNull()
+                        }
+                        if (phoneQr != null) {
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                androidx.compose.foundation.Image(
+                                    bitmap = phoneQr.asImageBitmap(),
+                                    contentDescription = "QR code to open this SciNET phone",
+                                    modifier = Modifier.size(210.dp).background(Color.White, RoundedCornerShape(12.dp)).padding(9.dp)
+                                )
+                            }
+                            Text("Scan with SciNET to connect as a peer, or scan with any camera to open this phone's browser portal.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                            Text("http://$localAddress:8765", color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            TextButton(onClick = {
+                                val link = "http://$localAddress:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET"
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SciNET phone link", link))
+                                notify("Phone link copied")
+                            }, modifier = Modifier.align(Alignment.End)) { Text("COPY LINK", color = Accent, fontSize = 9.sp) }
+                        } else {
+                            Text("Waiting for a Wi-Fi IPv4 address… Connect this phone to your local network.", color = Muted, fontSize = 11.sp)
                         }
                     }
                     PanelCard {
@@ -473,4 +529,17 @@ internal fun formatUptime(s: Long): String {
     var n = s.coerceAtLeast(0); val days = n / 86400; n %= 86400
     val h = n / 3600; n %= 3600; val m = n / 60; val sec = n % 60
     return (if (days > 0) "%02d:".format(days) else "") + "%02d:%02d:%02d".format(h, m, sec)
+}
+
+
+private fun localNetworkIpv4(): String {
+    return try {
+        java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .asSequence()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList().asSequence() }
+            .filterIsInstance<java.net.Inet4Address>()
+            .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+            ?.hostAddress.orEmpty()
+    } catch (_: Exception) { "" }
 }
