@@ -25,7 +25,7 @@ class QrScannerActivity : ComponentActivity() {
 
         val options = ScanOptions().apply {
             setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            setPrompt("Scan the SciNET QR code shown on your PC")
+            setPrompt("Scan a SciNET QR code from a PC or another device")
             setBeepEnabled(true)
             setOrientationLocked(false)
             setBarcodeImageEnabled(false)
