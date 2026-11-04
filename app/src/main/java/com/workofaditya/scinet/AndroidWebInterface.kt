@@ -117,7 +117,18 @@ internal class AndroidWebInterface(private val context: Context) {
             call.respondText(JSONObject().put("ok", true).put("name", name).toString(), ContentType.Application.Json)
         }
         get("/api/qr") {
-            val matrix = QRCodeWriter().encode("http://" + localIpv4() + ":8765", BarcodeFormat.QR_CODE, 480, 480)
+            if (PeerNetworkState.pairingTokenExpiresAt <= System.currentTimeMillis()) {
+                PeerNetworkState.rotatePairingToken()
+            }
+            val payload = android.net.Uri.Builder()
+                .scheme("http")
+                .encodedAuthority(localIpv4() + ":8765")
+                .appendQueryParameter("scinet", "peer")
+                .appendQueryParameter("deviceId", PeerNetworkState.localDeviceId)
+                .appendQueryParameter("name", hostName)
+                .appendQueryParameter("token", PeerNetworkState.pairingToken)
+                .build().toString()
+            val matrix = QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, 480, 480)
             val bitmap = Bitmap.createBitmap(480, 480, Bitmap.Config.ARGB_8888)
             for (y in 0 until 480) for (x in 0 until 480) {
                 bitmap.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
@@ -357,7 +368,9 @@ internal class AndroidWebInterface(private val context: Context) {
         val active = JSONArray()
         for (upload in uploads.values) active.put(JSONObject().put("id", upload.id).put("name", upload.name)
             .put("size", upload.received).put("total", upload.total).put("speed", upload.speed).put("status", upload.status))
-        return JSONObject().put("hostname", hostName).put("cpu", cpuPercent())
+        return JSONObject().put("hostname", hostName).put("platform", "android")
+            .put("address", "http://" + localIpv4() + ":8765")
+            .put("cpu", cpuPercent())
             .put("memory", JSONObject().put("percent", if (totalMemory > 0) usedMemory * 100.0 / totalMemory else 0.0).put("used", usedMemory).put("total", totalMemory))
             .put("disk", JSONObject().put("percent", if (totalDisk > 0) (totalDisk - freeDisk) * 100.0 / totalDisk else 0.0).put("used", totalDisk - freeDisk).put("total", totalDisk))
             .put("network", JSONObject().put("sent", TrafficStats.getTotalTxBytes().coerceAtLeast(0L)).put("received", TrafficStats.getTotalRxBytes().coerceAtLeast(0L)))
