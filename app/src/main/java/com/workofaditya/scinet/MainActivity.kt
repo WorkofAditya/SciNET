@@ -232,7 +232,16 @@ private fun SciNETApp() {
                                     putExtra(PeerNetworkService.EXTRA_PEER_PORT, 8765)
                                 }
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(peerIntent) else context.startService(peerIntent)
-                                notify("Paired with " + pairing.optString("deviceName", "SciNET phone") + ". Connecting…")
+                                selectPeerTarget(
+                                    JSONObject()
+                                        .put("id", peerId)
+                                        .put("name", pairing.optString("deviceName", scannedUri.getQueryParameter("name") ?: "SciNET phone"))
+                                        .put("platform", "android")
+                                        .put("host", scannedUri.host ?: "")
+                                        .put("port", 8765)
+                                        .put("connected", true)
+                                        .put("trusted", true)
+                                )
                             } catch (error: Exception) {
                                 notify(error.message ?: "Could not pair with this phone.", true)
                             } finally {
@@ -305,200 +314,119 @@ private fun SciNETApp() {
                     Box(Modifier.size(36.dp).background(Raised, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) { Text("S", fontSize = 20.sp, fontWeight = FontWeight.Black) }
                     Column {
                         Text("SCINET", fontSize = 13.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
-                        Text("PC LINK / ANDROID", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                        Text("ANDROID / DEVICE LINK", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(7.dp).background(if (connected) Good else Muted, RoundedCornerShape(50)))
                     Spacer(Modifier.width(6.dp))
-                    Text(if (connected) "ONLINE" else "OFFLINE", color = Muted, fontSize = 9.sp)
-                    if (connected) TextButton(onClick = { connected = false; page = "HOME" }) { Text("HOST", fontSize = 10.sp, color = Ink) }
+                    Text(if (connected) "ONLINE" else "RETRYING", color = Muted, fontSize = 9.sp)
+                    TextButton(onClick = { targetMenuExpanded = true }) {
+                        Text(
+                            activePeer?.optString("name")?.takeIf { it.isNotBlank() }
+                                ?: if (host == localHost) "THIS PHONE" else "PC",
+                            fontSize = 10.sp,
+                            color = Ink
+                        )
+                    }
+                    DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("THIS PHONE") },
+                            onClick = { selectLocalTarget() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("CONNECT TO PC…") },
+                            onClick = { targetMenuExpanded = false; pcAddress = pcHost; showPcDialog = true }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("SCAN DEVICE QR CODE") },
+                            onClick = {
+                                targetMenuExpanded = false
+                                qrScannerLauncher.launch(Intent(context, QrScannerActivity::class.java))
+                            }
+                        )
+                        HorizontalDivider(color = Edge)
+                        if (peerDevices.none { it.optBoolean("trusted") }) {
+                            DropdownMenuItem(
+                                text = { Text("NO PAIRED DEVICES", color = Muted) },
+                                enabled = false,
+                                onClick = {}
+                            )
+                        }
+                        peerDevices.filter { it.optBoolean("trusted") }.forEach { peer ->
+                            DropdownMenuItem(
+                                text = { Text(peer.optString("name", "SciNET device")) },
+                                onClick = { selectPeerTarget(peer) }
+                            )
+                        }
+                    }
                 }
             }
             HorizontalDivider(color = Color(0xFF20242A))
             }
-            if (activePeer != null) {
-                Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(15.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-                    PeerTransferScreen(
-                        peer = activePeer!!,
-                        onBack = { activePeer = null },
-                        onMessage = { text, bad -> notify(text, bad) }
+            Column(
+                Modifier.weight(1f).fillMaxWidth().then(
+                    if (screenFullscreen || page == "CONTROLLER") Modifier
+                    else Modifier.verticalScroll(rememberScrollState()).padding(15.dp)
+                ),
+                verticalArrangement = if (screenFullscreen || page == "CONTROLLER") Arrangement.Top else Arrangement.spacedBy(13.dp)
+            ) {
+                when (page) {
+                    "HOME" -> DashboardScreen(system, events, host, onRefresh = {
+                        scope.launch {
+                            try {
+                                system = SciNETApi.get(host, "/api/system")
+                                events = SciNETApi.get(host, "/api/events").optJSONArray("events").objects()
+                                notify("Dashboard refreshed")
+                            } catch (e: Exception) { notify(e.message ?: "Refresh failed", true) }
+                        }
+                    }, onRename = { name ->
+                        scope.launch {
+                            try {
+                                SciNETApi.put(host, "/api/device-name", JSONObject().put("name", name))
+                                system = SciNETApi.get(host, "/api/system")
+                                notify("Device name saved")
+                            } catch (e: Exception) { notify(e.message ?: "Could not rename device", true) }
+                        }
+                    }, onClearEvents = {
+                        scope.launch {
+                            try {
+                                SciNETApi.delete(host, "/api/events")
+                                events = emptyList()
+                                notify("Activity cleared")
+                            } catch (e: Exception) { notify(e.message ?: "Could not clear activity", true) }
+                        }
+                    }, onLogout = { selectLocalTarget() })
+                    "CONTROL" -> ControlScreen(host = host, onAction = { action, extra -> control(action, extra) }, onMessage = { text, bad -> notify(text, bad) })
+                    "FILES" -> FilesScreen(host, peerTarget = activePeer, onMessage = { text, bad -> notify(text, bad) })
+                    "PROCESSES" -> ProcessScreen(host, onMessage = { text, bad -> notify(text, bad) })
+                    "CONTROLLER" -> ControllerScreen(
+                        host = host,
+                        onAction = { action, extra -> control(action, extra) },
+                        onExit = { page = "CONTROL" },
+                        onError = { message -> notify(message, true) },
+                        onCheat = { code, onComplete ->
+                            scope.launch {
+                                try {
+                                    SciNETApi.post(host, "/api/game/cheat", JSONObject().put("code", code))
+                                    onComplete(null)
+                                } catch (e: Exception) {
+                                    val message = e.message.orEmpty()
+                                    onComplete(
+                                        if (message.contains("404")) {
+                                            "PC SciNET server is outdated. Update server.py, then restart the PC server."
+                                        } else {
+                                            message.ifBlank { "Could not send the game shortcut." }
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     )
+                    else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) }, fullscreen = screenFullscreen, onFullscreenChanged = { screenFullscreen = it })
                 }
-                NotificationToast(
-                    message = notice,
-                    isError = noticeBad,
-                    visible = noticeVisible,
-                    connected = false,
-                    expanded = noticeExpanded,
-                    onClick = { noticeExpanded = !noticeExpanded }
-                )
-            } else if (!connected) {
-                Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
-                    Spacer(Modifier.height(6.dp))
-                    Text("LOCAL NETWORK / 01", color = Accent, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
-                    Text("Your PC.\nIn your hands.", fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
-                    Text("Your phone is a SciNET node. Its own peer server starts automatically and discovers nearby devices.", color = Muted, fontSize = 14.sp)
-                    PanelCard {
-                        SectionHeading("PEER NETWORK", if (peerNodeReady) "This phone is online" else "Starting local node")
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Box(Modifier.size(8.dp).background(if (peerNodeReady) Good else Muted, RoundedCornerShape(50)))
-                            Text(if (peerNodeReady) "SERVER ACTIVE · PORT 8765" else "SERVER STARTING", color = if (peerNodeReady) Good else Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Text("Nearby SciNET devices: ${peerDevices.size}", color = Muted, fontSize = 11.sp)
-                        if (peerDevices.isEmpty()) {
-                            Text("No peers detected yet. This phone keeps advertising itself while your PC is offline.", color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
-                        } else {
-                            peerDevices.forEach { peer ->
-                                Row(
-                                    Modifier.fillMaxWidth().clickable(enabled = peer.optBoolean("trusted")) { activePeer = peer },
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Text(peer.optString("name", "SciNET device"), color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                                        Text(peer.optString("platform", "device").uppercase(), color = Muted, fontSize = 8.sp, letterSpacing = 1.sp)
-                                    }
-                                    Text(if (peer.optBoolean("trusted")) "OPEN" else "UNPAIRED", color = if (peer.optBoolean("trusted")) Good else Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-                    PanelCard {
-                        SectionHeading("CONNECT TO THIS PHONE", "Open SciNET from any device")
-                        val localAddress = remember { mutableStateOf(localNetworkIpv4()) }
-                        var pairingToken by remember { mutableStateOf(PeerNetworkState.pairingToken) }
-                        LaunchedEffect(Unit) {
-                            while (true) {
-                                localAddress.value = localNetworkIpv4()
-                                if (PeerNetworkState.pairingTokenExpiresAt <= System.currentTimeMillis()) {
-                                    PeerNetworkState.rotatePairingToken()
-                                }
-                                pairingToken = PeerNetworkState.pairingToken
-                                delay(1000)
-                            }
-                        }
-                        val phoneQr = remember(localAddress.value, PeerNetworkState.localDeviceId, pairingToken) {
-                            val address = localAddress.value
-                            if (address.isBlank() || PeerNetworkState.localDeviceId.isBlank() || pairingToken.isBlank()) null else runCatching {
-                                val payload = "http://$address:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET&token=$pairingToken"
-                                val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(payload, com.google.zxing.BarcodeFormat.QR_CODE, 640, 640)
-                                android.graphics.Bitmap.createBitmap(640, 640, android.graphics.Bitmap.Config.ARGB_8888).also { bitmap ->
-                                    for (y in 0 until 640) for (x in 0 until 640) {
-                                        bitmap.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
-                                    }
-                                }
-                            }.getOrNull()
-                        }
-                        if (phoneQr != null) {
-                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                androidx.compose.foundation.Image(
-                                    bitmap = phoneQr.asImageBitmap(),
-                                    contentDescription = "QR code to open this SciNET phone",
-                                    modifier = Modifier.size(210.dp).background(Color.White, RoundedCornerShape(12.dp)).padding(9.dp)
-                                )
-                            }
-                            Text("Scan this QR from another SciNET phone to pair. The short-lived token can only be used once.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
-                            Text("http://${localAddress.value}:8765", color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            TextButton(onClick = {
-                                val link = "http://${localAddress.value}:8765/?scinet=peer&deviceId=${PeerNetworkState.localDeviceId}&name=SciNET&token=$pairingToken"
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("SciNET phone link", link))
-                                notify("Phone link copied")
-                            }, modifier = Modifier.align(Alignment.End)) { Text("COPY LINK", color = Accent, fontSize = 9.sp) }
-                        } else {
-                            Text("Waiting for a Wi-Fi IPv4 address… Connect this phone to your local network.", color = Muted, fontSize = 11.sp)
-                        }
-                    }
-                    PanelCard {
-                        SectionHeading("HOST CONNECTION", "Connect to your PC")
-                        OutlinedTextField(value = host, onValueChange = { host = it }, modifier = Modifier.fillMaxWidth(), label = { Text("PC address") }, placeholder = { Text("http://192.168.1.25:8000") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), colors = fieldColors())
-                        Text("Use your PC's local IPv4 address and port 8000. Both devices must be on a reachable private network.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
-                        PrimaryButton(if (busy) "CONNECTING…" else "CONNECT TO PC", !busy) { connect() }
-                        OutlinedButton(
-                            onClick = { qrScannerLauncher.launch(Intent(context, QrScannerActivity::class.java)) },
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth().height(47.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink)
-                        ) {
-                            Text("▣  SCAN DEVICE QR CODE", fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp)
-                        }
-                    }
-                    PanelCard {
-                        SectionHeading("NATIVE TOOLS", "Everything in one place")
-                        FeatureLine("01", "System dashboard", "Live CPU, memory, disk, network and devices")
-                        FeatureLine("02", "Remote control", "Touchpad, keyboard, media and power")
-                        FeatureLine("03", "File manager", "Browse, transfer, rename and edit text")
-                        FeatureLine("04", "Process manager", "On-demand process inspection and actions")
-                        FeatureLine("05", "Keyboard controller", "Hold mapped keys for keyboard-based games")
-                    }
-                    Text("PRIVATE NETWORK ONLY • NEVER EXPOSE THE SERVER TO THE PUBLIC INTERNET", color = Muted, fontSize = 9.sp)
-                }
-                NotificationToast(
-                    message = notice,
-                    isError = noticeBad,
-                    visible = noticeVisible,
-                    connected = false,
-                    expanded = noticeExpanded,
-                    onClick = { noticeExpanded = !noticeExpanded }
-                )
-            } else {
-                Column(
-                    Modifier.weight(1f).fillMaxWidth().then(if (screenFullscreen || page == "CONTROLLER") Modifier else Modifier.verticalScroll(rememberScrollState()).padding(15.dp)),
-                    verticalArrangement = if (screenFullscreen || page == "CONTROLLER") Arrangement.Top else Arrangement.spacedBy(13.dp)
-                ) {
-                    when (page) {
-                        "PEERS" -> PeerDevicesScreen(
-                            peers = peerDevices,
-                            onOpen = { selected -> activePeer = selected }
-                        )
-                        "HOME" -> DashboardScreen(system, events, host, onRefresh = {
-                            scope.launch {
-                                try { system = SciNETApi.get(host, "/api/system"); events = SciNETApi.get(host, "/api/events").optJSONArray("events").objects(); notify("Dashboard refreshed") }
-                                catch (e: Exception) { notify(e.message ?: "Refresh failed", true) }
-                            }
-                        }, onRename = { name ->
-                            scope.launch {
-                                try { SciNETApi.put(host, "/api/device-name", JSONObject().put("name", name)); system = SciNETApi.get(host, "/api/system"); notify("Device name saved") }
-                                catch (e: Exception) { notify(e.message ?: "Could not rename device", true) }
-                            }
-                        }, onClearEvents = {
-                            scope.launch {
-                                try { SciNETApi.delete(host, "/api/events"); events = emptyList(); notify("Activity cleared") }
-                                catch (e: Exception) { notify(e.message ?: "Could not clear activity", true) }
-                            }
-                        }, onLogout = { logout() })
-                        "CONTROL" -> ControlScreen(host = host, onAction = { action, extra -> control(action, extra) }, onMessage = { text, bad -> notify(text, bad) })
-                        "FILES" -> FilesScreen(host, onMessage = { text, bad -> notify(text, bad) })
-                        "PROCESSES" -> ProcessScreen(host, onMessage = { text, bad -> notify(text, bad) })
-                        "CONTROLLER" -> ControllerScreen(
-                            host = host,
-                            onAction = { action, extra -> control(action, extra) },
-                            onExit = { page = "CONTROL" },
-                            onError = { message -> notify(message, true) },
-                            onCheat = { code, onComplete ->
-                                scope.launch {
-                                    try {
-                                        SciNETApi.post(host, "/api/game/cheat", JSONObject().put("code", code))
-                                        onComplete(null)
-                                    } catch (e: Exception) {
-                                        val message = e.message.orEmpty()
-                                        onComplete(
-                                            if (message.contains("404")) {
-                                                "PC SciNET server is outdated. Update server.py from feature/native-android-app, then restart the PC server."
-                                            } else {
-                                                message.ifBlank { "Could not send the game shortcut." }
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        )
-                        else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) }, fullscreen = screenFullscreen, onFullscreenChanged = { screenFullscreen = it })
-                    }
-                }
-                if (!screenFullscreen && page != "CONTROLLER") {
+            }
+            if (!screenFullscreen && page != "CONTROLLER") {
                 NotificationToast(
                     message = notice,
                     isError = noticeBad,
@@ -507,17 +435,48 @@ private fun SciNETApp() {
                     expanded = noticeExpanded,
                     onClick = { noticeExpanded = !noticeExpanded }
                 )
-                Row(Modifier.fillMaxWidth().background(Color(0xFF0C0F13)).padding(horizontal = 3.dp, vertical = 5.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                    listOf("HOME" to "⌂", "PEERS" to "⌘", "CONTROL" to "⌁", "FILES" to "▤", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
-                        Column(Modifier.weight(1f).background(if (page == key) Raised else Color.Transparent, RoundedCornerShape(7.dp)).padding(vertical = 7.dp).pointerInput(key) { detectTapGestures { page = key } }, horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(
+                    Modifier.fillMaxWidth().background(Color(0xFF0C0F13)).padding(horizontal = 3.dp, vertical = 5.dp).navigationBarsPadding(),
+                    horizontalArrangement = Arrangement.spacedBy(1.dp)
+                ) {
+                    listOf("HOME" to "⌂", "CONTROL" to "⌁", "FILES" to "▤", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
+                        Column(
+                            Modifier.weight(1f).background(if (page == key) Raised else Color.Transparent, RoundedCornerShape(7.dp))
+                                .padding(vertical = 7.dp).pointerInput(key) { detectTapGestures { page = key } },
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
                             Text(symbol, color = if (page == key) Accent else Muted, fontSize = 17.sp)
                             Text(key, color = if (page == key) Ink else Muted, fontSize = 6.sp, maxLines = 1)
                         }
                     }
                 }
-                }
-
             }
+            if (showPcDialog) AlertDialog(
+                onDismissRequest = { showPcDialog = false },
+                title = { Text("Connect to SciNET PC") },
+                text = {
+                    OutlinedTextField(
+                        value = pcAddress,
+                        onValueChange = { pcAddress = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("PC address") },
+                        placeholder = { Text("http://192.168.1.25:8000") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        colors = fieldColors()
+                    )
+                },
+                confirmButton = {
+                    TextButton(enabled = !busy && pcAddress.isNotBlank(), onClick = {
+                        showPcDialog = false
+                        connect(pcAddress)
+                    }) { Text(if (busy) "CONNECTING…" else "CONNECT", color = Accent) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPcDialog = false }) { Text("CANCEL") }
+                },
+                containerColor = Panel
+            )
         }
     }
 }
