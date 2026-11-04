@@ -30,9 +30,9 @@ function renderMesh(topology){
   const line=document.createElementNS(meshSvgNS,'line');
   line.setAttribute('x1',positions[i].x);line.setAttribute('y1',positions[i].y);
   line.setAttribute('x2',positions[j].x);line.setAttribute('y2',positions[j].y);
-  line.setAttribute('class','mesh-edge '+(edge?.transferring?'transferring':edge?.connected?'connected':'lost'));
+  line.setAttribute('class','mesh-edge '+(edge?.connected&&edge?.transferring?'transferring':edge?.connected?'connected':'lost'));
   const tip=document.createElementNS(meshSvgNS,'title');
-  tip.textContent=(a.name||'Device A')+' ↔ '+(b.name||'Device B')+' · '+(edge?.transferring?'TRANSFERRING':edge?.connected?'CONNECTED':'CONNECTION LOST');
+  tip.textContent=(a.name||'Device A')+' ↔ '+(b.name||'Device B')+' · '+(edge?.connected&&edge?.transferring?'TRANSFERRING':edge?.connected?'CONNECTED':'CONNECTION LOST');
   line.append(tip);edgesLayer.append(line);
  }
  nodes.forEach((node,index)=>{
