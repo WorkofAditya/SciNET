@@ -686,6 +686,7 @@ class PeerNetworkService : Service() {
 
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         val message = runCatching { JSONObject(text) }.getOrNull() ?: return
+                        PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
                         when (message.optString("type")) {
                             "welcome" -> {
                                 if (message.optString("deviceId") != peer.id ||
@@ -704,15 +705,20 @@ class PeerNetworkService : Service() {
                                     .put("trusted", getSharedPreferences("scinet-trust", MODE_PRIVATE).contains(peer.id))
                                     .put("lastSeen", System.currentTimeMillis())
                                 PeerNetworkState.knownPeers[peer.id] = JSONObject(PeerNetworkState.peers[peer.id].toString()).put("updatedAt", System.currentTimeMillis())
+                                PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
                                 opened.complete(true)
                             }
                             "heartbeat" -> webSocket.send(
                                 JSONObject().put("type", "heartbeat_ack")
                                     .put("deviceId", deviceId)
                                     .put("sentAt", message.optLong("sentAt"))
+                                    .put("topology", PeerNetworkState.topology())
                                     .toString()
                             )
-                            "heartbeat_ack" -> PeerNetworkState.peers[peer.id]?.put("lastSeen", System.currentTimeMillis())
+                            "heartbeat_ack" -> {
+                                PeerNetworkState.peers[peer.id]?.put("lastSeen", System.currentTimeMillis())
+                                PeerNetworkState.knownPeers[peer.id]?.put("updatedAt", System.currentTimeMillis())
+                            }
                         }
                     }
 
@@ -741,12 +747,14 @@ class PeerNetworkService : Service() {
                         socket.send(
                             JSONObject().put("type", "heartbeat")
                                 .put("sentAt", System.currentTimeMillis())
+                                .put("topology", PeerNetworkState.topology())
                                 .toString()
                         )
                     }
                 }
                 sockets.remove(peer.id, socket)
                 PeerNetworkState.peers.remove(peer.id)
+                PeerNetworkState.knownPeers[peer.id]?.put("connected", false)?.put("updatedAt", System.currentTimeMillis())
                 if (isActive && endpoints.containsKey(peer.id)) delay(3.seconds)
             }
         }
