@@ -70,6 +70,9 @@ peer_browser = None
 peer_targets = {}
 peer_service_names = {}
 peer_devices = {}
+peer_known_nodes = {}
+peer_remote_links = {}
+peer_transfer_activity = set()
 peer_workers = {}
 peer_lock = threading.RLock()
 peer_stop = threading.Event()
@@ -112,6 +115,129 @@ PEER_PROTOCOL_VERSION = 1
 PEER_PORT = 8000
 
 
+
+
+def _peer_link_key(a, b):
+    return "|".join(sorted((str(a), str(b))))
+
+
+def _merge_peer_topology(topology):
+    if not isinstance(topology, dict):
+        return
+    now = time.time()
+    with peer_lock:
+        for node in topology.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            peer_id = str(node.get("id") or "")
+            if not peer_id or peer_id == DEVICE_ID or len(peer_id) > 64:
+                continue
+            current = peer_known_nodes.get(peer_id)
+            incoming = dict(node)
+            if current and float(current.get("updatedAt") or 0) > float(incoming.get("updatedAt") or 0):
+                continue
+            incoming["id"] = peer_id
+            incoming["updatedAt"] = float(incoming.get("updatedAt") or now)
+            peer_known_nodes[peer_id] = incoming
+
+        for link in topology.get("links") or []:
+            if not isinstance(link, dict):
+                continue
+            a, b = str(link.get("a") or ""), str(link.get("b") or "")
+            if not a or not b or a == b or len(a) > 64 or len(b) > 64:
+                continue
+            updated = float(link.get("updatedAt") or now)
+            key = _peer_link_key(a, b)
+            current = peer_remote_links.get(key)
+            if current and float(current.get("updatedAt") or 0) > updated:
+                continue
+            peer_remote_links[key] = {
+                "a": a,
+                "b": b,
+                "connected": bool(link.get("connected")),
+                "transferring": bool(link.get("transferring")),
+                "updatedAt": updated,
+            }
+
+
+def _peer_topology_snapshot():
+    now = time.time()
+    with peer_lock:
+        targets = {key: dict(value) for key, value in peer_targets.items()}
+        known = {key: dict(value) for key, value in peer_known_nodes.items()}
+        direct = {key: dict(value) for key, value in peer_devices.items()}
+        remote_links = {key: dict(value) for key, value in peer_remote_links.items()}
+
+    nodes = {
+        DEVICE_ID: {
+            "id": DEVICE_ID, "name": DEVICE_NAME, "platform": "windows",
+            "connected": True, "self": True, "updatedAt": now,
+        }
+    }
+    ids = set(targets) | set(known) | set(direct)
+    direct_links = {}
+    for peer_id in ids:
+        if peer_id == DEVICE_ID:
+            continue
+        peer = direct.get(peer_id, {})
+        target = targets.get(peer_id) or known.get(peer_id) or peer
+        updated = float(peer.get("last_seen") or target.get("updatedAt") or target.get("discoveredAt") or now)
+        connected = bool(peer.get("connected")) and now - float(peer.get("last_seen") or now) <= 20
+        nodes[peer_id] = {
+            "id": peer_id,
+            "name": str(peer.get("name") or target.get("name") or "SciNET device"),
+            "platform": str(peer.get("platform") or target.get("platform") or "unknown"),
+            "connected": connected,
+            "self": False,
+            "updatedAt": updated,
+        }
+        key = _peer_link_key(DEVICE_ID, peer_id)
+        direct_links[key] = {
+            "a": DEVICE_ID, "b": peer_id,
+            "connected": connected,
+            "transferring": peer_id in peer_transfer_activity,
+            "updatedAt": updated,
+        }
+
+    links = dict(direct_links)
+    for key, link in remote_links.items():
+        if key in direct_links:
+            continue
+        updated = float(link.get("updatedAt") or 0)
+        fresh = now - updated <= 20
+        links[key] = {
+            "a": link["a"], "b": link["b"],
+            "connected": bool(link.get("connected")) and fresh,
+            "transferring": bool(link.get("transferring")) and fresh,
+            "updatedAt": updated,
+        }
+
+    for link in links.values():
+        for peer_id in (link["a"], link["b"]):
+            if peer_id not in nodes and peer_id != DEVICE_ID:
+                remote = known.get(peer_id, {})
+                nodes[peer_id] = {
+                    "id": peer_id,
+                    "name": str(remote.get("name") or "SciNET device"),
+                    "platform": str(remote.get("platform") or "unknown"),
+                    "connected": False,
+                    "self": False,
+                    "updatedAt": float(remote.get("updatedAt") or 0),
+                }
+    for peer_id, node in nodes.items():
+        if peer_id == DEVICE_ID:
+            continue
+        node["connected"] = any(
+            (link["a"] == peer_id or link["b"] == peer_id) and link["connected"]
+            for link in links.values()
+        )
+    return {
+        "selfId": DEVICE_ID,
+        "nodes": list(nodes.values()),
+        "links": list(links.values()),
+        "updatedAt": now,
+    }
+
 def _peer_hello():
     return {
         "type": "hello",
@@ -121,6 +247,7 @@ def _peer_hello():
         "platform": "windows",
         "port": PEER_PORT,
         "capabilities": ["control-v1", "http-stream-v1", "webrtc-v1"],
+        "topology": _peer_topology_snapshot(),
     }
 
 
@@ -132,6 +259,7 @@ def _peer_welcome():
         "deviceName": DEVICE_NAME,
         "platform": "windows",
         "capabilities": ["control-v1", "http-stream-v1", "webrtc-v1"],
+        "topology": _peer_topology_snapshot(),
     }
 
 
@@ -189,7 +317,10 @@ def _peer_connector(peer_id):
                     break
                 now = time.monotonic()
                 if welcomed and now - last_heartbeat >= 5:
-                    connection.send(json.dumps({"type": "heartbeat", "sentAt": time.time()}))
+                    connection.send(json.dumps({
+                        "type": "heartbeat", "sentAt": time.time(),
+                        "topology": _peer_topology_snapshot(),
+                    }))
                     last_heartbeat = now
                 if not welcomed and now - started > 8:
                     break
@@ -208,6 +339,8 @@ def _peer_connector(peer_id):
                     continue
 
                 kind = message.get("type")
+                if isinstance(message.get("topology"), dict):
+                    _merge_peer_topology(message["topology"])
                 if kind == "welcome" and message.get("protocolVersion") == PEER_PROTOCOL_VERSION:
                     if str(message.get("deviceId") or "") != peer_id:
                         raise ValueError("Peer identity mismatch")
@@ -224,6 +357,7 @@ def _peer_connector(peer_id):
                         "type": "heartbeat_ack",
                         "deviceId": DEVICE_ID,
                         "sentAt": message.get("sentAt"),
+                        "topology": _peer_topology_snapshot(),
                     }))
                 elif kind == "heartbeat_ack":
                     with peer_lock:
@@ -286,6 +420,11 @@ def _remember_peer_service(zeroconf, service_type, service_name):
             return
         with peer_lock:
             peer_targets[peer_id] = target
+            peer_known_nodes[peer_id] = {
+                "id": peer_id, "name": target["name"], "platform": target["platform"],
+                "connected": bool(peer_devices.get(peer_id, {}).get("connected")),
+                "updatedAt": time.time(), "discoveredAt": time.time(),
+            }
             peer_service_names[service_name] = peer_id
         # The lower device ID dials. This avoids two competing WebSocket sessions.
         if DEVICE_ID < peer_id:
@@ -306,12 +445,17 @@ class SciNETPeerServiceListener(ServiceListener):
             peer_id = peer_service_names.pop(name, None)
             if peer_id and not any(value == peer_id for value in peer_service_names.values()):
                 peer_targets.pop(peer_id, None)
+                known = peer_known_nodes.get(peer_id)
+                if known:
+                    known["connected"] = False
+                    known["updatedAt"] = time.time()
 
 
 
 
 def register_mdns():
     global mdns, peer_browser
+    peer_stop.clear()
     address = local_ip()
     if address == "127.0.0.1":
         return
@@ -399,6 +543,8 @@ def unregister_mdns():
     with peer_lock:
         peer_targets.clear()
         peer_service_names.clear()
+        peer_known_nodes.clear()
+        peer_remote_links.clear()
     if mdns:
         mdns.close()
         mdns = None
@@ -442,7 +588,7 @@ def system_info():
             unique[ip] = device
     with peer_lock:
         peer_snapshot = [dict(peer) for peer in peer_devices.values()]
-    host = {"id": "host", "ip": local_ip(), "port": 8000, "type": "Host", "agent": socket.gethostname(), "connected": started_at}
+    host = {"id": DEVICE_ID, "ip": local_ip(), "port": 8000, "type": "Host", "agent": socket.gethostname(), "connected": started_at}
     for peer in peer_snapshot:
         if not peer.get("connected") or not peer.get("ip") or peer.get("ip") == host["ip"]:
             continue
@@ -459,7 +605,7 @@ def system_info():
         for device in devices:
             device["name"] = device_names.get(device.get("id"), device.get("agent") or device.get("type") or "Device")
     with uploads_lock: active_uploads = [dict(item) for item in uploads.values() if item["status"] in {"uploading", "paused"}]
-    return {"hostname": socket.gethostname(), "cpu": psutil.cpu_percent(interval=None), "memory": {"percent": memory.percent, "used": memory.used, "total": memory.total}, "disk": {"percent": disk.percent, "used": disk.used, "total": disk.total}, "network": {"sent": net.bytes_sent, "received": net.bytes_recv}, "uptime": int(time.time() - started_at), "devices": devices, "device_count": len(devices), "uploads": active_uploads, "peer_network": {"device_id": DEVICE_ID, "device_name": DEVICE_NAME, "protocol_version": PEER_PROTOCOL_VERSION, "peers": peer_snapshot}}
+    return {"hostname": socket.gethostname(), "cpu": psutil.cpu_percent(interval=None), "memory": {"percent": memory.percent, "used": memory.used, "total": memory.total}, "disk": {"percent": disk.percent, "used": disk.used, "total": disk.total}, "network": {"sent": net.bytes_sent, "received": net.bytes_recv}, "uptime": int(time.time() - started_at), "devices": devices, "device_count": len(devices), "uploads": active_uploads, "peer_network": {"device_id": DEVICE_ID, "device_name": DEVICE_NAME, "protocol_version": PEER_PROTOCOL_VERSION, "peers": peer_snapshot, "topology": _peer_topology_snapshot()}}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -502,7 +648,13 @@ async def api_peer_info():
         "protocolVersion": PEER_PROTOCOL_VERSION,
         "port": PEER_PORT,
         "peers": peers,
+        "topology": _peer_topology_snapshot(),
     }
+
+
+@app.get("/api/peer/topology")
+async def api_peer_topology():
+    return _peer_topology_snapshot()
 
 
 @app.get("/api/system")
@@ -1673,6 +1825,8 @@ async def peer_control_socket(websocket: WebSocket):
         return
 
     connection_id = uuid.uuid4().hex
+    if isinstance(hello.get("topology"), dict):
+        _merge_peer_topology(hello["topology"])
     peer_payload = {
         "name": str(hello.get("deviceName") or "SciNET device")[:80],
         "platform": str(hello.get("platform") or "unknown")[:24],
@@ -1695,10 +1849,13 @@ async def peer_control_socket(websocket: WebSocket):
                     record = peer_devices.get(peer_id)
                     if record and record.get("connection_id") == connection_id:
                         record["last_seen"] = time.time()
+                if isinstance(message.get("topology"), dict):
+                    _merge_peer_topology(message["topology"])
                 await websocket.send_json({
                     "type": "heartbeat_ack",
                     "deviceId": DEVICE_ID,
                     "sentAt": message.get("sentAt"),
+                    "topology": _peer_topology_snapshot(),
                 })
     except (WebSocketDisconnect, Exception):
         pass
