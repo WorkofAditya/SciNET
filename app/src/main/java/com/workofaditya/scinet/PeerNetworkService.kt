@@ -75,7 +75,7 @@ class PeerNetworkService : Service() {
     private lateinit var nsdManager: NsdManager
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
-    private var httpServer: ApplicationEngine? = null
+    private var httpServer: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private lateinit var deviceId: String
     private lateinit var deviceName: String
@@ -224,11 +224,11 @@ class PeerNetworkService : Service() {
             serviceName = "SciNET-${deviceId.take(8)}"
             serviceType = PEER_SERVICE_TYPE
             port = PEER_PORT
-            setAttribute("id", deviceId.toByteArray(Charsets.UTF_8))
-            setAttribute("name", deviceName.take(60).toByteArray(Charsets.UTF_8))
-            setAttribute("platform", "android".toByteArray(Charsets.UTF_8))
-            setAttribute("protocol", PEER_PROTOCOL_VERSION.toString().toByteArray(Charsets.UTF_8))
-            setAttribute("ws", "/ws/peer".toByteArray(Charsets.UTF_8))
+            setAttribute("id", deviceId)
+            setAttribute("name", deviceName.take(60))
+            setAttribute("platform", "android")
+            setAttribute("protocol", PEER_PROTOCOL_VERSION.toString())
+            setAttribute("ws", "/ws/peer")
         }
 
         registrationListener = object : NsdManager.RegistrationListener {
