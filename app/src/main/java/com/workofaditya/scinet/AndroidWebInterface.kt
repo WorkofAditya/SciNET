@@ -20,8 +20,6 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
-import io.ktor.utils.io.*
-import io.ktor.utils.io.jvm.javaio.*
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
@@ -233,7 +231,9 @@ internal class AndroidWebInterface(private val context: Context) {
                     if (destination.exists()) { part.dispose(); call.errorJson(HttpStatusCode.Conflict, "A file named '" + name + "' already exists"); return@post }
                     val temp = File(directory, ".scinet-" + UUID.randomUUID().toString().replace("-", "") + ".part")
                     try {
-                        part.provider().copyAndClose(temp.writeChannel())
+                        part.streamProvider().use { input ->
+                            FileOutputStream(temp).use { output -> input.copyTo(output) }
+                        }
                         if (!temp.renameTo(destination)) throw IllegalStateException("Could not finalize upload")
                         uploaded.put(JSONObject().put("name", name).put("size", destination.length()))
                     } catch (e: Exception) {
