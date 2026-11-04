@@ -263,7 +263,7 @@ private fun MeshTopologyCard(topology: JSONObject) {
                     for (j in i + 1 until nodes.size) {
                         val edge = edgeFor(nodes[i].optString("id"), nodes[j].optString("id"))
                         val color = when {
-                            edge?.optBoolean("transferring") == true -> Good
+                            edge?.optBoolean("connected") == true && edge.optBoolean("transferring") -> Good
                             edge?.optBoolean("connected") == true -> Color(0xFF8994A2)
                             else -> Bad
                         }
@@ -271,7 +271,7 @@ private fun MeshTopologyCard(topology: JSONObject) {
                             color = color,
                             start = positions[i],
                             end = positions[j],
-                            strokeWidth = if (edge?.optBoolean("transferring") == true) 3.dp.toPx() else 1.7.dp.toPx(),
+                            strokeWidth = if (edge?.optBoolean("connected") == true && edge.optBoolean("transferring")) 3.dp.toPx() else 1.7.dp.toPx(),
                             cap = androidx.compose.ui.graphics.StrokeCap.Round
                         )
                     }
