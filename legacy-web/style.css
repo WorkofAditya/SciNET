@@ -184,7 +184,8 @@
 
 
 /* Decentralized SciNET full-mesh topology */
-.mesh-card{grid-column:1/-1;padding:19px;min-width:0}
+.mesh-card{grid-column:auto;padding:19px;min-width:0}
+.monitor-devices-card{grid-column:1/-1}
 .mesh-graph{width:100%;height:290px;overflow:hidden;border:1px solid #1c2128;border-radius:8px;background:radial-gradient(ellipse at center,#10151b 0,#0b0e12 78%)}
 .mesh-graph svg{display:block;width:100%;height:100%}
 .mesh-edge{fill:none;stroke:#8994a2;stroke-width:2;vector-effect:non-scaling-stroke;opacity:.85}
