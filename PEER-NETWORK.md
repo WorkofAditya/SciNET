@@ -33,6 +33,20 @@ The advertised service port is the device's HTTP/control listener:
 
 The original Windows `_http._tcp.local.` announcement remains in place for backward compatibility with existing SciNET discovery.
 
+## Automatic full-mesh operation
+
+Every running SciNET installation is a peer node. Android starts its embedded HTTP/WebSocket server as its foreground peer service; Windows runs the existing FastAPI server. Both advertise the same DNS-SD service and continuously discover other SciNET nodes on the local multicast network. Discovery does not require a typed IP address, a selected host, or QR pairing.
+
+For every pair of discovered device IDs, the lexicographically smaller ID initiates one persistent WebSocket to the other device. That socket is full-duplex, so it is a direct connection in both directions. Every node independently runs the same rule for every discovered ID; there is no coordinator, relay host, or elected master. A node remains a server while it is also initiating connections to other nodes.
+
+## Mesh topology exchange
+
+The peer hello, welcome, and heartbeat messages exchange a topology snapshot. A snapshot contains nodes and direct links, allowing a node to learn not only its own links but also links reported by its peers. For example, when A is connected to B and B is connected to C, A learns about B-C; if A is also connected to C, the graph includes A-C as a separate direct edge.
+
+The native Android Home dashboard and the Windows web dashboard render every unordered pair of discovered nodes. Connected idle links are neutral, active transfer links are green, and missing, disconnected, or stale links are red. Topology exchange reports direct link state; it does not create a virtual link or route data through an intermediate node.
+
+Automatic discovery depends on multicast DNS being available between devices. It is intended for peers on the same LAN / multicast domain; guest Wi-Fi isolation, VLAN boundaries, VPN routing, or router multicast filtering can prevent discovery even when ordinary IP connectivity exists.
+
 ## Stable identity and connection arbitration
 
 Each installation generates and persists its own 32-character UUID-derived identifier:
