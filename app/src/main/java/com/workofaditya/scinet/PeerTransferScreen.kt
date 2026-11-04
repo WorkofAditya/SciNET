@@ -73,7 +73,7 @@ internal fun PeerTransferScreen(
                     ) { transferred, total ->
                         withContext(Dispatchers.Main.immediate) {
                             progress = PeerTransferProgress(
-                                label = if (uris.size > 1) "SENDING \${index + 1}/\${uris.size}" else "SENDING",
+                                label = if (uris.size > 1) "SENDING ${index + 1}/${uris.size}" else "SENDING",
                                 fileName = fileName,
                                 transferred = transferred,
                                 total = total
@@ -122,7 +122,7 @@ internal fun PeerTransferScreen(
                     }
                 }
                 PeerNetworkState.removeIncoming(context, transferId)
-                onMessage("Downloaded \${item.optString("name")} to your chosen location.", false)
+                onMessage("Downloaded ${item.optString("name")} to your chosen location.", false)
             } catch (error: Exception) {
                 onMessage(error.message ?: "Could not save the incoming file.", true)
             } finally {
@@ -183,7 +183,7 @@ internal fun PeerTransferScreen(
         }
 
         PanelCard {
-            SectionHeading("INCOMING FILES", "\${incoming.size} waiting to be downloaded")
+            SectionHeading("INCOMING FILES", "${incoming.size} waiting to be downloaded")
             if (incoming.isEmpty()) {
                 Text("Nothing waiting here. Files sent by this device will appear in this inbox.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
             } else {
