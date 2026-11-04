@@ -1,6 +1,6 @@
 # SciNET Android peer node
 
-SciNET for Android is a native Kotlin + Jetpack Compose application. It is also a first-class network node: when the app launches, it starts an embedded HTTP/WebSocket server in a foreground service, advertises the device over local-network mDNS, and discovers other SciNET nodes.
+SciNET for Android is a native Kotlin + Jetpack Compose application. The standard SciNET dashboard and HOME, CONTROL, FILES, PROCESSES, CONTROLLER, and SCREEN navigation stay available even when no remote device is connected; the phone's own server is the default target. A top-bar device selector switches the same screens between the phone, a configured PC, and paired peers. The app also starts an embedded HTTP/WebSocket server in a foreground service, advertises the device over local-network mDNS, and discovers other SciNET nodes.
 
 ## Open in Android Studio
 
@@ -24,7 +24,7 @@ SciNET for Android is a native Kotlin + Jetpack Compose application. It is also 
 
 - **Dashboard:** reads Windows host metrics, network traffic, connected-device information, and activity.
 - **Remote control:** touchpad, keyboard, media, volume, and power actions on the configured Windows host.
-- **Files:** browse, upload, download, rename, delete, preview, and edit files on the Windows host.
+- **Files:** browse, upload, download, rename, delete, preview, and edit files on the Windows host. When a paired Android peer is selected, the same Files screen sends files directly to that phone and shows incoming peer transfers for receiver-selected download.
 - **Processes:** on-demand Windows process inspection and actions.
 - **Screen mirroring:** receives the existing Windows desktop stream.
 - **Game controller:** keyboard and joystick input for supported Windows games.
