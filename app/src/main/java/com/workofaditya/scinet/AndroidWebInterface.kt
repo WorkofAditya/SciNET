@@ -224,7 +224,7 @@ internal class AndroidWebInterface(private val context: Context) {
             val relative = call.request.queryParameters["path"].orEmpty()
             val directory = safeFile(relative)
             if (!directory.isDirectory) { call.errorJson(HttpStatusCode.NotFound, "Destination folder not found"); return@post }
-            val multi = call.receiveMultipart(); val uploaded = JSONArray()
+            val multi = call.receiveMultipart(formFieldLimit = 2L * 1024L * 1024L * 1024L); val uploaded = JSONArray()
             while (true) {
                 val part = multi.readPart() ?: break
                 if (part is PartData.FileItem) {
