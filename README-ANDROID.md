@@ -17,7 +17,8 @@ SciNET for Android is a native Kotlin + Jetpack Compose application. It is also 
 - Devices discover one another through mDNS/NSD. For each device pair, the lexicographically smaller device ID initiates the control WebSocket, avoiding duplicate sessions.
 - The `/ws/peer` channel performs a versioned hello/welcome handshake and heartbeat exchange. It is the presence/control path, not a file-payload channel.
 - Phone QR pairing uses a one-time five-minute token and establishes a per-peer trust key. Presence alone does not authorize file uploads.
-- Android exposes `/health`, `/api/peer/info`, `/api/pair/claim`, and the authenticated `/api/peer/transfers` streaming receiver. Windows exposes `/api/peer/info` and `/ws/peer` on its existing server.
+- Android exposes `/health`, `/api/peer/info`, `/api/pair/claim`, and the authenticated `/api/peer/transfers` streaming receiver.
+- The Android server also serves the existing `legacy-web` frontend at `http://phone-ip:8765`, including the dashboard, file manager, static assets, PWA shell, and QR endpoint. The same source files are packaged directly by the Android Gradle asset source set.
 
 ## Existing Android features
 
@@ -30,6 +31,15 @@ SciNET for Android is a native Kotlin + Jetpack Compose application. It is also 
 
 The existing PC server remains independently usable. It continues to host its current dashboard, file service, remote-control APIs, FTP service, and screen capture even when no Android device is present.
 
+### Android-hosted web interface
+
+- Open `http://<phone-lan-ip>:8765` from a browser on the same reachable network. This serves the same dashboard UI that the Windows host uses, not a separate connection/status page.
+- The dashboard displays Android CPU, memory, storage, network totals, uptime, connected peers, and activity. Its live updates use `/ws`.
+- The clipboard panel uses `/ws/clipboard` for live browser-to-browser clipboard updates.
+- The dashboard upload and file-manager APIs write to the phone's app-scoped external Documents folder, `SciNET-Web`. This is the Android web host's own storage, separate from Android-to-Android peer inbox transfers and separate from the PC's configured shared directory.
+- The file manager supports listing, folder creation, multipart upload, chunked upload with SHA-256 chunk verification, download, preview, rename, delete, and UTF-8 text editing.
+- The existing control page and process/screen UI are served too. Remote input, Android process actions, and browser-initiated Android screen capture are not implemented by this web host yet; those routes return an explicit unsupported response rather than pretending to work.
+
 ## Channel boundaries and implementation status
 
 SciNET is being developed around three separate paths:
@@ -40,10 +50,10 @@ SciNET is being developed around three separate paths:
 
 ## Network and security notes
 
-SciNET is designed for a trusted private LAN. The new peer WebSocket currently accepts only private/loopback/link-local source addresses and handles identity/liveness messages only. It is not yet an authenticated pairing system. Do not expose SciNET services to the public internet; the legacy Windows APIs still do not provide a complete user-account/authentication layer.
+SciNET is designed for a trusted private LAN. Android pairing uses one-time QR tokens and per-peer bearer keys for file uploads, but the Android HTTP data path is currently cleartext on the local network. The existing Windows web APIs do not provide a complete user-account/authentication layer. Do not port-forward SciNET ports or expose these services directly to the public internet.
 
 Android may require the user to exempt SciNET from battery optimization for longer background availability. A foreground service improves continuity but cannot override a force-stop or every vendor power-management decision.
 
 ## Verification
 
-The peer service and protocol have been added on `feature/multi-device-peer-network`. A Gradle build, Android device test, and Windows-to-Android / Android-to-Android LAN test are still required before this foundation is considered verified.
+The Android debug build is checked by GitHub Actions. An actual browser-on-phone-LAN test, Android-to-Android transfer test, and Windows-to-Android LAN test still need to be run on physical devices.
