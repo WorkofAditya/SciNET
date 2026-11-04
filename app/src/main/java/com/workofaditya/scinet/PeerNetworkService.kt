@@ -330,6 +330,12 @@ class PeerNetworkService : Service() {
                         val message = runCatching { JSONObject(text) }.getOrNull() ?: return
                         when (message.optString("type")) {
                             "welcome" -> {
+                                if (message.optString("deviceId") != peer.id ||
+                                    message.optInt("protocolVersion", -1) != PEER_PROTOCOL_VERSION
+                                ) {
+                                    webSocket.close(1008, "Peer identity or protocol mismatch")
+                                    return
+                                }
                                 PeerNetworkState.peers[peer.id] = JSONObject()
                                     .put("id", peer.id)
                                     .put("name", message.optString("deviceName", peer.name))
