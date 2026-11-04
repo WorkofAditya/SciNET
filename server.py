@@ -27,13 +27,35 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
-from zeroconf import IPVersion, ServiceInfo, Zeroconf
+from zeroconf import IPVersion, ServiceBrowser, ServiceInfo, ServiceListener, Zeroconf
+import websocket as websocket_client
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
 from pyftpdlib.servers import FTPServer
 
 BASE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = BASE_DIR / "shared_files"
+DEVICE_IDENTITY_FILE = BASE_DIR / "device_identity.json"
+
+
+def load_device_identity():
+    try:
+        identity = json.loads(DEVICE_IDENTITY_FILE.read_text(encoding="utf-8"))
+        device_id = str(identity.get("id") or "")
+        if device_id and len(device_id) <= 64 and all(char in "0123456789abcdef-" for char in device_id.lower()):
+            return {"id": device_id, "name": str(identity.get("name") or socket.gethostname()), "platform": "windows"}
+    except (OSError, ValueError, AttributeError):
+        pass
+    identity = {"id": uuid.uuid4().hex, "name": socket.gethostname(), "platform": "windows"}
+    temporary = DEVICE_IDENTITY_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(identity, indent=2), encoding="utf-8")
+    temporary.replace(DEVICE_IDENTITY_FILE)
+    return identity
+
+
+DEVICE_IDENTITY = load_device_identity()
+DEVICE_ID = DEVICE_IDENTITY["id"]
+DEVICE_NAME = DEVICE_IDENTITY["name"]
 DEVICE_NAMES_FILE = BASE_DIR / "device_names.json"
 device_names_lock = threading.Lock()
 try:
@@ -44,6 +66,13 @@ WEB_DIR = BASE_DIR / "legacy-web"
 STORAGE_DIR.mkdir(exist_ok=True)
 started_at = time.time()
 mdns = None
+peer_browser = None
+peer_targets = {}
+peer_service_names = {}
+peer_devices = {}
+peer_workers = {}
+peer_lock = threading.RLock()
+peer_stop = threading.Event()
 ftp_server = None
 ftp_thread = None
 connected_devices = {}
@@ -78,19 +107,247 @@ def local_ip():
         sock.close()
 
 
+PEER_SERVICE_TYPE = "_scinet._tcp.local."
+PEER_PROTOCOL_VERSION = 1
+PEER_PORT = 8000
+
+
+def _peer_hello():
+    return {
+        "type": "hello",
+        "protocolVersion": PEER_PROTOCOL_VERSION,
+        "deviceId": DEVICE_ID,
+        "deviceName": DEVICE_NAME,
+        "platform": "windows",
+        "capabilities": ["control-v1", "http-stream-v1", "webrtc-v1"],
+    }
+
+
+def _peer_welcome():
+    return {
+        "type": "welcome",
+        "protocolVersion": PEER_PROTOCOL_VERSION,
+        "deviceId": DEVICE_ID,
+        "deviceName": DEVICE_NAME,
+        "platform": "windows",
+        "capabilities": ["control-v1", "http-stream-v1", "webrtc-v1"],
+    }
+
+
+def _service_property(info, key, default=""):
+    value = info.properties.get(key.encode("utf-8"), info.properties.get(key))
+    if value is None:
+        return default
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _set_peer_presence(peer_id, payload, connected, connection_id=None):
+    now = time.time()
+    with peer_lock:
+        record = dict(peer_devices.get(peer_id, {}))
+        record.update(payload)
+        record.update({
+            "id": peer_id,
+            "connected": bool(connected),
+            "last_seen": now,
+        })
+        if connected:
+            record["connected_at"] = record.get("connected_at") or now
+            if connection_id:
+                record["connection_id"] = connection_id
+        else:
+            record["connected_at"] = None
+            record.pop("connection_id", None)
+        peer_devices[peer_id] = record
+
+
+def _peer_connector(peer_id):
+    while not peer_stop.is_set():
+        with peer_lock:
+            target = dict(peer_targets.get(peer_id) or {})
+        if not target:
+            peer_stop.wait(2)
+            continue
+
+        connection = None
+        connection_id = uuid.uuid4().hex
+        welcomed = False
+        started = time.monotonic()
+        last_heartbeat = 0.0
+        last_received = time.monotonic()
+        try:
+            url = f"ws://{target['host']}:{target['port']}/ws/peer"
+            connection = websocket_client.create_connection(url, timeout=6)
+            connection.settimeout(1)
+            connection.send(json.dumps(_peer_hello()))
+
+            while not peer_stop.is_set():
+                if not peer_targets.get(peer_id):
+                    break
+                now = time.monotonic()
+                if welcomed and now - last_heartbeat >= 5:
+                    connection.send(json.dumps({"type": "heartbeat", "sentAt": time.time()}))
+                    last_heartbeat = now
+                if not welcomed and now - started > 8:
+                    break
+                if welcomed and now - last_received > 30:
+                    break
+                try:
+                    raw = connection.recv()
+                except websocket_client.WebSocketTimeoutException:
+                    continue
+                if not raw:
+                    break
+                last_received = time.monotonic()
+                try:
+                    message = json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+
+                kind = message.get("type")
+                if kind == "welcome" and message.get("protocolVersion") == PEER_PROTOCOL_VERSION:
+                    welcomed = True
+                    _set_peer_presence(peer_id, {
+                        "name": str(message.get("deviceName") or target.get("name") or "SciNET device"),
+                        "platform": str(message.get("platform") or target.get("platform") or "unknown"),
+                        "ip": target["host"],
+                        "port": target["port"],
+                        "transport": "websocket",
+                    }, True, connection_id)
+                elif kind == "heartbeat":
+                    connection.send(json.dumps({
+                        "type": "heartbeat_ack",
+                        "deviceId": DEVICE_ID,
+                        "sentAt": message.get("sentAt"),
+                    }))
+                elif kind == "heartbeat_ack":
+                    with peer_lock:
+                        record = peer_devices.get(peer_id)
+                        if record and record.get("connection_id") == connection_id:
+                            record["last_seen"] = time.time()
+        except Exception as exc:
+            if not peer_stop.is_set():
+                print(f"SciNET peer connection to {peer_id[:8]} failed: {type(exc).__name__}")
+        finally:
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            if welcomed:
+                with peer_lock:
+                    record = peer_devices.get(peer_id)
+                    if record and record.get("connection_id") == connection_id:
+                        _set_peer_presence(peer_id, record, False)
+        peer_stop.wait(3)
+
+
+def _ensure_peer_worker(peer_id):
+    with peer_lock:
+        worker = peer_workers.get(peer_id)
+        if worker is not None and worker.is_alive():
+            return
+        worker = threading.Thread(
+            target=_peer_connector,
+            args=(peer_id,),
+            name=f"SciNET-peer-{peer_id[:8]}",
+            daemon=True,
+        )
+        peer_workers[peer_id] = worker
+        worker.start()
+
+
+def _remember_peer_service(zeroconf, service_type, service_name):
+    try:
+        info = zeroconf.get_service_info(service_type, service_name, timeout=3000)
+        if info is None:
+            return
+        peer_id = _service_property(info, "id")
+        version = _service_property(info, "protocol")
+        if not peer_id or peer_id == DEVICE_ID or version != str(PEER_PROTOCOL_VERSION):
+            return
+        addresses = info.parsed_addresses(IPVersion.V4Only)
+        if not addresses:
+            return
+        target = {
+            "id": peer_id,
+            "name": _service_property(info, "name", service_name),
+            "platform": _service_property(info, "platform", "unknown"),
+            "host": addresses[0],
+            "port": int(info.port),
+            "service_name": service_name,
+        }
+        if not target["host"] or not target["port"]:
+            return
+        with peer_lock:
+            peer_targets[peer_id] = target
+            peer_service_names[service_name] = peer_id
+        # The lower device ID dials. This avoids two competing WebSocket sessions.
+        if DEVICE_ID < peer_id:
+            _ensure_peer_worker(peer_id)
+    except Exception as exc:
+        print(f"SciNET peer discovery failed: {type(exc).__name__}")
+
+
+class SciNETPeerServiceListener(ServiceListener):
+    def add_service(self, zeroconf, service_type, name):
+        _remember_peer_service(zeroconf, service_type, name)
+
+    def update_service(self, zeroconf, service_type, name):
+        _remember_peer_service(zeroconf, service_type, name)
+
+    def remove_service(self, zeroconf, service_type, name):
+        with peer_lock:
+            peer_id = peer_service_names.pop(name, None)
+            if peer_id and not any(value == peer_id for value in peer_service_names.values()):
+                peer_targets.pop(peer_id, None)
+
+
+
+
 def register_mdns():
-    global mdns
+    global mdns, peer_browser
     address = local_ip()
-    if address == "127.0.0.1": return
+    if address == "127.0.0.1":
+        return
     try:
         mdns = Zeroconf(ip_version=IPVersion.V4Only)
-        info = ServiceInfo("_http._tcp.local.", "SciNET Link._http._tcp.local.", addresses=[socket.inet_aton(address)], port=8000, server="scinet.local.", properties={"path": "/", "app": "SciNET Link"})
-        mdns.async_register_service(info)
+        web_info = ServiceInfo(
+            "_http._tcp.local.",
+            "SciNET Link._http._tcp.local.",
+            addresses=[socket.inet_aton(address)],
+            port=8000,
+            server="scinet.local.",
+            properties={"path": "/", "app": "SciNET Link"},
+        )
+        peer_info = ServiceInfo(
+            PEER_SERVICE_TYPE,
+            f"SciNET-{DEVICE_ID[:8]}.{PEER_SERVICE_TYPE}",
+            addresses=[socket.inet_aton(address)],
+            port=PEER_PORT,
+            server="scinet.local.",
+            properties={
+                b"id": DEVICE_ID.encode("utf-8"),
+                b"name": DEVICE_NAME.encode("utf-8")[:60],
+                b"platform": b"windows",
+                b"protocol": str(PEER_PROTOCOL_VERSION).encode("ascii"),
+                b"ws": b"/ws/peer",
+            },
+        )
+        mdns.async_register_service(web_info)
+        mdns.async_register_service(peer_info)
+        peer_browser = ServiceBrowser(mdns, PEER_SERVICE_TYPE, listener=SciNETPeerServiceListener())
         print("SciNET Link: http://scinet.local:8000")
         print(f"SciNET Link: http://{address}:8000")
+        print(f"SciNET peer node: {DEVICE_ID[:8]} ({address}:{PEER_PORT})")
     except Exception as exc:
         print(f"SciNET mDNS unavailable: {exc}")
-        if mdns: mdns.close(); mdns = None
+        if mdns:
+            mdns.close()
+            mdns = None
+            peer_browser = None
 
 
 def start_ftp():
@@ -128,8 +385,20 @@ def stop_ftp():
 
 
 def unregister_mdns():
-    global mdns
-    if mdns: mdns.close(); mdns = None
+    global mdns, peer_browser
+    peer_stop.set()
+    if peer_browser:
+        try:
+            peer_browser.cancel()
+        except Exception:
+            pass
+        peer_browser = None
+    with peer_lock:
+        peer_targets.clear()
+        peer_service_names.clear()
+    if mdns:
+        mdns.close()
+        mdns = None
 
 
 def safe_path(relative=""):
@@ -173,7 +442,9 @@ def system_info():
         for device in devices:
             device["name"] = device_names.get(device.get("id"), device.get("agent") or device.get("type") or "Device")
     with uploads_lock: active_uploads = [dict(item) for item in uploads.values() if item["status"] in {"uploading", "paused"}]
-    return {"hostname": socket.gethostname(), "cpu": psutil.cpu_percent(interval=None), "memory": {"percent": memory.percent, "used": memory.used, "total": memory.total}, "disk": {"percent": disk.percent, "used": disk.used, "total": disk.total}, "network": {"sent": net.bytes_sent, "received": net.bytes_recv}, "uptime": int(time.time() - started_at), "devices": devices, "device_count": len(devices), "uploads": active_uploads}
+    with peer_lock:
+        peer_snapshot = [dict(peer) for peer in peer_devices.values()]
+    return {"hostname": socket.gethostname(), "cpu": psutil.cpu_percent(interval=None), "memory": {"percent": memory.percent, "used": memory.used, "total": memory.total}, "disk": {"percent": disk.percent, "used": disk.used, "total": disk.total}, "network": {"sent": net.bytes_sent, "received": net.bytes_recv}, "uptime": int(time.time() - started_at), "devices": devices, "device_count": len(devices), "uploads": active_uploads, "peer_network": {"device_id": DEVICE_ID, "device_name": DEVICE_NAME, "protocol_version": PEER_PROTOCOL_VERSION, "peers": peer_snapshot}}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -204,6 +475,20 @@ async def set_device_name(request: Request):
             return JSONResponse({"error": "Could not save device name"}, status_code=500)
     log_event(f"Device renamed: {name}", "system")
     return {"ok": True, "name": name}
+
+@app.get("/api/peer/info")
+async def api_peer_info():
+    with peer_lock:
+        peers = [dict(peer) for peer in peer_devices.values()]
+    return {
+        "deviceId": DEVICE_ID,
+        "deviceName": DEVICE_NAME,
+        "platform": "windows",
+        "protocolVersion": PEER_PROTOCOL_VERSION,
+        "port": PEER_PORT,
+        "peers": peers,
+    }
+
 
 @app.get("/api/system")
 async def api_system(request: Request):
@@ -1335,6 +1620,81 @@ async def set_clipboard(request: Request):
         except Exception: stale.append(client)
     for client in stale: clipboard_clients.discard(client)
     log_event("Clipboard updated","system"); return {"ok":True}
+
+@app.websocket("/ws/peer")
+async def peer_control_socket(websocket: WebSocket):
+    """Versioned peer presence channel. Commands and file bytes are intentionally not handled here."""
+    client = websocket.client
+    if not client:
+        await websocket.close(code=1008, reason="Could not identify this device")
+        return
+    try:
+        remote_ip = ipaddress.ip_address(client.host)
+        if not (remote_ip.is_private or remote_ip.is_loopback or remote_ip.is_link_local):
+            await websocket.close(code=1008, reason="SciNET peers must be on a private local network")
+            return
+    except ValueError:
+        await websocket.close(code=1008, reason="Invalid peer address")
+        return
+
+    await websocket.accept()
+    try:
+        hello = await asyncio.wait_for(websocket.receive_json(), timeout=8)
+    except Exception:
+        await websocket.close(code=1008, reason="Peer hello timed out")
+        return
+
+    peer_id = str(hello.get("deviceId") or "")
+    version = hello.get("protocolVersion")
+    if (
+        hello.get("type") != "hello"
+        or not peer_id
+        or len(peer_id) > 64
+        or any(char not in "0123456789abcdef-" for char in peer_id.lower())
+        or peer_id == DEVICE_ID
+        or version != PEER_PROTOCOL_VERSION
+    ):
+        await websocket.close(code=1008, reason="Unsupported SciNET peer handshake")
+        return
+
+    connection_id = uuid.uuid4().hex
+    peer_payload = {
+        "name": str(hello.get("deviceName") or "SciNET device")[:80],
+        "platform": str(hello.get("platform") or "unknown")[:24],
+        "ip": client.host,
+        "port": client.port or 0,
+        "transport": "websocket",
+    }
+    _set_peer_presence(peer_id, peer_payload, True, connection_id)
+    await websocket.send_json(_peer_welcome())
+    log_event(f"SciNET peer connected: {peer_payload['name']}", "connect")
+
+    try:
+        while True:
+            message = await websocket.receive_json()
+            if not isinstance(message, dict):
+                continue
+            kind = message.get("type")
+            if kind == "heartbeat":
+                with peer_lock:
+                    record = peer_devices.get(peer_id)
+                    if record and record.get("connection_id") == connection_id:
+                        record["last_seen"] = time.time()
+                await websocket.send_json({
+                    "type": "heartbeat_ack",
+                    "deviceId": DEVICE_ID,
+                    "sentAt": message.get("sentAt"),
+                })
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        with peer_lock:
+            record = peer_devices.get(peer_id)
+            if record and record.get("connection_id") == connection_id:
+                _set_peer_presence(peer_id, record, False)
+        log_event(f"SciNET peer disconnected: {peer_payload['name']}", "disconnect")
+
+
 
 @app.websocket("/ws/clipboard")
 async def clipboard_socket(websocket: WebSocket):
