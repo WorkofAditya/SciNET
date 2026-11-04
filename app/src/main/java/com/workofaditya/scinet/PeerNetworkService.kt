@@ -376,6 +376,10 @@ class PeerNetworkService : Service() {
                         val remoteName = hello?.optString("deviceName").orEmpty()
                         val remotePlatform = hello?.optString("platform").orEmpty()
                         val version = hello?.optInt("protocolVersion", -1) ?: -1
+                        val advertisedPort = hello?.optInt(
+                            "port",
+                            if (remotePlatform == "windows") 8000 else PEER_PORT
+                        ) ?: PEER_PORT
 
                         if (hello?.optString("type") != "hello" ||
                             remoteId.isBlank() || remoteId == deviceId ||
@@ -390,7 +394,7 @@ class PeerNetworkService : Service() {
                             .put("name", remoteName.ifBlank { "SciNET device" })
                             .put("platform", remotePlatform)
                             .put("host", remoteAddress)
-                            .put("port", call.request.local.remotePort)
+                            .put("port", advertisedPort)
                             .put("connected", true)
                             .put("trusted", getSharedPreferences("scinet-trust", MODE_PRIVATE).contains(remoteId))
                             .put("lastSeen", System.currentTimeMillis())
@@ -543,6 +547,7 @@ class PeerNetworkService : Service() {
                                 .put("deviceId", deviceId)
                                 .put("deviceName", deviceName)
                                 .put("platform", "android")
+                                .put("port", PEER_PORT)
                                 .put("capabilities", org.json.JSONArray(listOf("control-v1", "http-stream-v1", "webrtc-v1")))
                                 .toString()
                         )
