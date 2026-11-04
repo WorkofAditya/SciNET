@@ -239,8 +239,8 @@ class PeerNetworkService : Service() {
                             return@post
                         }
 
-                        val remoteName = payload.optString("deviceName").take(80).ifBlank { "SciNET device" }
-                        val remotePlatform = payload.optString("platform").take(24).ifBlank { "android" }
+                        val remoteName = payload?.optString("deviceName").orEmpty().take(80).ifBlank { "SciNET device" }
+                        val remotePlatform = payload?.optString("platform").orEmpty().take(24).ifBlank { "android" }
                         val peerKey = UUID.randomUUID().toString().replace("-", "") +
                             UUID.randomUUID().toString().replace("-", "")
                         getSharedPreferences("scinet-trust", MODE_PRIVATE)
@@ -294,7 +294,7 @@ class PeerNetworkService : Service() {
                             call.respondText(
                                 JSONObject().put("error", "Files larger than 2 GB are not supported yet.").toString(),
                                 ContentType.Application.Json,
-                                HttpStatusCode.PayloadTooLarge
+                                HttpStatusCode(413, "Payload Too Large")
                             )
                             return@post
                         }
