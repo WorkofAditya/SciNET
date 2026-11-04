@@ -115,9 +115,9 @@ The Android home screen displays a QR code for the phone's current private IPv4 
 
 ## Android-to-Android file transfer
 
-- Open the paired phone from the **PEERS** screen.
-- Choose **SEND FILES TO THIS DEVICE** and select one or more files.
-- The sender streams each file directly to the receiving phone over HTTP. The receiver stores it in SciNET's private incoming queue, not a user-shared directory.
-- The receiver chooses **DOWNLOAD TO THIS PHONE** and selects the final save location through Android's document picker.
+- Select a paired phone from the existing native app's top-bar device selector. The app keeps the standard HOME, CONTROL, FILES, PROCESSES, CONTROLLER, and SCREEN navigation visible, even when no remote device is connected; the local phone server is the default target.
+- Open the existing **FILES** tab. Its normal file-manager layout is reused for peer transfers; there is no separate peer workspace or additional PEERS tab.
+- Choose **SEND FILES** and select one or more files. The sender streams each file directly to the selected phone over HTTP. The receiver stores it in SciNET's private incoming queue, not a user-shared directory.
+- On the receiving phone, select the sender in the same device selector and open **FILES**. Incoming files appear in the existing file grid and can be saved with the standard Android document picker.
 - Incoming items are persisted with their private staged file so they remain available after the app process restarts.
 - The initial implementation supports streamed transfers up to 2 GB per file. Resume, cancellation, checksums, and Windows peer-transfer support are not implemented yet.
