@@ -15,6 +15,7 @@ import io.ktor.server.application.*
 import io.ktor.server.cio.*
 import io.ktor.server.engine.*
 import io.ktor.server.response.*
+import io.ktor.server.request.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
@@ -150,6 +151,15 @@ class PeerNetworkService : Service() {
                         )
                     }
                     webSocket("/ws/peer") {
+                        val remoteAddress = call.request.local.remoteAddress
+                        val remoteIp = runCatching { InetAddress.getByName(remoteAddress) }.getOrNull()
+                        if (remoteIp == null ||
+                            !(remoteIp.isSiteLocalAddress || remoteIp.isLoopbackAddress || remoteIp.isLinkLocalAddress)
+                        ) {
+                            close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "SciNET peers must be on a private local network"))
+                            return@webSocket
+                        }
+
                         val firstFrame = withTimeoutOrNull(8.seconds) { incoming.receive() }
                         val helloText = (firstFrame as? Frame.Text)?.readText()
                         val hello = runCatching { JSONObject(helloText ?: "") }.getOrNull()
