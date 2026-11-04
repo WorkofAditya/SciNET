@@ -208,6 +208,8 @@ def _peer_connector(peer_id):
 
                 kind = message.get("type")
                 if kind == "welcome" and message.get("protocolVersion") == PEER_PROTOCOL_VERSION:
+                    if str(message.get("deviceId") or "") != peer_id:
+                        raise ValueError("Peer identity mismatch")
                     welcomed = True
                     _set_peer_presence(peer_id, {
                         "name": str(message.get("deviceName") or target.get("name") or "SciNET device"),
