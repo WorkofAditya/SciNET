@@ -124,7 +124,7 @@ def _peer_link_key(a, b):
 def _merge_peer_topology(topology):
     if not isinstance(topology, dict):
         return
-    now = time.time()
+    now = time.time() * 1000.0
     with peer_lock:
         for node in topology.get("nodes") or []:
             if not isinstance(node, dict):
@@ -161,7 +161,7 @@ def _merge_peer_topology(topology):
 
 
 def _peer_topology_snapshot():
-    now = time.time()
+    now = time.time() * 1000.0
     with peer_lock:
         targets = {key: dict(value) for key, value in peer_targets.items()}
         known = {key: dict(value) for key, value in peer_known_nodes.items()}
@@ -181,8 +181,9 @@ def _peer_topology_snapshot():
             continue
         peer = direct.get(peer_id, {})
         target = targets.get(peer_id) or known.get(peer_id) or peer
-        updated = float(peer.get("last_seen") or target.get("updatedAt") or target.get("discoveredAt") or now)
-        connected = bool(peer.get("connected")) and now - float(peer.get("last_seen") or now) <= 20
+        peer_seen = float(peer.get("last_seen") or 0) * 1000.0
+        updated = peer_seen or float(target.get("updatedAt") or target.get("discoveredAt") or now)
+        connected = bool(peer.get("connected")) and now - (peer_seen or now) <= 20000
         nodes[peer_id] = {
             "id": peer_id,
             "name": str(peer.get("name") or target.get("name") or "SciNET device"),
@@ -423,7 +424,7 @@ def _remember_peer_service(zeroconf, service_type, service_name):
             peer_known_nodes[peer_id] = {
                 "id": peer_id, "name": target["name"], "platform": target["platform"],
                 "connected": bool(peer_devices.get(peer_id, {}).get("connected")),
-                "updatedAt": time.time(), "discoveredAt": time.time(),
+                "updatedAt": time.time() * 1000.0, "discoveredAt": time.time() * 1000.0,
             }
             peer_service_names[service_name] = peer_id
         # The lower device ID dials. This avoids two competing WebSocket sessions.
@@ -448,7 +449,7 @@ class SciNETPeerServiceListener(ServiceListener):
                 known = peer_known_nodes.get(peer_id)
                 if known:
                     known["connected"] = False
-                    known["updatedAt"] = time.time()
+                    known["updatedAt"] = time.time() * 1000.0
 
 
 
