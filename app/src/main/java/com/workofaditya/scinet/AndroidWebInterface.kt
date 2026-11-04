@@ -20,6 +20,8 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
+import io.ktor.utils.io.*
+import io.ktor.utils.io.jvm.javaio.*
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
@@ -103,9 +105,9 @@ internal class AndroidWebInterface(private val context: Context) {
             call.respondText(JSONObject().put("ok", true).toString(), ContentType.Application.Json)
         }
         put("/api/device-name") {
-            val data = jsonBody()
+            val data = call.jsonBody()
             val name = data.optString("name").trim().take(40)
-            if (name.isBlank()) { errorJson(HttpStatusCode.BadRequest, "Device name cannot be empty"); return@put }
+            if (name.isBlank()) { call.errorJson(HttpStatusCode.BadRequest, "Device name cannot be empty"); return@put }
             hostName = name
             context.getSharedPreferences("scinet-web", Context.MODE_PRIVATE).edit().putString("device_name", name).apply()
             addEvent("Device renamed: " + name, "system")
@@ -151,7 +153,7 @@ internal class AndroidWebInterface(private val context: Context) {
         get("/api/files") {
             val relative = call.request.queryParameters["path"].orEmpty()
             val directory = safeFile(relative)
-            if (!directory.isDirectory) { errorJson(HttpStatusCode.NotFound, "Folder not found"); return@get }
+            if (!directory.isDirectory) { call.errorJson(HttpStatusCode.NotFound, "Folder not found"); return@get }
             val entries = directory.listFiles().orEmpty().filterNot { it.name.startsWith(".scinet-") }
                 .map { fileEntry(it) }
                 .sortedWith(compareBy<JSONObject> { it.optString("type") != "folder" }.thenBy { it.optString("name").lowercase() })
@@ -161,142 +163,150 @@ internal class AndroidWebInterface(private val context: Context) {
         }
         get("/api/files/content") {
             val target = safeFile(call.request.queryParameters["path"].orEmpty())
-            if (!target.isFile) { errorJson(HttpStatusCode.NotFound, "File not found"); return@get }
-            if (target.length() > 2L * 1024L * 1024L) { errorJson(HttpStatusCode(413, "Payload Too Large"), "Text editor supports files up to 2 MB"); return@get }
+            if (!target.isFile) { call.errorJson(HttpStatusCode.NotFound, "File not found"); return@get }
+            if (target.length() > 2L * 1024L * 1024L) { call.errorJson(HttpStatusCode(413, "Payload Too Large"), "Text editor supports files up to 2 MB"); return@get }
             val content = runCatching { target.readText(Charsets.UTF_8) }.getOrElse {
-                errorJson(HttpStatusCode.UnsupportedMediaType, "This file is not valid UTF-8 text"); return@get
+                call.errorJson(HttpStatusCode.UnsupportedMediaType, "This file is not valid UTF-8 text"); return@get
             }
             call.respondText(JSONObject().put("path", relativePath(target)).put("name", target.name)
                 .put("content", content).put("size", target.length()).toString(), ContentType.Application.Json)
         }
         put("/api/files/content") {
-            val data = jsonBody(); val target = safeFile(data.optString("path"))
+            val data = call.jsonBody(); val target = safeFile(data.optString("path"))
             val bytes = data.optString("content", "").toByteArray(Charsets.UTF_8)
-            if (!target.isFile) { errorJson(HttpStatusCode.NotFound, "File not found"); return@put }
-            if (bytes.size > 2 * 1024 * 1024) { errorJson(HttpStatusCode(413, "Payload Too Large"), "Text editor supports files up to 2 MB"); return@put }
+            if (!target.isFile) { call.errorJson(HttpStatusCode.NotFound, "File not found"); return@put }
+            if (bytes.size > 2 * 1024 * 1024) { call.errorJson(HttpStatusCode(413, "Payload Too Large"), "Text editor supports files up to 2 MB"); return@put }
             target.writeBytes(bytes); addEvent("Edited: " + target.name, "file")
             call.respondText(JSONObject().put("ok", true).put("size", bytes.size).toString(), ContentType.Application.Json)
         }
         get("/api/files/preview") {
             val target = safeFile(call.request.queryParameters["path"].orEmpty())
-            if (!target.isFile) { errorJson(HttpStatusCode.NotFound, "File not found"); return@get }
-            if (target.length() > 64L * 1024L * 1024L) { errorJson(HttpStatusCode(413, "Payload Too Large"), "Preview is limited to 64 MB. Download the file instead."); return@get }
+            if (!target.isFile) { call.errorJson(HttpStatusCode.NotFound, "File not found"); return@get }
+            if (target.length() > 64L * 1024L * 1024L) { call.errorJson(HttpStatusCode(413, "Payload Too Large"), "Preview is limited to 64 MB. Download the file instead."); return@get }
             call.response.header(HttpHeaders.ContentDisposition, "inline; filename=\"" + safeHeader(target.name) + "\"")
             call.respondBytes(target.readBytes(), mimeType(target.name))
         }
         get("/api/download") {
             val target = safeFile(call.request.queryParameters["path"].orEmpty())
-            if (!target.isFile) { errorJson(HttpStatusCode.NotFound, "File not found"); return@get }
+            if (!target.isFile) { call.errorJson(HttpStatusCode.NotFound, "File not found"); return@get }
             call.response.header(HttpHeaders.ContentDisposition,
                 ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, target.name).toString())
             addEvent("Download requested: " + target.name, "transfer")
             call.respondFile(target)
         }
         post("/api/folders") {
-            val data = jsonBody(); val parent = safeFile(data.optString("path"))
+            val data = call.jsonBody(); val parent = safeFile(data.optString("path"))
             val name = safeName(data.optString("name").ifBlank { "New Folder" })
             if (!parent.isDirectory || !File(parent, name).mkdir()) {
-                errorJson(HttpStatusCode.Conflict, "Could not create folder (it may already exist)"); return@post
+                call.errorJson(HttpStatusCode.Conflict, "Could not create folder (it may already exist)"); return@post
             }
             addEvent("Folder created: " + name, "file")
             call.respondText(JSONObject().put("ok", true).toString(), ContentType.Application.Json)
         }
         post("/api/files/rename") {
-            val data = jsonBody(); val source = safeFile(data.optString("path"))
+            val data = call.jsonBody(); val source = safeFile(data.optString("path"))
             val name = safeName(data.optString("name")); val destination = File(source.parentFile, name)
             if (!source.exists() || destination.exists() || !source.renameTo(destination)) {
-                errorJson(HttpStatusCode.BadRequest, "Could not rename item"); return@post
+                call.errorJson(HttpStatusCode.BadRequest, "Could not rename item"); return@post
             }
             addEvent("Renamed: " + name, "file")
             call.respondText(JSONObject().put("ok", true).toString(), ContentType.Application.Json)
         }
         delete("/api/files") {
             val target = safeFile(call.request.queryParameters["path"].orEmpty())
-            if (target == root || !target.exists()) { errorJson(HttpStatusCode.BadRequest, "Could not delete item"); return@delete }
+            if (target == root || !target.exists()) { call.errorJson(HttpStatusCode.BadRequest, "Could not delete item"); return@delete }
             val deleted = if (target.isDirectory) target.deleteRecursively() else target.delete()
-            if (!deleted) { errorJson(HttpStatusCode.InternalServerError, "Could not delete item"); return@delete }
+            if (!deleted) { call.errorJson(HttpStatusCode.InternalServerError, "Could not delete item"); return@delete }
             addEvent("Deleted: " + target.name, "file")
             call.respondText(JSONObject().put("ok", true).toString(), ContentType.Application.Json)
         }
         post("/api/files/upload") {
             val relative = call.request.queryParameters["path"].orEmpty()
             val directory = safeFile(relative)
-            if (!directory.isDirectory) { errorJson(HttpStatusCode.NotFound, "Destination folder not found"); return@post }
+            if (!directory.isDirectory) { call.errorJson(HttpStatusCode.NotFound, "Destination folder not found"); return@post }
             val multi = call.receiveMultipart(); val uploaded = JSONArray()
             while (true) {
                 val part = multi.readPart() ?: break
                 if (part is PartData.FileItem) {
                     val name = safeName(part.originalFileName ?: "upload.bin")
                     val destination = File(directory, name)
-                    if (destination.exists()) { part.dispose(); errorJson(HttpStatusCode.Conflict, "A file named '" + name + "' already exists"); return@post }
+                    if (destination.exists()) { part.dispose(); call.errorJson(HttpStatusCode.Conflict, "A file named '" + name + "' already exists"); return@post }
                     val temp = File(directory, ".scinet-" + UUID.randomUUID().toString().replace("-", "") + ".part")
                     try {
-                        part.streamProvider().use { input -> FileOutputStream(temp).use { output -> input.copyTo(output) } }
+                        part.provider().copyAndClose(temp.writeChannel())
                         if (!temp.renameTo(destination)) throw IllegalStateException("Could not finalize upload")
                         uploaded.put(JSONObject().put("name", name).put("size", destination.length()))
                     } catch (e: Exception) {
-                        temp.delete(); part.dispose(); errorJson(HttpStatusCode.InternalServerError, e.message ?: "Could not save upload"); return@post
+                        temp.delete(); part.dispose(); call.errorJson(HttpStatusCode.InternalServerError, e.message ?: "Could not save upload"); return@post
                     }
                 }
                 part.dispose()
             }
-            if (uploaded.length() == 0) { errorJson(HttpStatusCode.BadRequest, "Choose at least one file"); return@post }
+            if (uploaded.length() == 0) { call.errorJson(HttpStatusCode.BadRequest, "Choose at least one file"); return@post }
             for (i in 0 until uploaded.length()) addEvent("File uploaded: " + uploaded.getJSONObject(i).optString("name"), "file")
             call.respondText(JSONObject().put("ok", true).put("path", relative).put("files", uploaded).toString(), ContentType.Application.Json)
         }
         post("/api/upload/start") {
-            val data = jsonBody(); val name = safeName(data.optString("name").ifBlank { "unnamed" })
+            val data = call.jsonBody(); val name = safeName(data.optString("name").ifBlank { "unnamed" })
             val relative = data.optString("path").replace("\\", "/").trim('/')
             val directory = safeFile(relative)
-            if (!directory.mkdirs() && !directory.isDirectory) { errorJson(HttpStatusCode.BadRequest, "Invalid upload destination"); return@post }
+            if (!directory.mkdirs() && !directory.isDirectory) { call.errorJson(HttpStatusCode.BadRequest, "Invalid upload destination"); return@post }
             val total = data.optLong("size", 0L).coerceAtLeast(0L)
             val id = UUID.randomUUID().toString().replace("-", "")
             val temp = File(directory, ".scinet-" + id + ".part")
-            if (!temp.createNewFile()) { errorJson(HttpStatusCode.InternalServerError, "Could not start upload"); return@post }
+            if (!temp.createNewFile()) { call.errorJson(HttpStatusCode.InternalServerError, "Could not start upload"); return@post }
             uploads[id] = Upload(id, name, total, temp); addEvent("Upload started: " + name, "transfer")
             call.respondText(JSONObject().put("id", id).toString(), ContentType.Application.Json)
         }
         post("/api/upload/{id}/chunk") {
             val id = call.parameters["id"].orEmpty(); val item = uploads[id]
-            if (item == null) { errorJson(HttpStatusCode.NotFound, "Upload not found"); return@post }
-            if (item.status != "uploading") { errorJson(HttpStatusCode.Conflict, "Upload is not active"); return@post }
+            if (item == null) { call.errorJson(HttpStatusCode.NotFound, "Upload not found"); return@post }
+            if (item.status != "uploading") { call.errorJson(HttpStatusCode.Conflict, "Upload is not active"); return@post }
             val chunk = call.receive<ByteArray>()
             val supplied = call.request.headers["X-Chunk-SHA256"].orEmpty().lowercase()
             val actual = MessageDigest.getInstance("SHA-256").digest(chunk).joinToString("") { "%02x".format(it) }
-            if (chunk.isEmpty() || supplied != actual) { errorJson(HttpStatusCode(422, "Unprocessable Entity"), "Chunk integrity check failed; retry this chunk"); return@post }
+            if (chunk.isEmpty() || supplied != actual) { call.errorJson(HttpStatusCode(422, "Unprocessable Entity"), "Chunk integrity check failed; retry this chunk"); return@post }
+            var exceedsExpectedSize = false
             synchronized(item) {
-                if (item.received + chunk.size > item.total) { errorJson(HttpStatusCode(413, "Payload Too Large"), "Chunk exceeds expected file size"); return@post }
-                FileOutputStream(item.temp, true).use { it.write(chunk) }
-                item.received += chunk.size
-                val now = System.nanoTime()
-                item.speed = chunk.size * 1_000_000_000L / (now - item.lastChunkAt).coerceAtLeast(1L)
-                item.lastChunkAt = now
+                if (item.received + chunk.size > item.total) {
+                    exceedsExpectedSize = true
+                } else {
+                    FileOutputStream(item.temp, true).use { it.write(chunk) }
+                    item.received += chunk.size
+                    val now = System.nanoTime()
+                    item.speed = chunk.size * 1_000_000_000L / (now - item.lastChunkAt).coerceAtLeast(1L)
+                    item.lastChunkAt = now
+                }
+            }
+            if (exceedsExpectedSize) {
+                call.errorJson(HttpStatusCode(413, "Payload Too Large"), "Chunk exceeds expected file size")
+                return@post
             }
             call.respondText(JSONObject().put("received", item.received).put("total", item.total).toString(), ContentType.Application.Json)
         }
         post("/api/upload/{id}/finish") {
             val id = call.parameters["id"].orEmpty(); val item = uploads[id]
-            if (item == null) { errorJson(HttpStatusCode.NotFound, "Upload not found"); return@post }
+            if (item == null) { call.errorJson(HttpStatusCode.NotFound, "Upload not found"); return@post }
             if (item.status != "uploading" || item.received != item.total || item.temp.length() != item.total) {
-                errorJson(HttpStatusCode.BadRequest, "Upload is incomplete or size verification failed"); return@post
+                call.errorJson(HttpStatusCode.BadRequest, "Upload is incomplete or size verification failed"); return@post
             }
             val target = File(item.temp.parentFile, item.name)
-            if (target.exists() || !item.temp.renameTo(target)) { errorJson(HttpStatusCode.Conflict, "A file with this name already exists"); return@post }
+            if (target.exists() || !item.temp.renameTo(target)) { call.errorJson(HttpStatusCode.Conflict, "A file with this name already exists"); return@post }
             uploads.remove(id); addEvent("Upload completed: " + item.name, "transfer")
             call.respondText(JSONObject().put("id", id).put("name", item.name).put("size", item.received).put("status", "complete").toString(), ContentType.Application.Json)
         }
         delete("/api/upload/{id}") {
             val id = call.parameters["id"].orEmpty(); val item = uploads.remove(id)
-            if (item == null) { errorJson(HttpStatusCode.NotFound, "Upload not found"); return@delete }
+            if (item == null) { call.errorJson(HttpStatusCode.NotFound, "Upload not found"); return@delete }
             item.temp.delete(); addEvent("Upload cancelled: " + item.name, "transfer")
             call.respondText(JSONObject().put("id", id).put("status", "cancelled").toString(), ContentType.Application.Json)
         }
-        post("/api/control") { errorJson(HttpStatusCode.NotImplemented, "Android remote control requires SciNET's Accessibility permission. These controls are available on the Windows host.") }
-        post("/api/screen/offer") { errorJson(HttpStatusCode.NotImplemented, "Start and approve Android screen sharing in the SciNET app first. This browser viewer currently targets the Windows host.") }
+        post("/api/control") { call.errorJson(HttpStatusCode.NotImplemented, "Android remote control requires SciNET's Accessibility permission. These controls are available on the Windows host.") }
+        post("/api/screen/offer") { call.errorJson(HttpStatusCode.NotImplemented, "Start and approve Android screen sharing in the SciNET app first. This browser viewer currently targets the Windows host.") }
         post("/api/screen/stop") { call.respondText(JSONObject().put("ok", true).toString(), ContentType.Application.Json) }
-        get("/api/processes") { errorJson(HttpStatusCode.NotImplemented, "Android process management is not exposed by the SciNET phone web host.") }
-        post("/api/processes/monitor") { errorJson(HttpStatusCode.NotImplemented, "Process monitoring is available on the Windows host only.") }
-        post("/api/processes/action") { errorJson(HttpStatusCode.NotImplemented, "Process actions are available on the Windows host only.") }
+        get("/api/processes") { call.errorJson(HttpStatusCode.NotImplemented, "Android process management is not exposed by the SciNET phone web host.") }
+        post("/api/processes/monitor") { call.errorJson(HttpStatusCode.NotImplemented, "Process monitoring is available on the Windows host only.") }
+        post("/api/processes/action") { call.errorJson(HttpStatusCode.NotImplemented, "Process actions are available on the Windows host only.") }
     }
 
     private fun asset(name: String): String = assetBytes(name).toString(Charsets.UTF_8)
