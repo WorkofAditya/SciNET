@@ -56,7 +56,14 @@ internal class AndroidWebInterface(private val context: Context) {
     private var lastCpuIdle = 0L
 
     fun install(route: Route) = with(route) {
-        get("/") { call.respondText(asset("index.html"), ContentType.Text.Html) }
+        get("/") {
+            val page = asset("index.html")
+            val start = page.indexOf("""<article class="card transfer-card"><div class="section-head"><div><div class="label">TRANSFER SERVICE</div>""")
+            val end = if (start >= 0) page.indexOf("</article>", start) else -1
+            val phoneStorageCard = """<article class="card transfer-card"><div class="section-head"><div><div class="label">PHONE STORAGE</div><h2>Local files</h2></div><span class="pill live">ACTIVE</span></div><p class="ftp-note">Web uploads are saved in this phone's SciNET-Web storage folder.</p></article>"""
+            val rendered = if (start >= 0 && end > start) page.replaceRange(start, end + "</article>".length, phoneStorageCard) else page
+            call.respondText(rendered, ContentType.Text.Html)
+        }
         get("/control") { call.respondText(asset("control.html"), ContentType.Text.Html) }
         get("/files") { call.respondText(asset("files.html").replace("Shared files", "Phone storage"), ContentType.Text.Html) }
         get("/manifest.webmanifest") { call.respondText(asset("manifest.webmanifest"), ContentType.parse("application/manifest+json")) }
@@ -72,7 +79,11 @@ internal class AndroidWebInterface(private val context: Context) {
                 "svg" -> ContentType.parse("image/svg+xml")
                 else -> ContentType.Application.OctetStream
             }
-            call.respondBytes(assetBytes(file), type)
+            if (file == "files.js") {
+                call.respondText(asset(file).replace("Shared files", "Phone storage"), type)
+            } else {
+                call.respondBytes(assetBytes(file), type)
+            }
         }
 
         get("/api/system") {
