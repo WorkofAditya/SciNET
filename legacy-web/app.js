@@ -8,7 +8,66 @@ async function uploadWithProgress(f,row){const start=await fetch('/api/upload/st
 function renderServerUploads(items){for(const i of items){const s=activeUploads.get(i.id);if(!s)continue;s.uploaded=i.size;s.speed=i.speed||s.speed;const total=i.total||s.file.size,v=total?i.size/total*100:0;s.row.querySelector('.upload-track i').style.width=`${v}%`;s.row.querySelector('.upload-percent').textContent=`${Math.floor(v)}%`;s.row.querySelector('.upload-size').textContent=`${formatBytes(i.size)} / ${formatBytes(total)}`;s.row.querySelector('.upload-speed').textContent=formatRate(i.speed||0)}}function uploadFiles(fs){for(const f of fs){const row=createUploadRow(f);uploadWithProgress(f,row).catch(()=>row.querySelector('.upload-status').textContent='Failed')}}
 async function loadEvents(){const r=await fetch('/api/events'),d=await r.json();$('eventList').innerHTML=d.events.length?d.events.slice(0,30).map(e=>`<div class="event-row"><span class="event-time">${new Date(e.time*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span><span class="event-kind">${escapeHtml(e.kind.toUpperCase())}</span><span class="event-message">${escapeHtml(e.message)}</span></div>`).join(''):'<div class="empty">No activity yet.</div>'}let clipboardReconnectDelay=1000,clipboardReconnectTimer=null;function connectClipboardSocket(){if(clipboardSocket&&(clipboardSocket.readyState===WebSocket.OPEN||clipboardSocket.readyState===WebSocket.CONNECTING))return;const protocol=location.protocol==='https:'?'wss':'ws';try{clipboardSocket=new WebSocket(`${protocol}://${location.host}/ws/clipboard`)}catch(e){scheduleClipboardReconnect();return}clipboardSocket.onopen=()=>{clipboardReconnectDelay=1000;$('clipboardState').textContent='CONNECTED'};clipboardSocket.onmessage=e=>{try{const data=JSON.parse(e.data);clipboardLastRemote=data.updated||0;if(document.activeElement!==$('clipboardText'))$('clipboardText').value=data.text||'';$('clipboardState').textContent='CONNECTED'}catch(error){console.warn('Invalid clipboard update',error)}};clipboardSocket.onclose=()=>{$('clipboardState').textContent='RECONNECTING';scheduleClipboardReconnect()};clipboardSocket.onerror=()=>clipboardSocket.close()}function scheduleClipboardReconnect(){if(clipboardReconnectTimer!==null||document.hidden)return;clipboardReconnectTimer=setTimeout(()=>{clipboardReconnectTimer=null;connectClipboardSocket()},clipboardReconnectDelay);clipboardReconnectDelay=Math.min(clipboardReconnectDelay*2,15000)}function sendClipboardLive(){clearTimeout(clipboardTimer);clipboardTimer=setTimeout(()=>{if(clipboardSocket&&clipboardSocket.readyState===WebSocket.OPEN){clipboardSocket.send(JSON.stringify({text:$('clipboardText').value,source:'SciNET web'}));$('clipboardState').textContent='LIVE'}},70)}
 $('fileInput').addEventListener('change',()=>{uploadFiles([...$('fileInput').files]);$('fileInput').value=''});const dropzone=$('dropzone');for(const e of['dragenter','dragover'])dropzone.addEventListener(e,x=>{x.preventDefault();dropzone.classList.add('drag')});for(const e of['dragleave','drop'])dropzone.addEventListener(e,x=>{x.preventDefault();dropzone.classList.remove('drag')});dropzone.addEventListener('drop',e=>uploadFiles([...e.dataTransfer.files]));$('copyAddress').onclick=async()=>{await navigator.clipboard.writeText(location.origin);$('copyAddress').textContent='COPIED';setTimeout(()=>$('copyAddress').textContent='COPY ADDRESS',1200)};$('clipboardText').addEventListener('input',sendClipboardLive);$('clearEvents').onclick=async()=>{await fetch('/api/events',{method:'DELETE'});loadEvents()};
-let systemReconnectDelay=1000,systemReconnectTimer=null,systemSocket=null;function connectSocket(){if(document.hidden)return;const protocol=location.protocol==='https:'?'wss':'ws';try{systemSocket=new WebSocket(`${protocol}://${location.host}/ws`)}catch(error){scheduleSystemReconnect();return}systemSocket.onopen=()=>{systemReconnectDelay=1000;$('connectionText').textContent='ONLINE'};systemSocket.onmessage=e=>{try{updateSystem(JSON.parse(e.data))}catch(error){console.warn('Invalid system update',error)}};systemSocket.onclose=()=>{systemSocket=null;$('connectionText').textContent='IDLE';if(!document.hidden)scheduleSystemReconnect()};systemSocket.onerror=()=>systemSocket.close()}function scheduleSystemReconnect(){if(systemReconnectTimer!==null||document.hidden)return;systemReconnectTimer=setTimeout(()=>{systemReconnectTimer=null;connectSocket()},systemReconnectDelay);systemReconnectDelay=Math.min(systemReconnectDelay*2,15000)}document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(systemReconnectTimer);systemReconnectTimer=null;systemSocket?.close();clipboardSocket?.close();$('connectionText').textContent='IDLE'}else{connectSocket();connectClipboardSocket()}});loadEvents();connectSocket();connectClipboardSocket();
+
+const meshSvgNS='http://www.w3.org/2000/svg';
+function renderMesh(topology){
+ const edgesLayer=$('meshEdges'),nodesLayer=$('meshNodes'),count=$('meshNodeCount');
+ if(!edgesLayer||!nodesLayer||!count)return;
+ edgesLayer.replaceChildren();nodesLayer.replaceChildren();
+ const nodes=Array.isArray(topology?.nodes)?topology.nodes.filter(n=>n&&n.id):[];
+ const links=Array.isArray(topology?.links)?topology.links:[];
+ count.textContent=nodes.length+' '+(nodes.length===1?'NODE':'NODES');
+ const selfId=topology?.selfId||'';
+ const linkKey=(a,b)=>[String(a),String(b)].sort().join('|');
+ const linkMap=new Map(links.map(edge=>[linkKey(edge.a,edge.b),edge]));
+ const centerX=380,centerY=140,rx=nodes.length<=1?0:Math.min(285,105+nodes.length*4),ry=nodes.length<=1?0:Math.min(112,65+nodes.length*1.5);
+ const positions=nodes.map((node,index)=>{
+  const angle=-Math.PI/2+Math.PI*2*index/Math.max(nodes.length,1);
+  return{x:centerX+Math.cos(angle)*rx,y:centerY+Math.sin(angle)*ry};
+ });
+ for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+  const a=nodes[i],b=nodes[j],edge=linkMap.get(linkKey(a.id,b.id));
+  const line=document.createElementNS(meshSvgNS,'line');
+  line.setAttribute('x1',positions[i].x);line.setAttribute('y1',positions[i].y);
+  line.setAttribute('x2',positions[j].x);line.setAttribute('y2',positions[j].y);
+  line.setAttribute('class','mesh-edge '+(edge?.transferring?'transferring':edge?.connected?'connected':'lost'));
+  const tip=document.createElementNS(meshSvgNS,'title');
+  tip.textContent=(a.name||'Device A')+' ↔ '+(b.name||'Device B')+' · '+(edge?.transferring?'TRANSFERRING':edge?.connected?'CONNECTED':'CONNECTION LOST');
+  line.append(tip);edgesLayer.append(line);
+ }
+ nodes.forEach((node,index)=>{
+  const point=positions[index],self=node.id===selfId||node.self===true,online=self||node.connected===true;
+  const group=document.createElementNS(meshSvgNS,'g');
+  group.setAttribute('class','mesh-node '+(self?'self':online?'online':'offline'));
+  const circle=document.createElementNS(meshSvgNS,'circle');
+  circle.setAttribute('cx',point.x);circle.setAttribute('cy',point.y);circle.setAttribute('r','11');
+  const name=document.createElementNS(meshSvgNS,'text');
+  name.setAttribute('x',point.x);name.setAttribute('y',point.y+29);name.setAttribute('class','mesh-node-name');
+  const title=(node.name||'SciNET device').trim();
+  name.textContent=title.length>18?title.slice(0,17)+'…':title;
+  const state=document.createElementNS(meshSvgNS,'text');
+  state.setAttribute('x',point.x);state.setAttribute('y',point.y+43);state.setAttribute('class','mesh-node-state');
+  state.textContent=self?'THIS DEVICE':online?'ONLINE':'OFFLINE';
+  const tip=document.createElementNS(meshSvgNS,'title');tip.textContent=(node.name||'SciNET device')+' · '+(self?'THIS DEVICE':online?'ONLINE':'OFFLINE');
+  group.append(circle,name,state,tip);nodesLayer.append(group);
+ });
+ const graph=$('meshGraph');
+ if(graph)graph.setAttribute('aria-label',nodes.length+' SciNET devices. '+(nodes.length*(nodes.length-1)/2)+' direct device links are displayed.');
+}
+let meshFetchBusy=false;
+async function updateMesh(){
+ if(meshFetchBusy||document.hidden)return;
+ meshFetchBusy=true;
+ try{
+  const response=await fetch('/api/peer/topology',{cache:'no-store'});
+  if(!response.ok)throw new Error('Mesh status unavailable');
+  renderMesh(await response.json());
+ }catch(error){
+  const count=$('meshNodeCount');if(count)count.textContent='MESH OFFLINE';
+ }finally{meshFetchBusy=false}
+}
+
+let systemReconnectDelay=1000,systemReconnectTimer=null,systemSocket=null;function connectSocket(){if(document.hidden)return;const protocol=location.protocol==='https:'?'wss':'ws';try{systemSocket=new WebSocket(`${protocol}://${location.host}/ws`)}catch(error){scheduleSystemReconnect();return}systemSocket.onopen=()=>{systemReconnectDelay=1000;$('connectionText').textContent='ONLINE'};systemSocket.onmessage=e=>{try{updateSystem(JSON.parse(e.data))}catch(error){console.warn('Invalid system update',error)}};systemSocket.onclose=()=>{systemSocket=null;$('connectionText').textContent='IDLE';if(!document.hidden)scheduleSystemReconnect()};systemSocket.onerror=()=>systemSocket.close()}function scheduleSystemReconnect(){if(systemReconnectTimer!==null||document.hidden)return;systemReconnectTimer=setTimeout(()=>{systemReconnectTimer=null;connectSocket()},systemReconnectDelay);systemReconnectDelay=Math.min(systemReconnectDelay*2,15000)}document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(systemReconnectTimer);systemReconnectTimer=null;systemSocket?.close();clipboardSocket?.close();$('connectionText').textContent='IDLE'}else{connectSocket();connectClipboardSocket()}});loadEvents();connectSocket();connectClipboardSocket();updateMesh();setInterval(updateMesh,1500);
 
 const qrModal=$('qrModal'),openQr=$('openQr'),closeQr=$('closeQr');
 function showQr(){const address=`http://${location.hostname}:8000`;$('webAddress').textContent=address;$('qrCode').src=`/api/qr?t=${Date.now()}`;qrModal.hidden=false}
