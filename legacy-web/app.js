@@ -20,7 +20,7 @@ function renderMesh(topology){
  const selfId=topology?.selfId||'';
  const linkKey=(a,b)=>[String(a),String(b)].sort().join('|');
  const linkMap=new Map(links.map(edge=>[linkKey(edge.a,edge.b),edge]));
- const centerX=380,centerY=140,rx=nodes.length<=1?0:Math.min(285,105+nodes.length*4),ry=nodes.length<=1?0:Math.min(112,65+nodes.length*1.5);
+ const centerX=280,centerY=140,rx=nodes.length<=1?0:Math.min(205,75+nodes.length*3),ry=nodes.length<=1?0:Math.min(105,55+nodes.length*1.3);
  const positions=nodes.map((node,index)=>{
   const angle=-Math.PI/2+Math.PI*2*index/Math.max(nodes.length,1);
   return{x:centerX+Math.cos(angle)*rx,y:centerY+Math.sin(angle)*ry};
