@@ -235,3 +235,48 @@ private fun peerFormatBytes(value: Long): String {
     }
     return String.format(java.util.Locale.US, "%.1f %s", amount, units[unit])
 }
+
+
+@Composable
+internal fun PeerDevicesScreen(
+    peers: List<JSONObject>,
+    onOpen: (JSONObject) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        PageHeading("LOCAL NETWORK", "Nearby devices", "Open a paired device to send files directly or download files it has sent you.")
+        if (peers.isEmpty()) {
+            PanelCard {
+                SectionHeading("PEER DISCOVERY", "No devices connected yet")
+                Text("Keep SciNET open on another phone on the same local network. Scan its QR code to pair securely.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+            }
+        } else {
+            peers.forEach { peer ->
+                val trusted = peer.optBoolean("trusted")
+                PanelCard {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(peer.optString("name", "SciNET device"), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                peer.optString("platform", "device").uppercase() + "  ·  " +
+                                    if (peer.optBoolean("connected")) "ONLINE" else "DISCOVERED",
+                                color = Muted,
+                                fontSize = 9.sp,
+                                letterSpacing = 1.sp
+                            )
+                        }
+                        Text(if (trusted) "PAIRED" else "NOT PAIRED", color = if (trusted) Good else Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                    }
+                    if (trusted) {
+                        PrimaryButton("OPEN DEVICE") { onOpen(peer) }
+                    } else {
+                        Text("Scan this device's QR code to establish trust before sending files.", color = Muted, fontSize = 10.sp)
+                    }
+                }
+            }
+        }
+        PanelCard {
+            SectionHeading("DIRECT TRANSFER", "No shared directory")
+            Text("A sender streams a file directly to the paired device. The receiving phone gets an incoming item and chooses where to save it. The PC host's existing file workflow remains separate.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+        }
+    }
+}
