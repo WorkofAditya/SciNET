@@ -3,6 +3,7 @@ package com.workofaditya.scinet
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.net.Uri
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
@@ -12,6 +13,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -80,9 +82,6 @@ private val LabelPaintColor = android.graphics.Color.rgb(177, 190, 202)
 
 private data class PeerTarget(val id: String, val name: String, val isSelf: Boolean = false)
 
-private const val ACTION_RENAME_DEVICE = "com.workofaditya.scinet.RENAME_DEVICE"
-private const val EXTRA_DEVICE_NAME = "device_name"
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -123,18 +122,23 @@ private fun MeshGraphScreen() {
     var pendingFilePeer by remember { mutableStateOf<PeerTarget?>(null) }
     var messageTarget by remember { mutableStateOf<PeerTarget?>(null) }
     var messageDraft by remember { mutableStateOf("") }
-    var renameDialogOpen by remember { mutableStateOf(false) }
-    var deviceNameDraft by remember { mutableStateOf("") }
+    var pendingFileBroadcast by remember { mutableStateOf(false) }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        val target = pendingFilePeer
-        if (uri != null && target != null) {
+        if (uri != null) {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            FileTransferManager.beginOutgoing(context, target.id, target.name, uri)
+            if (pendingFileBroadcast) {
+                FileTransferManager.beginOutgoingToAll(context, uri)
+            } else {
+                pendingFilePeer?.let { target ->
+                    FileTransferManager.beginOutgoing(context, target.id, target.name, uri)
+                }
+            }
         }
         pendingFilePeer = null
+        pendingFileBroadcast = false
     }
 
     LaunchedEffect(Unit) {
@@ -181,7 +185,8 @@ private fun MeshGraphScreen() {
             activeTransfers = transfers.filter { it.status == "transferring" },
             messagePulses = messagePulses,
             onPeerTap = { peer ->
-                pendingFilePeer = peer
+                pendingFilePeer = peer.takeUnless { it.isSelf }
+                pendingFileBroadcast = peer.isSelf
                 filePicker.launch(arrayOf("*/*"))
             },
             onPeerLongPress = { peer ->
@@ -189,8 +194,8 @@ private fun MeshGraphScreen() {
                 messageDraft = ""
             },
             onSelfLongPress = {
-                deviceNameDraft = nodes.firstOrNull { it.optString("id") == selfId }?.optString("name").orEmpty()
-                renameDialogOpen = true
+                messageTarget = PeerTarget(selfId, "All connected devices", isSelf = true)
+                messageDraft = ""
             }
         )
 
@@ -211,52 +216,27 @@ private fun MeshGraphScreen() {
                                 if (item.status == "paused") "resume" else "pause"
                             )
                         },
-                        onCancel = { FileTransferManager.dismissTransfer(context, item.id) }
+                        onCancel = { FileTransferManager.dismissTransfer(context, item.id) },
+                        onOpen = {
+                            item.openUri?.let { openTransferredFile(context, it, item.mimeType) }
+                        }
                     )
                 }
             }
         }
     }
 
-    if (renameDialogOpen) {
-        AlertDialog(
-            onDismissRequest = { renameDialogOpen = false },
-            title = { Text("Rename this device") },
-            text = {
-                OutlinedTextField(
-                    value = deviceNameDraft,
-                    onValueChange = { deviceNameDraft = it.take(40) },
-                    placeholder = { Text("Device name") },
-                    singleLine = true
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = deviceNameDraft.trim().isNotEmpty(),
-                    onClick = {
-                        context.startService(
-                            Intent(context, PeerNetworkService::class.java)
-                                .setAction(ACTION_RENAME_DEVICE)
-                                .putExtra(EXTRA_DEVICE_NAME, deviceNameDraft.trim())
-                        )
-                        renameDialogOpen = false
-                    }
-                ) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { renameDialogOpen = false }) { Text("Cancel") }
-            },
-            containerColor = Color(0xFF121923),
-            titleContentColor = LocalNodeColor,
-            textContentColor = LabelColor
-        )
-    }
-
     if (messageTarget != null) {
         val target = messageTarget!!
         AlertDialog(
             onDismissRequest = { messageTarget = null },
-            title = { Text("Message · " + target.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            title = {
+                Text(
+                    if (target.isSelf) "Broadcast message" else "Message · " + target.name,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
             text = {
                 OutlinedTextField(
                     value = messageDraft,
@@ -270,7 +250,11 @@ private fun MeshGraphScreen() {
                 TextButton(
                     enabled = messageDraft.isNotBlank(),
                     onClick = {
-                        FileTransferManager.sendText(target.id, messageDraft)
+                        if (target.isSelf) {
+                            FileTransferManager.sendTextToAll(messageDraft)
+                        } else {
+                            FileTransferManager.sendText(target.id, messageDraft)
+                        }
                         messageTarget = null
                     }
                 ) { Text("Send") }
@@ -348,7 +332,8 @@ private fun MeshGraphScreen() {
 private fun TransferRow(
     item: TransferUiItem,
     onPauseResume: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onOpen: () -> Unit
 ) {
     val progress = if (item.totalBytes > 0L) {
         item.transferredBytes.toFloat() / item.totalBytes.toFloat()
@@ -366,7 +351,10 @@ private fun TransferRow(
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clickable(
+            enabled = item.status == "completed" && item.openUri != null,
+            onClick = onOpen
+        ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = PanelColor)
     ) {
@@ -681,6 +669,13 @@ private fun findNodeAt(
             y >= baseline - labelSize - 4f && y <= baseline + 5f
         onDot || onLabel
     }?.let { PeerTarget(it.optString("id"), it.optString("name").ifBlank { "SciNET device" }) }
+}
+
+private fun openTransferredFile(context: android.content.Context, uri: Uri, mimeType: String) {
+    val viewIntent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(uri, mimeType.ifBlank { "*/*" })
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    context.startActivity(viewIntent)
 }
 
 private fun formatBytes(bytes: Long): String = when {
