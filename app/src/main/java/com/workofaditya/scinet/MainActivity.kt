@@ -44,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -371,19 +372,32 @@ private fun MeshGraph(
     val labelSize = with(density) { 11.sp.toPx() }
     val peerRadius = with(density) { 7.dp.toPx() }
     val labelOffset = with(density) { 20.dp.toPx() }
+    val currentNodes by rememberUpdatedState(nodes)
+    val currentSelfId by rememberUpdatedState(selfId)
+    val currentLabelSize by rememberUpdatedState(labelSize)
+    val currentPeerRadius by rememberUpdatedState(peerRadius)
+    val currentLabelOffset by rememberUpdatedState(labelOffset)
+    val currentOnPeerTap by rememberUpdatedState(onPeerTap)
+    val currentOnPeerLongPress by rememberUpdatedState(onPeerLongPress)
 
     Canvas(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(nodes, selfId, labelSize, peerRadius, labelOffset) {
+            .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { position ->
-                        findPeerAt(position.x, position.y, nodes, selfId, size.width.toFloat(), size.height.toFloat(),
-                            labelSize, peerRadius, labelOffset)?.let(onPeerTap)
+                        findPeerAt(
+                            position.x, position.y, currentNodes, currentSelfId,
+                            size.width.toFloat(), size.height.toFloat(),
+                            currentLabelSize, currentPeerRadius, currentLabelOffset
+                        )?.let(currentOnPeerTap)
                     },
                     onLongPress = { position ->
-                        findPeerAt(position.x, position.y, nodes, selfId, size.width.toFloat(), size.height.toFloat(),
-                            labelSize, peerRadius, labelOffset)?.let(onPeerLongPress)
+                        findPeerAt(
+                            position.x, position.y, currentNodes, currentSelfId,
+                            size.width.toFloat(), size.height.toFloat(),
+                            currentLabelSize, currentPeerRadius, currentLabelOffset
+                        )?.let(currentOnPeerLongPress)
                     }
                 )
             }
