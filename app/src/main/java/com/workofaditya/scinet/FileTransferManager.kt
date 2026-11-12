@@ -68,7 +68,6 @@ private class TransferRecord(
     val direction: String,
     val mimeType: String,
     val sourceUri: Uri? = null,
-    val sourceFile: File? = null,
     @Volatile var savedUri: Uri? = null,
     @Volatile var completedAt: Long = 0L,
     @Volatile var transferredBytes: Long = 0L,
@@ -142,66 +141,6 @@ internal object FileTransferManager {
         return connectedPeers.count { (peerId, peerName) ->
             beginOutgoing(context, peerId, peerName, uri)
         }
-    }
-
-    /**
-     * Offers the installed APK directly from its private package path to every connected peer.
-     * The payload then follows the exact same offer/accept, 1 MiB raw-HTTP chunk, progress,
-     * pause/resume and completion flow as ordinary file transfers.
-     */
-    fun beginOutgoingFileToAll(file: File, fileName: String, mimeType: String): Int {
-        val fileSize = file.length()
-        if (!file.isFile || !file.canRead() || fileSize <= 0L || fileSize > MAX_FILE_SIZE) return 0
-
-        val connectedPeers = PeerNetworkState.peers.entries
-            .map { it.key to it.value.optString("name").ifBlank { "SciNET device" } }
-            .filter { it.first.isNotBlank() }
-            .distinctBy { it.first }
-
-        return connectedPeers.count { (peerId, peerName) ->
-            beginOutgoingFile(peerId, peerName, file, fileName, mimeType)
-        }
-    }
-
-    private fun beginOutgoingFile(
-        peerId: String,
-        peerName: String,
-        file: File,
-        fileName: String,
-        mimeType: String
-    ): Boolean {
-        val size = file.length()
-        if (!file.isFile || !file.canRead() || size <= 0L || size > MAX_FILE_SIZE) return false
-
-        val safeName = safeFileName(fileName)
-        val id = UUID.randomUUID().toString().replace("-", "")
-        val record = TransferRecord(
-            id = id,
-            peerId = peerId,
-            peerName = peerName,
-            fileName = safeName,
-            totalBytes = size,
-            direction = "outgoing",
-            mimeType = mimeType.ifBlank { "application/octet-stream" },
-            sourceFile = file,
-            status = "offering"
-        )
-        records[id] = record
-
-        val offered = send(
-            peerId,
-            JSONObject()
-                .put("type", "file_offer")
-                .put("transferId", id)
-                .put("fileName", safeName)
-                .put("totalBytes", size)
-                .put("mimeType", record.mimeType)
-        )
-        if (!offered) {
-            record.status = "failed"
-            return false
-        }
-        return true
     }
 
     fun beginOutgoing(context: Context, peerId: String, peerName: String, uri: Uri): Boolean {
@@ -453,16 +392,6 @@ internal object FileTransferManager {
             requestedLength !in 1..MAX_CHUNK_SIZE
         ) return null
         val count = minOf(requestedLength.toLong(), record.totalBytes - offset).toInt()
-        record.sourceFile?.let { sourceFile ->
-            if (!sourceFile.isFile || !sourceFile.canRead()) return null
-            return runCatching {
-                RandomAccessFile(sourceFile, "r").use { source ->
-                    source.seek(offset)
-                    ByteArray(count).also { buffer -> source.readFully(buffer) }
-                }
-            }.getOrNull()
-        }
-
         val uri = record.sourceUri ?: return null
         val descriptor = runCatching { context.contentResolver.openFileDescriptor(uri, "r") }.getOrNull()
         if (descriptor != null) {
