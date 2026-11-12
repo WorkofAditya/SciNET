@@ -50,6 +50,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -62,6 +66,7 @@ import org.json.JSONObject
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.atan2
 
 private val Background = Color(0xFF080B10)
 private val LocalNodeColor = Color(0xFFF0F4F8)
@@ -73,7 +78,10 @@ private val PanelColor = Color(0xF0111720)
 private val LabelColor = Color(0xFFB1BECA)
 private val LabelPaintColor = android.graphics.Color.rgb(177, 190, 202)
 
-private data class PeerTarget(val id: String, val name: String)
+private data class PeerTarget(val id: String, val name: String, val isSelf: Boolean = false)
+
+private const val ACTION_RENAME_DEVICE = "com.workofaditya.scinet.RENAME_DEVICE"
+private const val EXTRA_DEVICE_NAME = "device_name"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -115,6 +123,8 @@ private fun MeshGraphScreen() {
     var pendingFilePeer by remember { mutableStateOf<PeerTarget?>(null) }
     var messageTarget by remember { mutableStateOf<PeerTarget?>(null) }
     var messageDraft by remember { mutableStateOf("") }
+    var renameDialogOpen by remember { mutableStateOf(false) }
+    var deviceNameDraft by remember { mutableStateOf("") }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val target = pendingFilePeer
@@ -177,6 +187,10 @@ private fun MeshGraphScreen() {
             onPeerLongPress = { peer ->
                 messageTarget = peer
                 messageDraft = ""
+            },
+            onSelfLongPress = {
+                deviceNameDraft = nodes.firstOrNull { it.optString("id") == selfId }?.optString("name").orEmpty()
+                renameDialogOpen = true
             }
         )
 
@@ -202,6 +216,40 @@ private fun MeshGraphScreen() {
                 }
             }
         }
+    }
+
+    if (renameDialogOpen) {
+        AlertDialog(
+            onDismissRequest = { renameDialogOpen = false },
+            title = { Text("Rename this device") },
+            text = {
+                OutlinedTextField(
+                    value = deviceNameDraft,
+                    onValueChange = { deviceNameDraft = it.take(40) },
+                    placeholder = { Text("Device name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = deviceNameDraft.trim().isNotEmpty(),
+                    onClick = {
+                        context.startService(
+                            Intent(context, PeerNetworkService::class.java)
+                                .setAction(ACTION_RENAME_DEVICE)
+                                .putExtra(EXTRA_DEVICE_NAME, deviceNameDraft.trim())
+                        )
+                        renameDialogOpen = false
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameDialogOpen = false }) { Text("Cancel") }
+            },
+            containerColor = Color(0xFF121923),
+            titleContentColor = LocalNodeColor,
+            textContentColor = LabelColor
+        )
     }
 
     if (messageTarget != null) {
@@ -379,7 +427,8 @@ private fun MeshGraph(
     activeTransfers: List<TransferUiItem>,
     messagePulses: List<MessagePulse>,
     onPeerTap: (PeerTarget) -> Unit,
-    onPeerLongPress: (PeerTarget) -> Unit
+    onPeerLongPress: (PeerTarget) -> Unit,
+    onSelfLongPress: () -> Unit
 ) {
     val density = LocalDensity.current
     val labelSize = with(density) { 11.sp.toPx() }
@@ -392,6 +441,7 @@ private fun MeshGraph(
     val currentLabelOffset by rememberUpdatedState(labelOffset)
     val currentOnPeerTap by rememberUpdatedState(onPeerTap)
     val currentOnPeerLongPress by rememberUpdatedState(onPeerLongPress)
+    val currentOnSelfLongPress by rememberUpdatedState(onSelfLongPress)
     val hasAnimations = activeTransfers.isNotEmpty() || messagePulses.isNotEmpty()
     var animationTime by remember { mutableStateOf(System.currentTimeMillis()) }
 
@@ -410,18 +460,20 @@ private fun MeshGraph(
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { position ->
-                        findPeerAt(
+                        findNodeAt(
                             position.x, position.y, currentNodes, currentSelfId,
                             size.width.toFloat(), size.height.toFloat(),
                             currentLabelSize, currentPeerRadius, currentLabelOffset
-                        )?.let(currentOnPeerTap)
+                        )?.takeUnless { it.isSelf }?.let(currentOnPeerTap)
                     },
                     onLongPress = { position ->
-                        findPeerAt(
+                        findNodeAt(
                             position.x, position.y, currentNodes, currentSelfId,
                             size.width.toFloat(), size.height.toFloat(),
                             currentLabelSize, currentPeerRadius, currentLabelOffset
-                        )?.let(currentOnPeerLongPress)
+                        )?.let { target ->
+                            if (target.isSelf) currentOnSelfLongPress() else currentOnPeerLongPress(target)
+                        }
                     }
                 )
             }
@@ -456,7 +508,7 @@ private fun MeshGraph(
             val start = if (localToPeer) center else peerPoint
             val end = if (localToPeer) peerPoint else center
             val progress = (animationTime % 1450L).toFloat() / 1450f
-            drawFlash(start, end, progress, 2.4.dp.toPx())
+            drawDataPacket(start, end, progress, 2.4.dp.toPx())
         }
 
         messagePulses.forEach { pulse ->
@@ -466,7 +518,7 @@ private fun MeshGraph(
             val localToPeer = pulse.fromLocal
             val start = if (localToPeer) center else peerPoint
             val end = if (localToPeer) peerPoint else center
-            drawFlash(start, end, age.toFloat() / 700f, 2.8.dp.toPx())
+            drawMessageFlash(start, end, age.toFloat() / 700f, 2.8.dp.toPx())
         }
 
         val nativeCanvas = drawContext.canvas.nativeCanvas
@@ -520,7 +572,34 @@ private fun MeshGraph(
     }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFlash(
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawDataPacket(
+    start: Offset,
+    end: Offset,
+    progress: Float,
+    radius: Float
+) {
+    val dx = end.x - start.x
+    val dy = end.y - start.y
+    val distance = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
+    val point = Offset(start.x + dx * progress, start.y + dy * progress)
+    val angle = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
+    val trailX = dx / distance
+    val trailY = dy / distance
+
+    drawCircle(PeerNodeColor.copy(alpha = 0.34f), radius * 0.62f, Offset(point.x - trailX * radius * 3.1f, point.y - trailY * radius * 3.1f))
+    drawCircle(PeerNodeColor.copy(alpha = 0.58f), radius * 0.82f, Offset(point.x - trailX * radius * 1.8f, point.y - trailY * radius * 1.8f))
+    rotate(degrees = angle, pivot = point) {
+        drawRoundRect(
+            color = PeerNodeColor,
+            topLeft = Offset(point.x - radius * 2f, point.y - radius),
+            size = Size(radius * 4f, radius * 2f),
+            cornerRadius = CornerRadius(radius)
+        )
+        drawCircle(Color.White.copy(alpha = 0.9f), radius * 0.42f, point)
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMessageFlash(
     start: androidx.compose.ui.geometry.Offset,
     end: androidx.compose.ui.geometry.Offset,
     progress: Float,
@@ -558,7 +637,7 @@ private fun graphPeerPositions(
     return positions
 }
 
-private fun findPeerAt(
+private fun findNodeAt(
     x: Float,
     y: Float,
     nodes: List<JSONObject>,
@@ -575,13 +654,32 @@ private fun findPeerAt(
     val peers = allPeers.filter { it.optBoolean("connected") }
     val positions = graphPeerPositions(allPeers, width, height)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = labelSize }
+
+    val selfNode = nodes.firstOrNull { it.optString("id") == selfId || it.optBoolean("self") }
+    if (selfNode != null) {
+        val point = Offset(width / 2f, height / 2f)
+        val name = selfNode.optString("name").ifBlank { "This device" }.take(22)
+        val halfWidth = paint.measureText(name) / 2f + 9f
+        val baseline = point.y + peerRadius * 9f / 7f + labelOffset
+        val selfHitRadius = peerRadius * 24f / 7f
+        val onDot = (x - point.x) * (x - point.x) + (y - point.y) * (y - point.y) <= selfHitRadius * selfHitRadius
+        val onLabel = x >= point.x - halfWidth && x <= point.x + halfWidth &&
+            y >= baseline - labelSize - 4f && y <= baseline + 5f
+        if (onDot || onLabel) {
+            return PeerTarget(selfId, selfNode.optString("name").ifBlank { "This device" }, isSelf = true)
+        }
+    }
+
     return peers.firstOrNull { node ->
         val point = positions[node.optString("id")] ?: return@firstOrNull false
         val name = node.optString("name").ifBlank { "SciNET node" }.take(22)
         val halfWidth = paint.measureText(name) / 2f + 9f
         val baseline = point.y + peerRadius + labelOffset
-        x >= point.x - halfWidth && x <= point.x + halfWidth &&
+        val hitRadius = peerRadius + 12f
+        val onDot = (x - point.x) * (x - point.x) + (y - point.y) * (y - point.y) <= hitRadius * hitRadius
+        val onLabel = x >= point.x - halfWidth && x <= point.x + halfWidth &&
             y >= baseline - labelSize - 4f && y <= baseline + 5f
+        onDot || onLabel
     }?.let { PeerTarget(it.optString("id"), it.optString("name").ifBlank { "SciNET device" }) }
 }
 
