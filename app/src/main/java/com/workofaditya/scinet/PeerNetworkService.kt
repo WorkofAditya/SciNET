@@ -214,6 +214,7 @@ class PeerNetworkService : Service() {
     private var multicastLock: WifiManager.MulticastLock? = null
     private lateinit var deviceId: String
     private lateinit var deviceName: String
+    @Volatile private var reannounceAfterUnregister = false
 
     private val httpClient = OkHttpClient.Builder()
         .pingInterval(20, TimeUnit.SECONDS)
@@ -283,10 +284,18 @@ class PeerNetworkService : Service() {
         }
 
         runCatching { discoveryListener?.let { nsdManager.stopServiceDiscovery(it) } }
-        runCatching { registrationListener?.let { nsdManager.unregisterService(it) } }
+        val oldRegistration = registrationListener
         discoveryListener = null
-        registrationListener = null
-        runCatching { startNsd() }
+        if (oldRegistration != null) {
+            reannounceAfterUnregister = true
+            runCatching { nsdManager.unregisterService(oldRegistration) }
+                .onFailure {
+                    reannounceAfterUnregister = false
+                    startNsd()
+                }
+        } else {
+            startNsd()
+        }
     }
 
     private fun updateRemoteDeviceName(peerId: String, name: String) {
@@ -487,7 +496,12 @@ class PeerNetworkService : Service() {
         registrationListener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(service: NsdServiceInfo) = Unit
             override fun onRegistrationFailed(service: NsdServiceInfo, errorCode: Int) = Unit
-            override fun onServiceUnregistered(service: NsdServiceInfo) = Unit
+            override fun onServiceUnregistered(service: NsdServiceInfo) {
+                if (reannounceAfterUnregister) {
+                    reannounceAfterUnregister = false
+                    startNsd()
+                }
+            }
             override fun onUnregistrationFailed(service: NsdServiceInfo, errorCode: Int) = Unit
         }
 
