@@ -34,7 +34,9 @@ internal data class TransferUiItem(
     val totalBytes: Long,
     val transferredBytes: Long,
     val direction: String,
-    val status: String
+    val status: String,
+    val openUri: Uri?,
+    val mimeType: String
 )
 
 internal data class IncomingTextMessage(
@@ -65,13 +67,17 @@ private class TransferRecord(
     val direction: String,
     val mimeType: String,
     val sourceUri: Uri? = null,
+    @Volatile var savedUri: Uri? = null,
+    @Volatile var completedAt: Long = 0L,
     @Volatile var transferredBytes: Long = 0L,
     @Volatile var status: String
 ) {
     fun snapshot() = TransferUiItem(
         id, peerId, peerName, fileName, totalBytes,
         transferredBytes.coerceIn(0L, totalBytes),
-        direction, status
+        direction, status,
+        if (direction == "outgoing") sourceUri else savedUri,
+        mimeType
     )
 }
 
@@ -96,9 +102,18 @@ internal object FileTransferManager {
         .retryOnConnectionFailure(true)
         .build()
 
-    fun items(): List<TransferUiItem> = records.values
-        .map { synchronized(it) { it.snapshot() } }
-        .sortedBy { it.id }
+    fun items(): List<TransferUiItem> {
+        val now = System.currentTimeMillis()
+        records.entries.removeIf { entry ->
+            val record = entry.value
+            record.status == "completed" &&
+                record.completedAt > 0L &&
+                now - record.completedAt >= 3_000L
+        }
+        return records.values
+            .map { synchronized(it) { it.snapshot() } }
+            .sortedBy { it.id }
+    }
 
     fun pendingMessages(): List<IncomingTextMessage> = messages.toList()
 
@@ -115,6 +130,16 @@ internal object FileTransferManager {
     private fun addMessagePulse(peerId: String, fromLocal: Boolean) {
         pulses.add(MessagePulse(peerId, fromLocal, System.currentTimeMillis()))
         while (pulses.size > 64) pulses.removeAt(0)
+    }
+
+    fun beginOutgoingToAll(context: Context, uri: Uri): Int {
+        val connectedPeers = PeerNetworkState.peers.values
+            .map { it.optString("id") to it.optString("name").ifBlank { "SciNET device" } }
+            .filter { it.first.isNotBlank() }
+            .distinctBy { it.first }
+        return connectedPeers.count { (peerId, peerName) ->
+            beginOutgoing(context, peerId, peerName, uri)
+        }
     }
 
     fun beginOutgoing(context: Context, peerId: String, peerName: String, uri: Uri): Boolean {
@@ -214,6 +239,11 @@ internal object FileTransferManager {
         )
     }
 
+    fun sendTextToAll(text: String): Int {
+        val connectedPeerIds = PeerNetworkState.peers.keys.toList()
+        return connectedPeerIds.count { peerId -> sendText(peerId, text) }
+    }
+
     fun sendText(peerId: String, text: String): Boolean {
         val message = text.trim()
         if (message.isEmpty() || message.length > 16000) return false
@@ -279,6 +309,7 @@ internal object FileTransferManager {
                 records[transferId]?.let {
                     it.transferredBytes = it.totalBytes
                     it.status = "completed"
+                    it.completedAt = System.currentTimeMillis()
                 }
             }
             "file_error" -> records[transferId]?.status = "failed"
@@ -447,6 +478,7 @@ internal object FileTransferManager {
                     context.contentResolver.update(uri, ContentValues().apply {
                         put(MediaStore.MediaColumns.IS_PENDING, 0)
                     }, null, null)
+                    record.savedUri = uri
                 } catch (error: Exception) {
                     context.contentResolver.delete(uri, null, null)
                     throw error
@@ -456,11 +488,18 @@ internal object FileTransferManager {
                     context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
                     "SciNET"
                 ).apply { mkdirs() }
-                part.copyTo(File(directory, record.fileName), overwrite = true)
+                val destination = File(directory, record.fileName)
+                part.copyTo(destination, overwrite = true)
+                record.savedUri = androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    context.packageName + ".files",
+                    destination
+                )
             }
             part.delete()
             record.transferredBytes = record.totalBytes
             record.status = "completed"
+            record.completedAt = System.currentTimeMillis()
             send(record.peerId, JSONObject().put("type", "file_complete").put("transferId", record.id))
         } catch (error: Exception) {
             record.status = "failed"
