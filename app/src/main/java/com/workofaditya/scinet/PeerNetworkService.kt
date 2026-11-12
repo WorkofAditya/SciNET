@@ -274,7 +274,7 @@ class PeerNetworkService : Service() {
                             )
                             return@get
                         }
-                        call.response.header(HttpHeaders.ContentDisposition, "attachment; filename=\\"SciNET.apk\\"")
+                        call.response.header(HttpHeaders.ContentDisposition, "attachment; filename=SciNET.apk")
                         call.respondFile(apk, ContentType.parse("application/vnd.android.package-archive"))
                     }
                     get("/health") {
