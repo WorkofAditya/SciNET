@@ -450,16 +450,6 @@ private fun MeshGraph(
             )
         }
 
-        fun drawFlash(start: androidx.compose.ui.geometry.Offset, end: androidx.compose.ui.geometry.Offset, progress: Float, radius: Float) {
-            val point = androidx.compose.ui.geometry.Offset(
-                start.x + (end.x - start.x) * progress,
-                start.y + (end.y - start.y) * progress
-            )
-            drawCircle(Color.White.copy(alpha = 0.18f), radius = radius * 2.8f, center = point)
-            drawCircle(Color.White.copy(alpha = 0.42f), radius = radius * 1.7f, center = point)
-            drawCircle(Color.White, radius = radius, center = point)
-        }
-
         activeTransfers.forEach { transfer ->
             val peerPoint = positions[transfer.peerId] ?: return@forEach
             val localToPeer = transfer.direction == "outgoing"
@@ -528,6 +518,21 @@ private fun MeshGraph(
             )
         }
     }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFlash(
+    start: androidx.compose.ui.geometry.Offset,
+    end: androidx.compose.ui.geometry.Offset,
+    progress: Float,
+    radius: Float
+) {
+    val point = androidx.compose.ui.geometry.Offset(
+        start.x + (end.x - start.x) * progress,
+        start.y + (end.y - start.y) * progress
+    )
+    drawCircle(Color.White.copy(alpha = 0.18f), radius = radius * 2.8f, center = point)
+    drawCircle(Color.White.copy(alpha = 0.42f), radius = radius * 1.7f, center = point)
+    drawCircle(Color.White, radius = radius, center = point)
 }
 
 private fun graphPeerPositions(
