@@ -11,6 +11,7 @@ import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import java.io.File
+import androidx.core.content.FileProvider
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -698,30 +699,44 @@ private fun shareInstalledApk(context: Context) {
     if (!appInfo.splitSourceDirs.isNullOrEmpty()) {
         Toast.makeText(
             context,
-            "This installation uses split APKs. A single APK cannot be shared.",
+            "This SciNET installation uses split APKs. A single installable APK is not available to share.",
             Toast.LENGTH_LONG
         ).show()
         return
     }
 
-    if (PeerNetworkState.peers.isEmpty()) {
-        Toast.makeText(context, "Connect another SciNET device first", Toast.LENGTH_LONG).show()
-        return
-    }
+    runCatching {
+        val source = File(appInfo.sourceDir)
+        check(source.isFile && source.canRead()) { "Installed APK is not readable" }
 
-    val sent = FileTransferManager.beginOutgoingFileToAll(
-        File(appInfo.sourceDir),
-        "SciNET.apk",
-        "application/vnd.android.package-archive"
-    )
-    if (sent > 0) {
+        val shareDirectory = File(context.cacheDir, "apk-share").apply { mkdirs() }
+        val sharedApk = File(shareDirectory, "SciNET.apk")
+        source.copyTo(sharedApk, overwrite = true)
+
+        val apkUri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.files",
+            sharedApk
+        )
+
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/vnd.android.package-archive"
+            putExtra(Intent.EXTRA_STREAM, apkUri)
+            clipData = android.content.ClipData.newUri(
+                context.contentResolver,
+                "SciNET APK",
+                apkUri
+            )
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        context.startActivity(Intent.createChooser(sendIntent, "Share SciNET"))
+    }.onFailure {
         Toast.makeText(
             context,
-            "SciNET APK offered to $sent device(s). Accept the file on the receiving device.",
+            "Could not share SciNET APK: ${it.message ?: "unknown error"}",
             Toast.LENGTH_LONG
         ).show()
-    } else {
-        Toast.makeText(context, "Could not offer the APK. Check the peer connection and try again.", Toast.LENGTH_LONG).show()
     }
 }
 
