@@ -455,9 +455,9 @@ internal object FileTransferManager {
         record.sourceFile?.let { sourceFile ->
             if (!sourceFile.isFile || !sourceFile.canRead()) return null
             return runCatching {
-                RandomAccessFile(sourceFile, "r").use { file ->
-                    file.seek(offset)
-                    ByteArray(count).also(file::readFully)
+                RandomAccessFile(sourceFile, "r").use { source ->
+                    source.seek(offset)
+                    ByteArray(count).also { buffer -> source.readFully(buffer) }
                 }
             }.getOrNull()
         }
