@@ -67,32 +67,63 @@ internal object InviteApkServer {
 
     private fun findLocalIpv4(context: Context): String? {
         val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val active = manager.activeNetwork
-        if (active != null) {
-            val capabilities = manager.getNetworkCapabilities(active)
-            val properties: LinkProperties? = manager.getLinkProperties(active)
-            val address = properties?.linkAddresses
-                ?.map { it.address }
-                ?.filterIsInstance<Inet4Address>()
-                ?.firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
-            if (address != null && capabilities != null &&
-                (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
-            ) return address.hostAddress
+
+        // On a phone providing a hotspot, activeNetwork can be the mobile-data
+        // network. Its 10.x carrier address is not reachable by hotspot clients.
+        // Prefer addresses assigned to Android's Wi-Fi/AP interfaces instead.
+        val interfaces = try {
+            Collections.list(NetworkInterface.getNetworkInterfaces())
+                .filter { it.isUp && !it.isLoopback }
+                .mapNotNull { networkInterface ->
+                    val addresses = Collections.list(networkInterface.inetAddresses)
+                        .filterIsInstance<Inet4Address>()
+                        .filter { it.isSiteLocalAddress && !it.isLoopbackAddress }
+                    if (addresses.isEmpty()) null else networkInterface.name.lowercase() to addresses
+                }
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        val apInterfacePriority = listOf(
+            "ap0", "swlan0", "wlan1", "wlan0", "softap0", "wifiap"
+        )
+        for (name in apInterfacePriority) {
+            val address = interfaces.firstOrNull { (interfaceName, _) ->
+                interfaceName == name || interfaceName.startsWith("$name.")
+            }?.second?.firstOrNull()
             if (address != null) return address.hostAddress
         }
 
-        return try {
-            Collections.list(NetworkInterface.getNetworkInterfaces())
-                .asSequence()
-                .filter { it.isUp && !it.isLoopback }
-                .flatMap { Collections.list(it.inetAddresses).asSequence() }
-                .filterIsInstance<Inet4Address>()
-                .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
-                ?.hostAddress
-        } catch (_: Exception) {
-            null
+        // Some manufacturers use different AP interface names. Prefer any
+        // non-cellular, non-VPN Wi-Fi-like interface before consulting Android's
+        // active network properties.
+        val likelyWifi = interfaces.firstOrNull { (name, _) ->
+            (name.contains("wlan") || name.contains("wifi") || name.contains("softap") ||
+                name.contains("ap")) &&
+                listOf("rmnet", "ccmni", "pdp", "wwan", "tun", "tap", "p2p", "clat")
+                    .none { name.contains(it) }
+        }?.second?.firstOrNull()
+        if (likelyWifi != null) return likelyWifi.hostAddress
+
+        val active = manager.activeNetwork
+        if (active != null) {
+            val capabilities = manager.getNetworkCapabilities(active)
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
+                capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+            ) {
+                val address = manager.getLinkProperties(active)?.linkAddresses
+                    ?.map { it.address }
+                    ?.filterIsInstance<Inet4Address>()
+                    ?.firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+                if (address != null) return address.hostAddress
+            }
         }
+
+        // Last resort: a private address that is not clearly cellular/VPN.
+        return interfaces.firstOrNull { (name, _) ->
+            listOf("rmnet", "ccmni", "pdp", "wwan", "tun", "tap", "p2p", "clat", "lo")
+                .none { name.contains(it) }
+        }?.second?.firstOrNull()?.hostAddress
     }
 }
 
