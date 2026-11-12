@@ -50,6 +50,8 @@ private const val PEER_SERVICE_TYPE = "_scinet._tcp."
 private const val PEER_PROTOCOL_VERSION = 2
 private const val PEER_CHANNEL_ID = "scinet-mesh-network"
 private const val PEER_NOTIFICATION_ID = 8765
+private const val ACTION_RENAME_DEVICE = "com.workofaditya.scinet.RENAME_DEVICE"
+private const val EXTRA_DEVICE_NAME = "device_name"
 
 internal object PeerNetworkState {
     @Volatile var localDeviceId: String = ""
@@ -249,11 +251,52 @@ class PeerNetworkService : Service() {
         } else {
             startForeground(PEER_NOTIFICATION_ID, notification)
         }
+        if (intent?.action == ACTION_RENAME_DEVICE) {
+            renameLocalDevice(intent.getStringExtra(EXTRA_DEVICE_NAME).orEmpty())
+        }
+        if (intent?.action == ACTION_RENAME_DEVICE) {
+            renameLocalDevice(intent.getStringExtra(EXTRA_DEVICE_NAME).orEmpty())
+        }
         if (httpServer == null) startPeerServer()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun renameLocalDevice(requestedName: String) {
+        val newName = requestedName.trim().take(40)
+        if (newName.isBlank() || newName == deviceName) return
+
+        deviceName = newName
+        getSharedPreferences("scinet-peer", Context.MODE_PRIVATE)
+            .edit()
+            .putString("device_name", newName)
+            .apply()
+        PeerNetworkState.localDeviceName = newName
+
+        val update = JSONObject()
+            .put("type", "device_info")
+            .put("deviceId", deviceId)
+            .put("deviceName", newName)
+        for (peerId in PeerNetworkState.peers.keys) {
+            PeerNetworkState.sendPeerMessage(peerId, update.toString())
+        }
+
+        runCatching { discoveryListener?.let { nsdManager.stopServiceDiscovery(it) } }
+        runCatching { registrationListener?.let { nsdManager.unregisterService(it) } }
+        discoveryListener = null
+        registrationListener = null
+        runCatching { startNsd() }
+    }
+
+    private fun updateRemoteDeviceName(peerId: String, name: String) {
+        val safeName = name.trim().take(80)
+        if (safeName.isBlank()) return
+        PeerNetworkState.peers[peerId]?.put("name", safeName)
+        PeerNetworkState.knownPeers[peerId]
+            ?.put("name", safeName)
+            ?.put("updatedAt", System.currentTimeMillis())
+    }
 
     private fun startPeerServer() {
         try {
@@ -391,6 +434,9 @@ class PeerNetworkService : Service() {
                                 val message = runCatching { JSONObject(frame.readText()) }.getOrNull() ?: continue
                                 PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
                                 FileTransferManager.handleSignal(applicationContext, remoteId, message)
+                                if (message.optString("type") == "device_info" && message.optString("deviceId") == remoteId) {
+                                    updateRemoteDeviceName(remoteId, message.optString("deviceName"))
+                                }
                                 if (message.optString("type") == "heartbeat") {
                                     peerRecord.put("lastSeen", System.currentTimeMillis())
                                     PeerNetworkState.knownPeers[remoteId]
@@ -575,6 +621,11 @@ class PeerNetworkService : Service() {
                         PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
                         FileTransferManager.handleSignal(applicationContext, peer.id, message)
                         when (message.optString("type")) {
+                            "device_info" -> {
+                                if (message.optString("deviceId") == peer.id) {
+                                    updateRemoteDeviceName(peer.id, message.optString("deviceName"))
+                                }
+                            }
                             "welcome" -> {
                                 if (message.optString("deviceId") != peer.id ||
                                     message.optInt("protocolVersion", -1) != PEER_PROTOCOL_VERSION
