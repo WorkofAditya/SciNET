@@ -150,7 +150,8 @@ internal object FileTransferManager {
      * pause/resume and completion flow as ordinary file transfers.
      */
     fun beginOutgoingFileToAll(file: File, fileName: String, mimeType: String): Int {
-        if (!file.isFile || !file.canRead() || file.length() !in 1..MAX_FILE_SIZE) return 0
+        val fileSize = file.length()
+        if (!file.isFile || !file.canRead() || fileSize <= 0L || fileSize > MAX_FILE_SIZE) return 0
 
         val connectedPeers = PeerNetworkState.peers.entries
             .map { it.key to it.value.optString("name").ifBlank { "SciNET device" } }
@@ -170,7 +171,7 @@ internal object FileTransferManager {
         mimeType: String
     ): Boolean {
         val size = file.length()
-        if (!file.isFile || !file.canRead() || size !in 1..MAX_FILE_SIZE) return false
+        if (!file.isFile || !file.canRead() || size <= 0L || size > MAX_FILE_SIZE) return false
 
         val safeName = safeFileName(fileName)
         val id = UUID.randomUUID().toString().replace("-", "")
