@@ -110,6 +110,7 @@ private fun MeshGraphScreen() {
     val context = LocalContext.current
     var topology by remember { mutableStateOf(JSONObject()) }
     var transfers by remember { mutableStateOf(emptyList<TransferUiItem>()) }
+    var messagePulses by remember { mutableStateOf(emptyList<MessagePulse>()) }
     var incomingMessage by remember { mutableStateOf<IncomingTextMessage?>(null) }
     var pendingFilePeer by remember { mutableStateOf<PeerTarget?>(null) }
     var messageTarget by remember { mutableStateOf<PeerTarget?>(null) }
@@ -137,6 +138,13 @@ private fun MeshGraphScreen() {
         }
     }
 
+    LaunchedEffect(Unit) {
+        while (true) {
+            messagePulses = FileTransferManager.messagePulses()
+            delay(40)
+        }
+    }
+
     val nodes = remember(topology) {
         val array = topology.optJSONArray("nodes")
         if (array == null) emptyList() else
@@ -160,6 +168,8 @@ private fun MeshGraphScreen() {
             nodes = nodes,
             links = links,
             selfId = selfId,
+            activeTransfers = transfers.filter { it.status == "transferring" },
+            messagePulses = messagePulses,
             onPeerTap = { peer ->
                 pendingFilePeer = peer
                 filePicker.launch(arrayOf("*/*"))
@@ -366,6 +376,8 @@ private fun MeshGraph(
     nodes: List<JSONObject>,
     links: List<JSONObject>,
     selfId: String,
+    activeTransfers: List<TransferUiItem>,
+    messagePulses: List<MessagePulse>,
     onPeerTap: (PeerTarget) -> Unit,
     onPeerLongPress: (PeerTarget) -> Unit
 ) {
@@ -380,6 +392,17 @@ private fun MeshGraph(
     val currentLabelOffset by rememberUpdatedState(labelOffset)
     val currentOnPeerTap by rememberUpdatedState(onPeerTap)
     val currentOnPeerLongPress by rememberUpdatedState(onPeerLongPress)
+    val hasAnimations = activeTransfers.isNotEmpty() || messagePulses.isNotEmpty()
+    var animationTime by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(hasAnimations) {
+        if (hasAnimations) {
+            while (true) {
+                animationTime = System.currentTimeMillis()
+                delay(16)
+            }
+        }
+    }
 
     Canvas(
         modifier = Modifier
@@ -408,7 +431,7 @@ private fun MeshGraph(
             .filterNot { it.optString("id") == selfId || it.optBoolean("self") }
             .sortedBy { it.optString("id") }
         val positions = graphPeerPositions(
-            peers, size.width, size.height, labelOffset
+            peers, size.width, size.height
         ).toMutableMap()
         nodes.firstOrNull { it.optString("id") == selfId || it.optBoolean("self") }?.let {
             positions[it.optString("id")] = center
@@ -425,6 +448,35 @@ private fun MeshGraph(
                 end = b,
                 strokeWidth = if (connected) 1.6.dp.toPx() else 1.dp.toPx()
             )
+        }
+
+        fun drawFlash(start: androidx.compose.ui.geometry.Offset, end: androidx.compose.ui.geometry.Offset, progress: Float, radius: Float) {
+            val point = androidx.compose.ui.geometry.Offset(
+                start.x + (end.x - start.x) * progress,
+                start.y + (end.y - start.y) * progress
+            )
+            drawCircle(Color.White.copy(alpha = 0.18f), radius = radius * 2.8f, center = point)
+            drawCircle(Color.White.copy(alpha = 0.42f), radius = radius * 1.7f, center = point)
+            drawCircle(Color.White, radius = radius, center = point)
+        }
+
+        activeTransfers.forEach { transfer ->
+            val peerPoint = positions[transfer.peerId] ?: return@forEach
+            val localToPeer = transfer.direction == "outgoing"
+            val start = if (localToPeer) center else peerPoint
+            val end = if (localToPeer) peerPoint else center
+            val progress = (animationTime % 1450L).toFloat() / 1450f
+            drawFlash(start, end, progress, 2.4.dp.toPx())
+        }
+
+        messagePulses.forEach { pulse ->
+            val age = (animationTime - pulse.createdAt).coerceAtLeast(0L)
+            if (age > 700L) return@forEach
+            val peerPoint = positions[pulse.peerId] ?: return@forEach
+            val localToPeer = pulse.fromLocal
+            val start = if (localToPeer) center else peerPoint
+            val end = if (localToPeer) peerPoint else center
+            drawFlash(start, end, age.toFloat() / 700f, 2.8.dp.toPx())
         }
 
         val nativeCanvas = drawContext.canvas.nativeCanvas
@@ -481,8 +533,7 @@ private fun MeshGraph(
 private fun graphPeerPositions(
     peers: List<JSONObject>,
     width: Float,
-    height: Float,
-    labelOffset: Float
+    height: Float
 ): Map<String, androidx.compose.ui.geometry.Offset> {
     val centerX = width / 2f
     val centerY = height / 2f
@@ -517,7 +568,7 @@ private fun findPeerAt(
         .filterNot { it.optString("id") == selfId || it.optBoolean("self") }
         .filter { it.optBoolean("connected") }
         .sortedBy { it.optString("id") }
-    val positions = graphPeerPositions(peers, width, height, labelOffset)
+    val positions = graphPeerPositions(peers, width, height)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = labelSize }
     return peers.firstOrNull { node ->
         val point = positions[node.optString("id")] ?: return@firstOrNull false
