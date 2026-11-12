@@ -18,7 +18,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.File
 import java.io.InputStream
@@ -43,6 +42,13 @@ internal data class IncomingTextMessage(
     val id: String,
     val peerName: String,
     val text: String
+)
+
+internal data class MessagePulse(
+    val id: String,
+    val peerId: String,
+    val fromLocal: Boolean,
+    val createdAt: Long
 )
 
 internal data class ChunkWriteResult(
@@ -83,6 +89,7 @@ internal object FileTransferManager {
 
     private val records = ConcurrentHashMap<String, TransferRecord>()
     private val messages = CopyOnWriteArrayList<IncomingTextMessage>()
+    private val pulses = CopyOnWriteArrayList<MessagePulse>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)
@@ -90,7 +97,6 @@ internal object FileTransferManager {
         .writeTimeout(0, TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(true)
         .build()
-    private val binaryType = "application/octet-stream".toMediaType()
 
     fun items(): List<TransferUiItem> = records.values
         .map { synchronized(it) { it.snapshot() } }
@@ -100,6 +106,17 @@ internal object FileTransferManager {
 
     fun dismissMessage(id: String) {
         messages.removeIf { it.id == id }
+    }
+
+    fun messagePulses(): List<MessagePulse> {
+        val now = System.currentTimeMillis()
+        pulses.removeIf { now - it.createdAt > 900L }
+        return pulses.toList()
+    }
+
+    private fun addMessagePulse(peerId: String, fromLocal: Boolean) {
+        pulses.add(MessagePulse(UUID.randomUUID().toString(), peerId, fromLocal, System.currentTimeMillis()))
+        while (pulses.size > 64) pulses.removeAt(0)
     }
 
     fun beginOutgoing(context: Context, peerId: String, peerName: String, uri: Uri): Boolean {
@@ -202,13 +219,15 @@ internal object FileTransferManager {
     fun sendText(peerId: String, text: String): Boolean {
         val message = text.trim()
         if (message.isEmpty() || message.length > 16000) return false
-        return send(
+        val sent = send(
             peerId,
             JSONObject()
                 .put("type", "text_message")
                 .put("messageId", UUID.randomUUID().toString())
                 .put("text", message)
         )
+        if (sent) addMessagePulse(peerId, fromLocal = true)
+        return sent
     }
 
     fun handleSignal(context: Context, peerId: String, message: JSONObject) {
@@ -271,6 +290,7 @@ internal object FileTransferManager {
                     val peerName = PeerNetworkState.peers[peerId]?.optString("name")?.ifBlank { "SciNET device" }
                         ?: "SciNET device"
                     messages.add(IncomingTextMessage(message.optString("messageId").ifBlank { UUID.randomUUID().toString() }, peerName, text))
+                    addMessagePulse(peerId, fromLocal = false)
                 }
             }
         }
