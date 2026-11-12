@@ -255,9 +255,6 @@ class PeerNetworkService : Service() {
         if (intent?.action == ACTION_RENAME_DEVICE) {
             renameLocalDevice(intent.getStringExtra(EXTRA_DEVICE_NAME).orEmpty())
         }
-        if (intent?.action == ACTION_RENAME_DEVICE) {
-            renameLocalDevice(intent.getStringExtra(EXTRA_DEVICE_NAME).orEmpty())
-        }
         if (httpServer == null) startPeerServer()
         return START_STICKY
     }
@@ -502,7 +499,12 @@ class PeerNetworkService : Service() {
                     startNsd()
                 }
             }
-            override fun onUnregistrationFailed(service: NsdServiceInfo, errorCode: Int) = Unit
+            override fun onUnregistrationFailed(service: NsdServiceInfo, errorCode: Int) {
+                if (reannounceAfterUnregister) {
+                    reannounceAfterUnregister = false
+                    startNsd()
+                }
+            }
         }
 
         discoveryListener = object : NsdManager.DiscoveryListener {
