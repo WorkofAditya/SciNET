@@ -3,7 +3,4 @@
     <external-files-path
         name="scinet_downloads"
         path="Download/" />
-    <cache-path
-        name="scinet_apk_share"
-        path="apk-share/" />
 </paths>
