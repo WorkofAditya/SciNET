@@ -70,7 +70,8 @@ private val OfflineNodeColor = Color(0xFF596575)
 private val ActiveLinkColor = Color(0xFF6CA995)
 private val InactiveLinkColor = Color(0xFF35404D)
 private val PanelColor = Color(0xF0111720)
-private val LabelColor = android.graphics.Color.rgb(177, 190, 202)
+private val LabelColor = Color(0xFFB1BECA)
+private val LabelPaintColor = android.graphics.Color.rgb(177, 190, 202)
 
 private data class PeerTarget(val id: String, val name: String)
 
@@ -428,7 +429,7 @@ private fun MeshGraph(
 
         val nativeCanvas = drawContext.canvas.nativeCanvas
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = LabelColor
+            color = LabelPaintColor
             textSize = labelSize
             textAlign = Paint.Align.CENTER
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
