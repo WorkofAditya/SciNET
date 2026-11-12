@@ -452,7 +452,7 @@ private fun MeshGraph(
                             position.x, position.y, currentNodes, currentSelfId,
                             size.width.toFloat(), size.height.toFloat(),
                             currentLabelSize, currentPeerRadius, currentLabelOffset
-                        )?.takeUnless { it.isSelf }?.let(currentOnPeerTap)
+                        )?.let(currentOnPeerTap)
                     },
                     onLongPress = { position ->
                         findNodeAt(
