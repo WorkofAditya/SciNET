@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
@@ -675,7 +676,10 @@ private fun openTransferredFile(context: android.content.Context, uri: Uri, mime
     val viewIntent = Intent(Intent.ACTION_VIEW)
         .setDataAndType(uri, mimeType.ifBlank { "*/*" })
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    context.startActivity(viewIntent)
+    runCatching { context.startActivity(viewIntent) }
+        .onFailure {
+            Toast.makeText(context, "No app can open this file", Toast.LENGTH_SHORT).show()
+        }
 }
 
 private fun formatBytes(bytes: Long): String = when {
