@@ -44,7 +44,6 @@ internal data class IncomingTextMessage(
 )
 
 internal data class MessagePulse(
-    val id: String,
     val peerId: String,
     val fromLocal: Boolean,
     val createdAt: Long
@@ -114,7 +113,7 @@ internal object FileTransferManager {
     }
 
     private fun addMessagePulse(peerId: String, fromLocal: Boolean) {
-        pulses.add(MessagePulse(UUID.randomUUID().toString(), peerId, fromLocal, System.currentTimeMillis()))
+        pulses.add(MessagePulse(peerId, fromLocal, System.currentTimeMillis()))
         while (pulses.size > 64) pulses.removeAt(0)
     }
 
