@@ -13,6 +13,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.cio.*
@@ -260,6 +261,22 @@ class PeerNetworkService : Service() {
                     maxFrameSize = 64L * 1024L
                 }
                 routing {
+
+                    get("/apk/{token}/SciNET.apk") {
+                        val remoteHost = call.request.local.remoteHost
+                        val token = call.parameters["token"].orEmpty()
+                        val apk = ApkBootstrap.fileForToken(token)
+                        if (!isPrivateLanAddress(remoteHost) || apk == null || !apk.isFile || !apk.canRead()) {
+                            call.respondText(
+                                "This SciNET APK link is invalid or has expired.",
+                                ContentType.Text.Plain,
+                                HttpStatusCode.Forbidden
+                            )
+                            return@get
+                        }
+                        call.response.header(HttpHeaders.ContentDisposition, "attachment; filename=\\"SciNET.apk\\"")
+                        call.respondFile(apk, ContentType.parse("application/vnd.android.package-archive"))
+                    }
                     get("/health") {
                         call.respondText(
                             JSONObject()
