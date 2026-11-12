@@ -518,7 +518,9 @@ private fun MeshGraph(
                             position.x, position.y, currentNodes, currentSelfId,
                             size.width.toFloat(), size.height.toFloat(),
                             currentLabelSize, currentPeerRadius, currentLabelOffset
-                        )?.takeIf { it.isSelf }?.let { currentOnSelfDoubleTap() }
+                        )?.let { target ->
+                            if (target.isSelf) currentOnSelfDoubleTap() else currentOnPeerTap(target)
+                        }
                     },
                     onTap = { position ->
                         findNodeAt(
