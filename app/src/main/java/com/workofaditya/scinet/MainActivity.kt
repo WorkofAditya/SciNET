@@ -1,16 +1,43 @@
 package com.workofaditya.scinet
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
-import android.os.Build
-import android.os.Bundle
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.os.Build
+import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -18,10 +45,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -36,7 +68,10 @@ private val PeerNodeColor = Color(0xFF83C9B0)
 private val OfflineNodeColor = Color(0xFF596575)
 private val ActiveLinkColor = Color(0xFF6CA995)
 private val InactiveLinkColor = Color(0xFF35404D)
+private val PanelColor = Color(0xF0111720)
 private val LabelColor = android.graphics.Color.rgb(177, 190, 202)
+
+private data class PeerTarget(val id: String, val name: String)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,10 +95,7 @@ class MainActivity : ComponentActivity() {
                     onSurface = LocalNodeColor
                 )
             ) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = Background
-                ) {
+                Surface(modifier = Modifier.fillMaxSize(), color = Background) {
                     MeshGraphScreen()
                 }
             }
@@ -73,12 +105,33 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun MeshGraphScreen() {
+    val context = LocalContext.current
     var topology by remember { mutableStateOf(JSONObject()) }
+    var transfers by remember { mutableStateOf(emptyList<TransferUiItem>()) }
+    var incomingMessage by remember { mutableStateOf<IncomingTextMessage?>(null) }
+    var pendingFilePeer by remember { mutableStateOf<PeerTarget?>(null) }
+    var messageTarget by remember { mutableStateOf<PeerTarget?>(null) }
+    var messageDraft by remember { mutableStateOf("") }
+
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val target = pendingFilePeer
+        if (uri != null && target != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            FileTransferManager.beginOutgoing(context, target.id, target.name, uri)
+        }
+        pendingFilePeer = null
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
             topology = PeerNetworkState.topology()
-            delay(800)
+            transfers = FileTransferManager.items()
+            if (incomingMessage == null) {
+                incomingMessage = FileTransferManager.pendingMessages().firstOrNull()
+            }
+            delay(300)
         }
     }
 
@@ -96,48 +149,257 @@ private fun MeshGraphScreen() {
                 array.optJSONObject(index)?.let { JSONObject(it.toString()) }
             }
     }
+    val selfId = topology.optString("selfId")
+    val visibleTransfers = transfers.filter { it.status != "offered" }.takeLast(3)
+    val offeredFile = transfers.firstOrNull { it.direction == "incoming" && it.status == "offered" }
 
-    MeshGraph(
-        nodes = nodes,
-        links = links,
-        selfId = topology.optString("selfId")
-    )
+    Box(modifier = Modifier.fillMaxSize()) {
+        MeshGraph(
+            nodes = nodes,
+            links = links,
+            selfId = selfId,
+            onPeerTap = { peer ->
+                pendingFilePeer = peer
+                filePicker.launch(arrayOf("*/*"))
+            },
+            onPeerLongPress = { peer ->
+                messageTarget = peer
+                messageDraft = ""
+            }
+        )
+
+        if (visibleTransfers.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                visibleTransfers.forEach { item ->
+                    TransferRow(
+                        item = item,
+                        onPauseResume = {
+                            FileTransferManager.control(
+                                context, item.id,
+                                if (item.status == "paused") "resume" else "pause"
+                            )
+                        },
+                        onCancel = { FileTransferManager.dismissTransfer(context, item.id) }
+                    )
+                }
+            }
+        }
+    }
+
+    if (messageTarget != null) {
+        val target = messageTarget!!
+        AlertDialog(
+            onDismissRequest = { messageTarget = null },
+            title = { Text("Message · " + target.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            text = {
+                OutlinedTextField(
+                    value = messageDraft,
+                    onValueChange = { messageDraft = it.take(16000) },
+                    placeholder = { Text("Write a message") },
+                    minLines = 2,
+                    maxLines = 6
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = messageDraft.isNotBlank(),
+                    onClick = {
+                        FileTransferManager.sendText(target.id, messageDraft)
+                        messageTarget = null
+                    }
+                ) { Text("Send") }
+            },
+            dismissButton = {
+                TextButton(onClick = { messageTarget = null }) { Text("Cancel") }
+            },
+            containerColor = Color(0xFF121923),
+            titleContentColor = LocalNodeColor,
+            textContentColor = LabelColor
+        )
+    }
+
+    if (incomingMessage != null) {
+        val message = incomingMessage!!
+        AlertDialog(
+            onDismissRequest = {
+                FileTransferManager.dismissMessage(message.id)
+                incomingMessage = null
+            },
+            title = { Text("Message · " + message.peerName) },
+            text = { Text(message.text) },
+            confirmButton = {
+                TextButton(onClick = {
+                    context.getSystemService(ClipboardManager::class.java)
+                        .setPrimaryClip(ClipData.newPlainText("SciNET message", message.text))
+                    FileTransferManager.dismissMessage(message.id)
+                    incomingMessage = null
+                }) {
+                    Text("Copy")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    FileTransferManager.dismissMessage(message.id)
+                    incomingMessage = null
+                }) { Text("Close") }
+            },
+            containerColor = Color(0xFF121923),
+            titleContentColor = LocalNodeColor,
+            textContentColor = LabelColor
+        )
+    } else if (offeredFile != null) {
+        AlertDialog(
+            onDismissRequest = { FileTransferManager.declineIncoming(offeredFile.id) },
+            title = { Text("Incoming file") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(offeredFile.fileName, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        offeredFile.peerName + " · " + formatBytes(offeredFile.totalBytes),
+                        color = LabelColor,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { FileTransferManager.acceptIncoming(context, offeredFile.id) }) {
+                    Text("Accept")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { FileTransferManager.declineIncoming(offeredFile.id) }) {
+                    Text("Decline")
+                }
+            },
+            containerColor = Color(0xFF121923),
+            titleContentColor = LocalNodeColor,
+            textContentColor = LabelColor
+        )
+    }
+}
+
+@Composable
+private fun TransferRow(
+    item: TransferUiItem,
+    onPauseResume: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val progress = if (item.totalBytes > 0L) {
+        item.transferredBytes.toFloat() / item.totalBytes.toFloat()
+    } else if (item.status == "completed") 1f else 0f
+    val terminal = item.status in setOf("completed", "cancelled", "rejected", "failed")
+    val statusLabel = when (item.status) {
+        "offering" -> "Waiting"
+        "paused" -> "Paused"
+        "verifying" -> "Saving"
+        "completed" -> "Complete"
+        "cancelled" -> "Cancelled"
+        "rejected" -> "Declined"
+        "failed" -> "Failed"
+        else -> formatBytes(item.transferredBytes) + " / " + formatBytes(item.totalBytes)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = PanelColor)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    item.fileName,
+                    color = LocalNodeColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.weight(1f).height(3.dp),
+                        color = PeerNodeColor,
+                        trackColor = InactiveLinkColor
+                    )
+                    Text(
+                        statusLabel,
+                        color = LabelColor,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1
+                    )
+                }
+            }
+            if (!terminal && item.status != "offering" && item.status != "verifying") {
+                IconButton(onClick = onPauseResume, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        imageVector = if (item.status == "paused") Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = if (item.status == "paused") "Resume transfer" else "Pause transfer",
+                        tint = LocalNodeColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            IconButton(onClick = onCancel, modifier = Modifier.size(34.dp)) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = if (terminal) "Dismiss transfer" else "Cancel transfer",
+                    tint = LabelColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
 }
 
 @Composable
 private fun MeshGraph(
     nodes: List<JSONObject>,
     links: List<JSONObject>,
-    selfId: String
+    selfId: String,
+    onPeerTap: (PeerTarget) -> Unit,
+    onPeerLongPress: (PeerTarget) -> Unit
 ) {
-    Canvas(modifier = Modifier.fillMaxSize()) {
+    val density = LocalDensity.current
+    val labelSize = with(density) { 11.sp.toPx() }
+    val peerRadius = with(density) { 7.dp.toPx() }
+    val labelOffset = with(density) { 20.dp.toPx() }
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(nodes, selfId, labelSize, peerRadius, labelOffset) {
+                detectTapGestures(
+                    onTap = { position ->
+                        findPeerAt(position.x, position.y, nodes, selfId, size.width.toFloat(), size.height.toFloat(),
+                            labelSize, peerRadius, labelOffset)?.let(onPeerTap)
+                    },
+                    onLongPress = { position ->
+                        findPeerAt(position.x, position.y, nodes, selfId, size.width.toFloat(), size.height.toFloat(),
+                            labelSize, peerRadius, labelOffset)?.let(onPeerLongPress)
+                    }
+                )
+            }
+    ) {
         val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
-        val self = nodes.firstOrNull {
-            it.optString("id") == selfId || it.optBoolean("self")
-        }
         val peers = nodes
             .filterNot { it.optString("id") == selfId || it.optBoolean("self") }
             .sortedBy { it.optString("id") }
-
-        val positions = HashMap<String, androidx.compose.ui.geometry.Offset>()
-        if (self != null && selfId.isNotBlank()) positions[selfId] = center
-        else if (self != null) positions[self.optString("id")] = center
-
-        val availableRadius = minOf(size.width, size.height) * 0.37f
-        peers.forEachIndexed { index, node ->
-            val ring = index / 10
-            val indexInRing = index % 10
-            val countInRing = minOf(10, peers.size - ring * 10)
-            val ringRadius = availableRadius * (0.72f + ring * 0.34f)
-            val angle = -PI / 2.0 + (2.0 * PI * indexInRing / countInRing)
-            val point = androidx.compose.ui.geometry.Offset(
-                center.x + cos(angle).toFloat() * ringRadius,
-                center.y + sin(angle).toFloat() * ringRadius
-            )
-            positions[node.optString("id")] = point
+        val positions = graphPeerPositions(
+            peers, size.width, size.height, labelOffset
+        ).toMutableMap()
+        nodes.firstOrNull { it.optString("id") == selfId || it.optBoolean("self") }?.let {
+            positions[it.optString("id")] = center
         }
+        if (selfId.isNotBlank()) positions[selfId] = center
 
-        // Draw only links that are actually present in the reported topology.
         links.forEach { link ->
             val a = positions[link.optString("a")] ?: return@forEach
             val b = positions[link.optString("b")] ?: return@forEach
@@ -153,7 +415,7 @@ private fun MeshGraph(
         val nativeCanvas = drawContext.canvas.nativeCanvas
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = LabelColor
-            textSize = 11.sp.toPx()
+            textSize = labelSize
             textAlign = Paint.Align.CENTER
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         }
@@ -168,7 +430,7 @@ private fun MeshGraph(
                 isConnected -> PeerNodeColor
                 else -> OfflineNodeColor
             }
-            val radius = if (isSelf) 9.dp.toPx() else 7.dp.toPx()
+            val radius = if (isSelf) 9.dp.toPx() else peerRadius
 
             if (isSelf) {
                 drawCircle(
@@ -190,21 +452,71 @@ private fun MeshGraph(
                 )
             }
 
-            drawCircle(
-                color = nodeColor,
-                radius = radius,
-                center = point
-            )
-
-            val name = node.optString("name")
-                .ifBlank { "SciNET node" }
-                .take(22)
+            drawCircle(color = nodeColor, radius = radius, center = point)
             nativeCanvas.drawText(
-                name,
+                node.optString("name").ifBlank { "SciNET node" }.take(22),
                 point.x,
-                point.y + radius + 20.dp.toPx(),
+                point.y + radius + labelOffset,
                 labelPaint
             )
         }
     }
+}
+
+private fun graphPeerPositions(
+    peers: List<JSONObject>,
+    width: Float,
+    height: Float,
+    labelOffset: Float
+): Map<String, androidx.compose.ui.geometry.Offset> {
+    val centerX = width / 2f
+    val centerY = height / 2f
+    val availableRadius = minOf(width, height) * 0.37f
+    val positions = HashMap<String, androidx.compose.ui.geometry.Offset>()
+    peers.forEachIndexed { index, node ->
+        val ring = index / 10
+        val indexInRing = index % 10
+        val countInRing = minOf(10, peers.size - ring * 10)
+        val ringRadius = availableRadius * (0.72f + ring * 0.34f)
+        val angle = -PI / 2.0 + (2.0 * PI * indexInRing / countInRing)
+        positions[node.optString("id")] = androidx.compose.ui.geometry.Offset(
+            centerX + cos(angle).toFloat() * ringRadius,
+            centerY + sin(angle).toFloat() * ringRadius
+        )
+    }
+    return positions
+}
+
+private fun findPeerAt(
+    x: Float,
+    y: Float,
+    nodes: List<JSONObject>,
+    selfId: String,
+    width: Float,
+    height: Float,
+    labelSize: Float,
+    peerRadius: Float,
+    labelOffset: Float
+): PeerTarget? {
+    val peers = nodes
+        .filterNot { it.optString("id") == selfId || it.optBoolean("self") }
+        .filter { it.optBoolean("connected") }
+        .sortedBy { it.optString("id") }
+    val positions = graphPeerPositions(peers, width, height, labelOffset)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = labelSize }
+    return peers.firstOrNull { node ->
+        val point = positions[node.optString("id")] ?: return@firstOrNull false
+        val name = node.optString("name").ifBlank { "SciNET node" }.take(22)
+        val halfWidth = paint.measureText(name) / 2f + 9f
+        val baseline = point.y + peerRadius + labelOffset
+        x >= point.x - halfWidth && x <= point.x + halfWidth &&
+            y >= baseline - labelSize - 4f && y <= baseline + 5f
+    }?.let { PeerTarget(it.optString("id"), it.optString("name").ifBlank { "SciNET device" }) }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L -> String.format("%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+    bytes >= 1024L * 1024L -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> String.format("%.0f KB", bytes / 1024.0)
+    else -> bytes.toString() + " B"
 }

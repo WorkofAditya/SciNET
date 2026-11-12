@@ -13,6 +13,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.cio.*
 import io.ktor.server.engine.*
@@ -46,19 +47,30 @@ import kotlin.time.Duration.Companion.seconds
 
 private const val PEER_PORT = 8765
 private const val PEER_SERVICE_TYPE = "_scinet._tcp."
-private const val PEER_PROTOCOL_VERSION = 1
+private const val PEER_PROTOCOL_VERSION = 2
 private const val PEER_CHANNEL_ID = "scinet-mesh-network"
 private const val PEER_NOTIFICATION_ID = 8765
 
 internal object PeerNetworkState {
     @Volatile var localDeviceId: String = ""
-    @Volatile var serverRunning: Boolean = false
     @Volatile var localDeviceName: String = "Android device"
 
     val peers = ConcurrentHashMap<String, JSONObject>()
     val knownPeers = ConcurrentHashMap<String, JSONObject>()
     val reportedNodes = ConcurrentHashMap<String, JSONObject>()
     val reportedLinks = ConcurrentHashMap<String, JSONObject>()
+    private val messageSenders = ConcurrentHashMap<String, (String) -> Boolean>()
+
+    fun registerMessageSender(peerId: String, sender: (String) -> Boolean) {
+        messageSenders[peerId] = sender
+    }
+
+    fun unregisterMessageSender(peerId: String) {
+        messageSenders.remove(peerId)
+    }
+
+    fun sendPeerMessage(peerId: String, message: String): Boolean =
+        messageSenders[peerId]?.invoke(message) ?: false
 
     private fun linkKey(a: String, b: String): String = listOf(a, b).sorted().joinToString("|")
 
@@ -279,6 +291,46 @@ class PeerNetworkService : Service() {
                     get("/api/peer/topology") {
                         call.respondText(PeerNetworkState.topology().toString(), ContentType.Application.Json)
                     }
+                    get("/api/transfers/{transferId}/chunk") {
+                        val remoteHost = call.request.local.remoteHost
+                        val senderId = call.request.headers["X-SciNET-From"].orEmpty()
+                        val transferId = call.parameters["transferId"].orEmpty()
+                        val peer = PeerNetworkState.peers[senderId]
+                        if (!isPrivateLanAddress(remoteHost) || peer?.optBoolean("connected") != true ||
+                            (peer.optString("host").isNotBlank() && peer.optString("host") != remoteHost)
+                        ) {
+                            call.respondText(
+                                JSONObject().put("error", "Only a directly connected LAN peer can download").toString(),
+                                ContentType.Application.Json,
+                                HttpStatusCode.Forbidden
+                            )
+                            return@get
+                        }
+
+                        val offset = call.request.queryParameters["offset"]?.toLongOrNull() ?: -1L
+                        val length = call.request.queryParameters["length"]?.toIntOrNull() ?: -1
+                        if (transferId.isBlank() || offset < 0L || length !in 1..(2 * 1024 * 1024)) {
+                            call.respondText(
+                                JSONObject().put("error", "Invalid chunk request").toString(),
+                                ContentType.Application.Json,
+                                HttpStatusCode.BadRequest
+                            )
+                            return@get
+                        }
+
+                        val bytes = FileTransferManager.readOutgoingChunk(
+                            this@PeerNetworkService, senderId, transferId, offset, length
+                        )
+                        if (bytes == null) {
+                            call.respondText(
+                                JSONObject().put("error", "Transfer is not available").toString(),
+                                ContentType.Application.Json,
+                                HttpStatusCode.Conflict
+                            )
+                        } else {
+                            call.respondBytes(bytes, ContentType.Application.OctetStream)
+                        }
+                    }
                     webSocket("/ws/peer") {
                         val remoteAddress = call.request.local.remoteHost
                         if (!isPrivateLanAddress(remoteAddress)) {
@@ -314,6 +366,10 @@ class PeerNetworkService : Service() {
                         PeerNetworkState.knownPeers[remoteId] =
                             JSONObject(peerRecord.toString()).put("updatedAt", System.currentTimeMillis())
                         PeerNetworkState.mergeTopology(hello.optJSONObject("topology"))
+                        PeerNetworkState.registerMessageSender(remoteId) { payload ->
+                            scope.launch { runCatching { outgoing.send(Frame.Text(payload)) } }
+                            true
+                        }
 
                         outgoing.send(
                             Frame.Text(
@@ -323,7 +379,7 @@ class PeerNetworkService : Service() {
                                     .put("deviceId", deviceId)
                                     .put("deviceName", deviceName)
                                     .put("platform", "android")
-                                    .put("capabilities", org.json.JSONArray(listOf("mesh-v1", "topology-v1")))
+                                    .put("capabilities", org.json.JSONArray(listOf("mesh-v2", "topology-v1", "file-transfer-v1", "text-v1")))
                                     .put("topology", PeerNetworkState.topology())
                                     .toString()
                             )
@@ -334,6 +390,7 @@ class PeerNetworkService : Service() {
                                 if (frame !is Frame.Text) continue
                                 val message = runCatching { JSONObject(frame.readText()) }.getOrNull() ?: continue
                                 PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
+                                FileTransferManager.handleSignal(applicationContext, remoteId, message)
                                 if (message.optString("type") == "heartbeat") {
                                     peerRecord.put("lastSeen", System.currentTimeMillis())
                                     PeerNetworkState.knownPeers[remoteId]
@@ -351,6 +408,7 @@ class PeerNetworkService : Service() {
                                 }
                             }
                         } finally {
+                            PeerNetworkState.unregisterMessageSender(remoteId)
                             PeerNetworkState.peers.remove(remoteId, peerRecord)
                             PeerNetworkState.knownPeers[remoteId]
                                 ?.put("connected", false)
@@ -360,11 +418,9 @@ class PeerNetworkService : Service() {
                 }
             }.start(wait = false)
 
-            PeerNetworkState.serverRunning = true
             runCatching { startNsd() }
             updateNotification("Peer server active • discovering nearby SciNET nodes")
         } catch (error: Exception) {
-            PeerNetworkState.serverRunning = false
             httpServer = null
             updateNotification("Peer server could not start: " + (error.message ?: "port unavailable"))
         }
@@ -508,7 +564,7 @@ class PeerNetworkService : Service() {
                                 .put("deviceName", deviceName)
                                 .put("platform", "android")
                                 .put("port", PEER_PORT)
-                                .put("capabilities", org.json.JSONArray(listOf("mesh-v1", "topology-v1")))
+                                .put("capabilities", org.json.JSONArray(listOf("mesh-v2", "topology-v1", "file-transfer-v1", "text-v1")))
                                 .put("topology", PeerNetworkState.topology())
                                 .toString()
                         )
@@ -517,6 +573,7 @@ class PeerNetworkService : Service() {
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         val message = runCatching { JSONObject(text) }.getOrNull() ?: return
                         PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
+                        FileTransferManager.handleSignal(applicationContext, peer.id, message)
                         when (message.optString("type")) {
                             "welcome" -> {
                                 if (message.optString("deviceId") != peer.id ||
@@ -537,6 +594,7 @@ class PeerNetworkService : Service() {
                                 PeerNetworkState.knownPeers[peer.id] =
                                     JSONObject(record.toString()).put("updatedAt", System.currentTimeMillis())
                                 PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
+                                PeerNetworkState.registerMessageSender(peer.id) { payload -> webSocket.send(payload) }
                                 opened.complete(true)
                             }
                             "heartbeat" -> webSocket.send(
@@ -557,6 +615,7 @@ class PeerNetworkService : Service() {
                     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                         opened.complete(false)
                         closed.complete(Unit)
+                        PeerNetworkState.unregisterMessageSender(peer.id)
                         PeerNetworkState.peers.remove(peer.id)
                         PeerNetworkState.knownPeers[peer.id]
                             ?.put("connected", false)
@@ -566,6 +625,7 @@ class PeerNetworkService : Service() {
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                         opened.complete(false)
                         closed.complete(Unit)
+                        PeerNetworkState.unregisterMessageSender(peer.id)
                         PeerNetworkState.peers.remove(peer.id)
                         PeerNetworkState.knownPeers[peer.id]
                             ?.put("connected", false)
@@ -645,7 +705,6 @@ class PeerNetworkService : Service() {
     }
 
     override fun onDestroy() {
-        PeerNetworkState.serverRunning = false
         runCatching { discoveryListener?.let { nsdManager.stopServiceDiscovery(it) } }
         runCatching { registrationListener?.let { nsdManager.unregisterService(it) } }
         serviceResolutionQueue.clear()
