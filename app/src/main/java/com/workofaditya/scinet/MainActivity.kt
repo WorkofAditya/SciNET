@@ -569,11 +569,11 @@ private fun findPeerAt(
     peerRadius: Float,
     labelOffset: Float
 ): PeerTarget? {
-    val peers = nodes
+    val allPeers = nodes
         .filterNot { it.optString("id") == selfId || it.optBoolean("self") }
-        .filter { it.optBoolean("connected") }
         .sortedBy { it.optString("id") }
-    val positions = graphPeerPositions(peers, width, height)
+    val peers = allPeers.filter { it.optBoolean("connected") }
+    val positions = graphPeerPositions(allPeers, width, height)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = labelSize }
     return peers.firstOrNull { node ->
         val point = positions[node.optString("id")] ?: return@firstOrNull false
