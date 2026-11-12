@@ -1,137 +1,102 @@
-# SciNET Peer Network Protocol
+# SciNET Peer Mesh Protocol
 
-This document defines the first version of SciNET's device-to-device network protocol. The design is decentralized: every participating device runs a server and can initiate connections to other devices. No always-on central host is required.
+This document describes the peer-discovery and topology protocol used by SciNET. Every running installation is a node: it listens for incoming peers and can initiate connections to other nodes. No always-on central host is required.
 
-## Design boundaries
+## Current scope
 
-SciNET uses three independent channels:
+The current branch implements:
 
-| Channel | Transport | Purpose | Current status |
-|---|---|---|---|
-| Control | Persistent WebSocket | Identity, presence, heartbeats, events, command coordination, transfer coordination, and screen-session signaling | Discovery, handshake, and heartbeats implemented |
-| Data | Direct HTTP streaming | Direct file payloads between paired devices; file bytes never travel over the control socket | Android-to-Android streaming upload and receiver inbox implemented; resumable transfers and Windows peer transfers remain future work |
-| Screen | WebRTC | Low-latency screen and optional audio media | Planned for peer-to-peer sessions; the legacy Windows-to-Android viewer remains separate |
+- Stable per-installation device identity.
+- mDNS / DNS-SD discovery on a local multicast network.
+- An embedded HTTP and WebSocket listener on TCP port 8765.
+- Direct full-duplex peer WebSockets.
+- Versioned hello / welcome messages.
+- Periodic heartbeats.
+- Topology snapshots containing node identities and direct links.
+- Topology merging, so a node can learn about links reported by its connected peers.
 
-A channel may be unavailable without taking the other channels or the local device server offline.
+This protocol currently carries peer identity, presence, heartbeats, and topology metadata only. It does not expose remote PC controls, arbitrary command execution, file payloads, clipboard data, process management, screen capture, or game-controller input.
 
 ## Discovery
 
-All peers advertise the DNS-SD service:
+Every node advertises the DNS-SD service:
 
-- Service type: `_scinet._tcp.local.`
-- TXT keys:
-  - `id`: stable device ID
-  - `name`: display name
-  - `platform`: `android` or `windows`
-  - `protocol`: protocol version
-  - `ws`: control WebSocket path, currently `/ws/peer`
+- Service type: _scinet._tcp.local.
+- TCP port: 8765.
+- TXT attributes:
+  - id: stable device ID
+  - name: display name
+  - platform: android
+  - protocol: protocol version
+  - ws: peer WebSocket path, currently /ws/peer
 
-The advertised service port is the device's HTTP/control listener:
+The Android app uses the platform NSD service to advertise and discover peers. The service holds a Wi-Fi multicast lock while it runs so multicast discovery is less likely to be suspended.
 
-- Android: `8765`, served by the embedded Ktor CIO server.
-- Windows: `8000`, served by the existing FastAPI server.
+## Automatic mesh connections
 
-The original Windows `_http._tcp.local.` announcement remains in place for backward compatibility with existing SciNET discovery.
+Every node both accepts inbound WebSockets and discovers remote nodes. For any pair of device IDs, only one side dials:
 
-## Automatic full-mesh operation
+- If localDeviceId is lexicographically smaller than remoteId, the local node opens the WebSocket.
+- Otherwise, the local node waits for the remote node's incoming connection.
 
-Every running SciNET installation is a peer node. Android starts its embedded HTTP/WebSocket server as its foreground peer service; Windows runs the existing FastAPI server. Both advertise the same DNS-SD service and continuously discover other SciNET nodes on the local multicast network. Discovery does not require a typed IP address, a selected host, or QR pairing.
+The comparison is deterministic and identical on every node. It prevents both devices from opening duplicate sockets for the same pair. A connected WebSocket is full-duplex, so both peers can exchange messages over that direct link.
 
-For every pair of discovered device IDs, the lexicographically smaller ID initiates one persistent WebSocket to the other device. That socket is full-duplex, so it is a direct connection in both directions. Every node independently runs the same rule for every discovered ID; there is no coordinator, relay host, or elected master. A node remains a server while it is also initiating connections to other nodes.
+Failed connections are retried while the peer's mDNS advertisement remains visible. When an advertisement disappears, the endpoint is removed and its socket is closed. The next advertisement starts discovery and connection again.
 
-## Mesh topology exchange
+## Identity and handshake
 
-The peer hello, welcome, and heartbeat messages exchange a topology snapshot. A snapshot contains nodes and direct links, allowing a node to learn not only its own links but also links reported by its peers. For example, when A is connected to B and B is connected to C, A learns about B-C; if A is also connected to C, the graph includes A-C as a separate direct edge.
+Each installation generates a 32-character UUID-derived identifier and persists it in the app's private preferences. The device name defaults to the Android model name.
 
-The native Android Home dashboard and the Windows web dashboard render every unordered pair of discovered nodes. Connected idle links are neutral, active transfer links are green, and missing, disconnected, or stale links are red. Topology exchange reports direct link state; it does not create a virtual link or route data through an intermediate node.
+A connection begins with a JSON hello message:
 
-Automatic discovery depends on multicast DNS being available between devices. It is intended for peers on the same LAN / multicast domain; guest Wi-Fi isolation, VLAN boundaries, VPN routing, or router multicast filtering can prevent discovery even when ordinary IP connectivity exists.
-
-## Stable identity and connection arbitration
-
-Each installation generates and persists its own 32-character UUID-derived identifier:
-
-- Android stores it in the app's private preferences.
-- Windows stores it in the local, git-ignored `device_identity.json` file.
-
-For any pair of different device IDs, the lexicographically smaller ID initiates the WebSocket. The other peer only accepts the incoming connection. Both peers use this same rule, which prevents duplicate control sockets for a pair.
-
-A peer that disappears from mDNS is removed from the discovery target list. Failed connections are retried while the peer remains discoverable.
-
-## Control protocol v1
-
-All control messages are UTF-8 JSON text frames. A connection begins with a client hello:
-
-```json
+~~~json
 {
   "type": "hello",
   "protocolVersion": 1,
   "deviceId": "32-character-device-id",
-  "deviceName": "Device name",
+  "deviceName": "Android device",
   "platform": "android",
-  "capabilities": ["control-v1", "http-stream-v1", "webrtc-v1"]
+  "port": 8765,
+  "capabilities": ["mesh-v1", "topology-v1"],
+  "topology": {
+    "selfId": "32-character-device-id",
+    "nodes": [],
+    "links": []
+  }
 }
-```
+~~~
 
-The receiver responds with a welcome containing its own identity, protocol version, and capabilities:
+The receiver validates the message type, device ID, and protocol version, then replies with a welcome message containing its own identity and topology snapshot. A peer is considered online only after the expected welcome response is received.
 
-```json
-{
-  "type": "welcome",
-  "protocolVersion": 1,
-  "deviceId": "32-character-device-id",
-  "deviceName": "Device name",
-  "platform": "windows",
-  "capabilities": ["control-v1", "http-stream-v1", "webrtc-v1"]
-}
-```
+## Heartbeats and topology exchange
 
-Both sides validate the remote device ID and protocol version before marking the connection online.
+Peers exchange a heartbeat approximately every five seconds. Each heartbeat includes the sender's current topology snapshot; the receiver replies with a heartbeat acknowledgment and its own snapshot.
 
-A heartbeat is sent approximately every five seconds:
+A topology snapshot contains:
 
-```json
-{
-  "type": "heartbeat",
-  "sentAt": 0
-}
-```
+- selfId: the local device ID.
+- nodes: known device identities, names, platform, online state, and last update time.
+- links: unordered pairs of device IDs and whether their direct link is currently connected.
 
-The receiver replies with `heartbeat_ack`. A missing peer connection is retried; a connection that stops responding is discarded.
+Direct links are built from local peer sessions. Links reported by remote nodes are merged into the local graph. Reported links become stale after 20 seconds without a fresh topology update and are displayed as disconnected. A reported link is informational only: SciNET does not route traffic through an intermediate peer.
 
-## Pairing, trust, and security boundary
+## Local API
 
-Discovery and the v1 WebSocket hello/welcome exchange establish presence only. A discovered or connected device is not automatically trusted.
+The embedded server exposes only the endpoints needed to inspect node health and mesh state:
 
-Android-to-Android pairing currently uses the phone QR code:
-1. The receiving phone displays a random one-time token that expires after five minutes.
-2. The scanning phone submits its device ID and token to `POST /api/pair/claim`.
-3. The receiving phone consumes the token, creates a random per-peer key, stores it locally, and returns the key to the scanner. Both phones store the same key under the other phone's device ID.
-4. The direct file-transfer endpoint requires the sender's device ID and its paired key. A device that is merely discovered cannot upload files.
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | /health | Server health, local device ID, and protocol version |
+| GET | /api/peer/info | Local identity, listening port, and directly connected peers |
+| GET | /api/peer/topology | Current merged topology snapshot |
+| WebSocket | /ws/peer | Peer handshake, heartbeats, and topology exchange |
 
-Pair claims and peer control connections are restricted to private, loopback, or link-local addresses. File transfer authorization uses the per-peer bearer key. This is an initial LAN trust model, not end-to-end encryption: the Android HTTP data path is currently cleartext on the local network. Do not port-forward SciNET ports or expose these services directly to the public internet. TLS and stronger device-key authentication remain future hardening work.
+## Network constraints and security
 
-## Compatibility
+Automatic discovery requires multicast DNS to work between the devices. It is intended for peers on the same LAN or multicast domain. Guest Wi-Fi isolation, VLAN boundaries, VPN routing, or router multicast filtering can stop discovery.
 
-- Protocol version is an integer and must match exactly for v1 handshakes.
-- Future incompatible changes require a protocol version increment.
-- Capabilities are negotiated independently of the version, so later peers can add optional features without assuming every peer supports them.
-- Each peer's local server must remain usable while all remote peers are offline.
+The WebSocket listener rejects connections that do not originate from loopback, link-local, or private-network addresses. The current handshake checks identity and protocol compatibility, but it is not cryptographic authentication and the transport is not end-to-end encrypted. Do not port-forward port 8765 or expose SciNET directly to the public internet.
 
+## Planned channel separation
 
-## Phone QR sharing
-
-The Android home screen displays a QR code for the phone's current private IPv4 address, peer identity, and short-lived pairing token.
-
-- Scan with SciNET on another Android phone to establish trust and connect the two peers.
-- The token is one-time and expires after five minutes; the displayed QR refreshes as tokens expire or are consumed.
-- Ordinary camera/browser scanning opens the phone's existing SciNET web dashboard on port 8765. The Android server packages and serves the same `legacy-web` HTML, CSS, JavaScript, and PWA assets used by the PC host.
-
-## Android-to-Android file transfer
-
-- Select a paired phone from the existing native app's top-bar device selector. The app keeps the standard HOME, CONTROL, FILES, PROCESSES, CONTROLLER, and SCREEN navigation visible, even when no remote device is connected; the local phone server is the default target.
-- Open the existing **FILES** tab. Its normal file-manager layout is reused for peer transfers; there is no separate peer workspace or additional PEERS tab.
-- Choose **SEND FILES** and select one or more files. The sender streams each file directly to the selected phone over HTTP. The receiver stores it in SciNET's private incoming queue, not a user-shared directory.
-- On the receiving phone, select the sender in the same device selector and open **FILES**. Incoming files appear in the existing file grid and can be saved with the standard Android document picker.
-- Incoming items are persisted with their private staged file so they remain available after the app process restarts.
-- The initial implementation supports streamed transfers up to 2 GB per file. Resume, cancellation, checksums, and Windows peer-transfer support are not implemented yet.
+The mesh protocol is the foundation for future independent data and media channels. Those channels are not implemented in this branch. Adding them must not turn a peer into a central relay or move payload data through the topology heartbeat channel.

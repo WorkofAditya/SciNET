@@ -1,593 +1,398 @@
 package com.workofaditya.scinet
 
-import android.app.Activity
-import android.content.Context
 import android.content.Intent
-import android.os.Bundle
 import android.os.Build
+import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
-import androidx.compose.ui.unit.IntOffset
-import org.json.JSONArray
 import org.json.JSONObject
+import android.graphics.Paint
+import android.graphics.Typeface
+import java.util.Locale
 
-internal val Bg = Color(0xFF0A0C0F)
-internal val Panel = Color(0xFF101419)
-internal val Raised = Color(0xFF15191E)
-internal val Edge = Color(0xFF292F37)
-internal val Ink = Color(0xFFE7E9ED)
-internal val Muted = Color(0xFF858D98)
-internal val Accent = Color(0xFFE1E5EA)
-internal val Good = Color(0xFF79B98B)
-internal val Bad = Color(0xFFE78F87)
+private val Background = Color(0xFF090C10)
+private val Panel = Color(0xFF111820)
+private val Raised = Color(0xFF1A2530)
+private val Border = Color(0xFF293541)
+private val TextPrimary = Color(0xFFE8EDF2)
+private val TextMuted = Color(0xFF8B98A5)
+private val Connected = Color(0xFF83C99A)
+private val Disconnected = Color(0xFFE58C86)
+private val LocalNode = Color(0xFFE5EAF0)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val peerService = Intent(this, PeerNetworkService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(peerService) else startService(peerService)
-        setContent { MaterialTheme(colorScheme = darkColorScheme(background = Bg, surface = Panel, primary = Accent, onPrimary = Bg, onBackground = Ink, onSurface = Ink, secondary = Muted, error = Bad)) { SciNETApp() } }
+
+        val serviceIntent = Intent(this, PeerNetworkService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+
+        setContent {
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    background = Background,
+                    surface = Panel,
+                    primary = LocalNode,
+                    onPrimary = Background,
+                    onBackground = TextPrimary,
+                    onSurface = TextPrimary,
+                    secondary = TextMuted
+                )
+            ) {
+                SciNETMeshApp()
+            }
+        }
     }
 }
 
 @Composable
-private fun SciNETApp() {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val localHost = "http://127.0.0.1:8765"
-    var host by remember { mutableStateOf(localHost) }
-    var connected by remember { mutableStateOf(true) }
-    var peerDevices by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
-    var activePeer by remember { mutableStateOf<JSONObject?>(null) }
-    var targetMenuExpanded by remember { mutableStateOf(false) }
-    var meshTopology by remember { mutableStateOf(JSONObject()) }
+private fun SciNETMeshApp() {
+    var topology by remember { mutableStateOf(JSONObject()) }
+    var serverRunning by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
         while (true) {
-            val trustedPeers = context.getSharedPreferences("scinet-trust", Context.MODE_PRIVATE)
-            peerDevices = (PeerNetworkState.knownPeers.values + PeerNetworkState.peers.values)
-                .associateBy { it.optString("id") }.values
-                .map { peer ->
-                    val copy = JSONObject(peer.toString())
-                    copy.put("connected", PeerNetworkState.peers[peer.optString("id")]?.optBoolean("connected") == true)
-                    copy.put("trusted", trustedPeers.contains(peer.optString("id")))
-                }
-                .sortedBy { it.optString("name").lowercase() }
+            topology = PeerNetworkState.topology()
+            serverRunning = PeerNetworkState.serverRunning
             delay(1000)
         }
     }
-    var busy by remember { mutableStateOf(false) }
-    var page by remember { mutableStateOf("HOME") }
-    var screenFullscreen by remember { mutableStateOf(false) }
-    var system by remember { mutableStateOf(JSONObject()) }
-    var events by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
-    var notice by remember { mutableStateOf("") }
-    var noticeBad by remember { mutableStateOf(false) }
-    var noticeVisible by remember { mutableStateOf(false) }
-    var noticeExpanded by remember { mutableStateOf(false) }
-    var noticeVersion by remember { mutableIntStateOf(0) }
-    val scope = rememberCoroutineScope()
-    val keyboardMutex = remember { Mutex() }
 
-    fun notify(text: String, bad: Boolean = false) {
-        notice = text
-        noticeBad = bad
-        noticeExpanded = false
-        noticeVisible = true
-        noticeVersion++
+    val nodes = remember(topology) {
+        val array = topology.optJSONArray("nodes")
+        if (array == null) emptyList() else
+            (0 until array.length()).mapNotNull { array.optJSONObject(it)?.let { node -> JSONObject(node.toString()) } }
     }
-    LaunchedEffect(noticeVersion, noticeExpanded) {
-        if (notice.isNotBlank()) {
-            delay(if (noticeExpanded) 8000 else if (noticeBad) 5000 else 2500)
-            noticeVisible = false
-            noticeExpanded = false
-        }
+    val links = remember(topology) {
+        val array = topology.optJSONArray("links")
+        if (array == null) emptyList() else
+            (0 until array.length()).mapNotNull { array.optJSONObject(it)?.let { link -> JSONObject(link.toString()) } }
     }
-    fun control(action: String, extra: Map<String, Any?> = emptyMap()) {
-        scope.launch {
-            suspend fun sendRequest() {
-                try {
-                    val body = JSONObject().put("action", action)
-                    extra.forEach { (key, value) -> body.put(key, value) }
-                    SciNETApi.post(host, "/api/control", body)
-                    if (action != "key-hold" && action != "mouse-hold" && action != "mouse-move") notify("Sent: " + action.replace('-', ' '))
-                } catch (e: Exception) { notify(e.message ?: "Could not reach the PC.", true) }
-            }
-            if (action == "type" || action == "key" || action == "key-hold" || action == "mouse-hold") keyboardMutex.withLock { sendRequest() }
-            else sendRequest()
-        }
+    val selfId = topology.optString("selfId")
+    val connectedLinks = links.count { it.optBoolean("connected") }
+    val directLinks = links.count {
+        it.optBoolean("connected") &&
+            (it.optString("a") == selfId || it.optString("b") == selfId)
     }
-    fun connect(targetHost: String) {
-        if (targetHost.isBlank()) { notify("Invalid SciNET address.", true); return }
-        if (busy) return
-        busy = true
-        scope.launch {
-            try {
-                val normalized = SciNETApi.normalizeHost(targetHost)
-                val snapshot = SciNETApi.get(normalized, "/api/system")
-                host = normalized
-                activePeer = null
-                system = snapshot
-                events = SciNETApi.get(normalized, "/api/events").optJSONArray("events").objects()
-                connected = true
-                page = "HOME"
-                targetMenuExpanded = false
-                notify("Connected to " + system.optString("hostname", "SciNET PC"))
-            } catch (e: Exception) { notify(e.message ?: "Connection failed.", true) }
-            finally { busy = false }
-        }
-    }
+    val ready = serverRunning && selfId.isNotBlank()
 
-    fun selectLocalTarget() {
-        activePeer = null
-        host = localHost
-        connected = true
-        page = "HOME"
-        targetMenuExpanded = false
-        scope.launch {
-            try {
-                system = SciNETApi.get(localHost, "/api/system")
-                events = SciNETApi.get(localHost, "/api/events").optJSONArray("events").objects()
-            } catch (_: Exception) {
-                system = JSONObject().put("hostname", "THIS PHONE")
-            }
-        }
-    }
-
-    fun selectPeerTarget(peer: JSONObject) {
-        val peerId = peer.optString("id")
-        val peerHost = peer.optString("host")
-        val port = peer.optInt("port", 8765)
-        if (peerHost.isBlank()) {
-            notify("This device has no reachable local-network address yet.", true)
-            return
-        }
-        val endpoint = JSONObject(peer.toString()).put("trusted", true)
-        activePeer = endpoint
-        host = "http://$peerHost:$port"
-        connected = true
-        targetMenuExpanded = false
-        page = "HOME"
-        scope.launch {
-            try {
-                system = SciNETApi.get(host, "/api/system")
-                events = SciNETApi.get(host, "/api/events").optJSONArray("events").objects()
-                notify("Selected " + peer.optString("name", "SciNET device"))
-            } catch (e: Exception) {
-                notify(e.message ?: "Could not reach this device.", true)
-            }
-        }
-    }
-
-    val qrScannerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val scanned = result.data?.getStringExtra("scinet_host")?.trim().orEmpty()
-            if (scanned.startsWith("http://") || scanned.startsWith("https://")) {
-                val scannedUri = android.net.Uri.parse(scanned)
-                val peerId = scannedUri.getQueryParameter("deviceId")
-                if (scannedUri.port == 8765 && scannedUri.getQueryParameter("scinet") == "peer" && !peerId.isNullOrBlank()) {
-                    val pairingToken = scannedUri.getQueryParameter("token").orEmpty()
-                    if (pairingToken.isBlank()) {
-                        notify("This phone QR has no pairing token. Refresh the QR on the other phone.", true)
-                    } else if (!busy) {
-                        busy = true
-                        scope.launch {
-                            try {
-                                val remoteHost = "http://" + (scannedUri.host ?: throw IllegalStateException("QR has no device address")) + ":8765"
-                                val localName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android device"
-                                val pairing = SciNETApi.post(
-                                    remoteHost,
-                                    "/api/pair/claim",
-                                    JSONObject()
-                                        .put("deviceId", PeerNetworkState.localDeviceId)
-                                        .put("deviceName", localName)
-                                        .put("platform", "android")
-                                        .put("token", pairingToken)
-                                )
-                                val peerKey = pairing.optString("peerKey")
-                                if (peerKey.isBlank()) throw IllegalStateException("The other phone did not return a pairing key.")
-                                context.getSharedPreferences("scinet-trust", Context.MODE_PRIVATE)
-                                    .edit().putString(peerId, peerKey).apply()
-                                val peerIntent = Intent(context, PeerNetworkService::class.java).apply {
-                                    action = PeerNetworkService.ACTION_CONNECT_PEER
-                                    putExtra(PeerNetworkService.EXTRA_PEER_ID, peerId)
-                                    putExtra(PeerNetworkService.EXTRA_PEER_NAME, pairing.optString("deviceName", scannedUri.getQueryParameter("name") ?: "SciNET phone"))
-                                    putExtra(PeerNetworkService.EXTRA_PEER_HOST, scannedUri.host ?: "")
-                                    putExtra(PeerNetworkService.EXTRA_PEER_PORT, 8765)
-                                }
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(peerIntent) else context.startService(peerIntent)
-                                selectPeerTarget(
-                                    JSONObject()
-                                        .put("id", peerId)
-                                        .put("name", pairing.optString("deviceName", scannedUri.getQueryParameter("name") ?: "SciNET phone"))
-                                        .put("platform", "android")
-                                        .put("host", scannedUri.host ?: "")
-                                        .put("port", 8765)
-                                        .put("connected", true)
-                                        .put("trusted", true)
-                                )
-                            } catch (error: Exception) {
-                                notify(error.message ?: "Could not pair with this phone.", true)
-                            } finally {
-                                busy = false
-                            }
-                        }
-                    }
-                } else {
-                    connect(scanned)
-                }
-            } else if (scanned.isNotBlank()) {
-                notify("That QR code is not a valid SciNET address.", true)
-            }
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        scope.launch {
-            repeat(20) {
-                try {
-                    system = SciNETApi.get(localHost, "/api/system")
-                    events = SciNETApi.get(localHost, "/api/events").optJSONArray("events").objects()
-                    connected = true
-                    return@launch
-                } catch (_: Exception) {
-                    delay(500)
-                }
-            }
-            system = JSONObject().put("hostname", "THIS PHONE")
-        }
-    }
-
-    LaunchedEffect(page) {
-        if (page == "HOME") {
-            while (true) {
-                try { meshTopology = SciNETApi.get(localHost, "/api/peer/topology") } catch (_: Exception) { }
-                delay(1000)
-            }
-        }
-    }
-
-    LaunchedEffect(connected, host, page) {
-        if (!connected) return@LaunchedEffect
-        while (true) {
-            try {
-                val snapshot = SciNETApi.get(host, "/api/system")
-                if (page == "HOME") {
-                    system = snapshot
-                    events = SciNETApi.get(host, "/api/events").optJSONArray("events").objects()
-                }
-            } catch (e: Exception) {
-                if (page == "HOME") notify("Host connection interrupted. Retrying…", true)
-            }
-            delay(if (page == "HOME") 1000 else 5000)
-        }
-    }
-    LaunchedEffect(page, connected, host) {
-        if (connected && page != "PROCESSES") try {
-            SciNETApi.post(host, "/api/processes/monitor", JSONObject().put("enabled", false))
-        } catch (_: Exception) { }
-    }
-
-    Surface(Modifier.fillMaxSize(), color = Bg) {
-        Column(Modifier.fillMaxSize().then(if (screenFullscreen || page == "CONTROLLER") Modifier else Modifier.statusBarsPadding())) {
-            if (!screenFullscreen && page != "CONTROLLER") {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 15.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(Modifier.size(36.dp).background(Raised, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) { Text("S", fontSize = 20.sp, fontWeight = FontWeight.Black) }
-                    Column {
-                        Text("SCINET", fontSize = 13.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
-                        Text("MESH NETWORK NODE", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(7.dp).background(if (connected) Good else Muted, RoundedCornerShape(50)))
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (connected) "ONLINE" else "RETRYING", color = Muted, fontSize = 9.sp)
-                    TextButton(onClick = { targetMenuExpanded = true }) {
-                        Text(
-                            "MESH · " + (peerDevices.count { it.optBoolean("connected") } + 1),
-                            fontSize = 10.sp,
-                            color = Ink
-                        )
-                    }
-                    DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("THIS PHONE") },
-                            onClick = { selectLocalTarget() }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("SCAN DEVICE QR CODE") },
-                            onClick = {
-                                targetMenuExpanded = false
-                                qrScannerLauncher.launch(Intent(context, QrScannerActivity::class.java))
-                            }
-                        )
-                        HorizontalDivider(color = Edge)
-                        if (peerDevices.isEmpty()) {
-                            DropdownMenuItem(
-                                text = { Text("NO LAN DEVICES DISCOVERED", color = Muted) },
-                                enabled = false,
-                                onClick = {}
-                            )
-                        }
-                        peerDevices.forEach { peer ->
-                            DropdownMenuItem(
-                                text = { Text(peer.optString("name", "SciNET device") + if (peer.optBoolean("connected")) " · ONLINE" else " · OFFLINE") },
-                                onClick = { selectPeerTarget(peer) }
-                            )
-                        }
-                    }
-                }
-            }
-            HorizontalDivider(color = Color(0xFF20242A))
-            }
-            Column(
-                Modifier.weight(1f).fillMaxWidth().then(
-                    if (screenFullscreen || page == "CONTROLLER") Modifier
-                    else Modifier.verticalScroll(rememberScrollState()).padding(15.dp)
-                ),
-                verticalArrangement = if (screenFullscreen || page == "CONTROLLER") Arrangement.Top else Arrangement.spacedBy(13.dp)
-            ) {
-                when (page) {
-                    "HOME" -> DashboardScreen(system, events, host, meshTopology, onRefresh = {
-                        scope.launch {
-                            try {
-                                system = SciNETApi.get(host, "/api/system")
-                                events = SciNETApi.get(host, "/api/events").optJSONArray("events").objects()
-                                notify("Dashboard refreshed")
-                            } catch (e: Exception) { notify(e.message ?: "Refresh failed", true) }
-                        }
-                    }, onRename = { name ->
-                        scope.launch {
-                            try {
-                                SciNETApi.put(host, "/api/device-name", JSONObject().put("name", name))
-                                system = SciNETApi.get(host, "/api/system")
-                                notify("Device name saved")
-                            } catch (e: Exception) { notify(e.message ?: "Could not rename device", true) }
-                        }
-                    }, onClearEvents = {
-                        scope.launch {
-                            try {
-                                SciNETApi.delete(host, "/api/events")
-                                events = emptyList()
-                                notify("Activity cleared")
-                            } catch (e: Exception) { notify(e.message ?: "Could not clear activity", true) }
-                        }
-                    }, onLogout = { selectLocalTarget() })
-                    "CONTROL" -> ControlScreen(host = host, onAction = { action, extra -> control(action, extra) }, onMessage = { text, bad -> notify(text, bad) })
-                    "FILES" -> FilesScreen(host, peerTarget = activePeer, onMessage = { text, bad -> notify(text, bad) })
-                    "PROCESSES" -> ProcessScreen(host, onMessage = { text, bad -> notify(text, bad) })
-                    "CONTROLLER" -> ControllerScreen(
-                        host = host,
-                        onAction = { action, extra -> control(action, extra) },
-                        onExit = { page = "CONTROL" },
-                        onError = { message -> notify(message, true) },
-                        onCheat = { code, onComplete ->
-                            scope.launch {
-                                try {
-                                    SciNETApi.post(host, "/api/game/cheat", JSONObject().put("code", code))
-                                    onComplete(null)
-                                } catch (e: Exception) {
-                                    val message = e.message.orEmpty()
-                                    onComplete(
-                                        if (message.contains("404")) {
-                                            "PC SciNET server is outdated. Update server.py, then restart the PC server."
-                                        } else {
-                                            message.ifBlank { "Could not send the game shortcut." }
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    )
-                    else -> ScreenMirrorScreen(host = host, onMessage = { text, bad -> notify(text, bad) }, fullscreen = screenFullscreen, onFullscreenChanged = { screenFullscreen = it })
-                }
-            }
-            if (!screenFullscreen && page != "CONTROLLER") {
-                NotificationToast(
-                    message = notice,
-                    isError = noticeBad,
-                    visible = noticeVisible,
-                    connected = true,
-                    expanded = noticeExpanded,
-                    onClick = { noticeExpanded = !noticeExpanded }
-                )
-                Row(
-                    Modifier.fillMaxWidth().background(Color(0xFF0C0F13)).padding(horizontal = 3.dp, vertical = 5.dp).navigationBarsPadding(),
-                    horizontalArrangement = Arrangement.spacedBy(1.dp)
-                ) {
-                    listOf("HOME" to "⌂", "CONTROL" to "⌁", "FILES" to "▤", "PROCESSES" to "≋", "CONTROLLER" to "✣", "SCREEN" to "▱").forEach { (key, symbol) ->
-                        Column(
-                            Modifier.weight(1f).background(if (page == key) Raised else Color.Transparent, RoundedCornerShape(7.dp))
-                                .padding(vertical = 7.dp).pointerInput(key) { detectTapGestures { page = key } },
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(symbol, color = if (page == key) Accent else Muted, fontSize = 17.sp)
-                            Text(key, color = if (page == key) Ink else Muted, fontSize = 6.sp, maxLines = 1)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NotificationToast(
-    message: String,
-    isError: Boolean,
-    visible: Boolean,
-    connected: Boolean,
-    expanded: Boolean,
-    onClick: () -> Unit
-) {
-    if (message.isNotBlank()) {
-        val density = androidx.compose.ui.platform.LocalDensity.current
-        Popup(
-            alignment = Alignment.BottomCenter,
-            offset = IntOffset(
-                0,
-                with(density) { (if (connected) (-88).dp else (-24).dp).roundToPx() }
-            ),
-            properties = PopupProperties(
-                focusable = false,
-                dismissOnBackPress = false,
-                dismissOnClickOutside = false
-            )
+    Surface(Modifier.fillMaxSize(), color = Background) {
+        Column(
+            Modifier.fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            AnimatedVisibility(
-                visible = visible,
-                enter = fadeIn() + slideInVertically { it / 2 },
-                exit = fadeOut() + slideOutVertically { it / 2 }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(Color.Transparent)
-                        .padding(horizontal = 16.dp, vertical = 5.dp),
-                    horizontalArrangement = Arrangement.Center
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    androidx.compose.material3.Text(
+                        "SCINET",
+                        color = TextPrimary,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 4.sp
+                    )
+                    androidx.compose.material3.Text(
+                        "DECENTRALIZED MESH NETWORK",
+                        color = TextMuted,
+                        fontSize = 9.sp,
+                        letterSpacing = 1.4.sp
+                    )
+                }
+                Surface(
+                    color = if (ready) Color(0xFF173323) else Raised,
+                    shape = RoundedCornerShape(50),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (ready) Color(0xFF315F42) else Border)
                 ) {
-                    Surface(
-                        modifier = Modifier
-                            .animateContentSize()
-                            .clickable(onClick = onClick),
-                        color = if (isError) Color(0xFF4A2024) else Color(0xFF173D29),
-                        contentColor = Color(0xFFF2F7F3),
-                        shape = RoundedCornerShape(50),
-                        shadowElevation = 8.dp
+                    Row(
+                        Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
                     ) {
-                        Row(
-                            Modifier
-                                .defaultMinSize(minWidth = 44.dp, minHeight = 42.dp)
-                                .padding(horizontal = if (expanded) 15.dp else 0.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Text(
-                                if (isError) "×" else "✓",
-                                fontSize = 21.sp,
-                                lineHeight = 22.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            if (expanded) {
-                                Spacer(Modifier.width(9.dp))
-                                Text(
-                                    message,
-                                    modifier = Modifier.widthIn(max = 260.dp),
-                                    fontSize = 11.sp,
-                                    lineHeight = 15.sp,
-                                    color = Color(0xFFF2F7F3)
-                                )
-                            }
-                        }
+                        Box(
+                            Modifier.size(7.dp)
+                                .background(if (ready) Connected else TextMuted, RoundedCornerShape(50))
+                        )
+                        androidx.compose.material3.Text(
+                            if (ready) "NODE ONLINE" else "STARTING NODE",
+                            color = if (ready) Connected else TextMuted,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = .7.sp
+                        )
                     }
                 }
             }
+
+            androidx.compose.material3.Text(
+                "Every device is a node.",
+                color = TextPrimary,
+                fontSize = 27.sp,
+                fontWeight = FontWeight.Bold
+            )
+            androidx.compose.material3.Text(
+                "SciNET runs a server and a client on this device. Nearby nodes are discovered automatically and connected directly. No central host is required.",
+                color = TextMuted,
+                fontSize = 12.sp,
+                lineHeight = 18.sp
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                MetricCard("NODES", nodes.size.toString(), Modifier.weight(1f))
+                MetricCard("LINKS UP", connectedLinks.toString(), Modifier.weight(1f))
+                MetricCard("DIRECT", directLinks.toString(), Modifier.weight(1f))
+            }
+
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(Panel, RoundedCornerShape(12.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        androidx.compose.material3.Text(
+                            "LIVE NETWORK",
+                            color = TextMuted,
+                            fontSize = 9.sp,
+                            letterSpacing = 1.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        androidx.compose.material3.Text(
+                            "Mesh topology",
+                            color = TextPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    androidx.compose.material3.Text(
+                        nodes.size.toString() + " NODES",
+                        color = TextMuted,
+                        fontSize = 9.sp
+                    )
+                }
+
+                if (nodes.isEmpty()) {
+                    androidx.compose.material3.Text(
+                        "Waiting for the local node to start…",
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(vertical = 24.dp)
+                    )
+                } else {
+                    MeshGraph(nodes, links, selfId)
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    LegendDot(Connected, "CONNECTED")
+                    LegendDot(Disconnected, "LINK DOWN")
+                    LegendDot(LocalNode, "THIS DEVICE")
+                }
+            }
+
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(Panel, RoundedCornerShape(12.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                androidx.compose.material3.Text(
+                    "DISCOVERED NODES",
+                    color = TextMuted,
+                    fontSize = 9.sp,
+                    letterSpacing = 1.5.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                if (nodes.size <= 1) {
+                    androidx.compose.material3.Text(
+                        "No other SciNET devices found yet. Open SciNET on another device connected to the same local network.",
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                } else {
+                    nodes.sortedWith(compareBy<JSONObject> { !it.optBoolean("self") }.thenBy { it.optString("name").lowercase(Locale.ROOT) })
+                        .forEach { node ->
+                            MeshNodeRow(node, node.optString("id") == selfId || node.optBoolean("self"))
+                            androidx.compose.material3.HorizontalDivider(color = Border)
+                        }
+                }
+            }
+
+            androidx.compose.material3.Text(
+                "AUTO DISCOVERY  ·  mDNS / DNS-SD\nDIRECT PEER LINKS  ·  WEBSOCKET\nTOPOLOGY SYNC  ·  HEARTBEAT",
+                color = TextMuted,
+                fontSize = 9.sp,
+                lineHeight = 16.sp,
+                letterSpacing = .7.sp
+            )
         }
     }
 }
 
 @Composable
-internal fun PanelCard(content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp)).padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
-}
-@Composable
-internal fun SectionHeading(kicker: String, title: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(kicker, color = Muted, fontSize = 9.sp, letterSpacing = 1.4.sp, fontWeight = FontWeight.Bold)
-        Text(title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+private fun MetricCard(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier.background(Panel, RoundedCornerShape(10.dp)).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        androidx.compose.material3.Text(label, color = TextMuted, fontSize = 8.sp, letterSpacing = 1.sp)
+        androidx.compose.material3.Text(value, color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
     }
 }
+
 @Composable
-internal fun PageHeading(kicker: String, title: String, subtitle: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Text(kicker, color = Accent, fontSize = 10.sp, letterSpacing = 1.7.sp, fontWeight = FontWeight.Bold)
-        Text(title, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        Text(subtitle, color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
-    }
-}
-@Composable
-internal fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().height(47.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Bg), shape = RoundedCornerShape(8.dp)) {
-        Text(text, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp)
-    }
-}
-@Composable
-internal fun fieldColors() = OutlinedTextFieldDefaults.colors(focusedBorderColor = Accent, unfocusedBorderColor = Edge, focusedLabelColor = Accent, unfocusedLabelColor = Muted, cursorColor = Accent, focusedTextColor = Ink, unfocusedTextColor = Ink)
-@Composable
-internal fun FeatureLine(number: String, title: String, detail: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(number, color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Text(detail, color = Muted, fontSize = 10.sp, lineHeight = 15.sp)
+private fun MeshGraph(nodes: List<JSONObject>, links: List<JSONObject>, selfId: String) {
+    Canvas(
+        Modifier.fillMaxWidth().height(285.dp)
+            .background(Background, RoundedCornerShape(9.dp))
+    ) {
+        val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
+        val radius = if (nodes.size <= 1) 0f else minOf(size.width * .34f, size.height * .32f)
+        val positions = nodes.mapIndexed { index, _ ->
+            if (nodes.size <= 1) center else {
+                val angle = (-Math.PI / 2.0) + (2.0 * Math.PI * index / nodes.size)
+                androidx.compose.ui.geometry.Offset(
+                    center.x + kotlin.math.cos(angle).toFloat() * radius,
+                    center.y + kotlin.math.sin(angle).toFloat() * radius
+                )
+            }
+        }
+        fun findLink(a: String, b: String): JSONObject? = links.firstOrNull {
+            (it.optString("a") == a && it.optString("b") == b) ||
+                (it.optString("a") == b && it.optString("b") == a)
+        }
+
+        for (i in nodes.indices) {
+            for (j in i + 1 until nodes.size) {
+                val link = findLink(nodes[i].optString("id"), nodes[j].optString("id"))
+                drawLine(
+                    color = if (link?.optBoolean("connected") == true) Color(0xFF718394) else Color(0xFF874E50),
+                    start = positions[i],
+                    end = positions[j],
+                    strokeWidth = 1.8.dp.toPx()
+                )
+            }
+        }
+
+        val native = drawContext.canvas.nativeCanvas
+        val nodePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.rgb(229, 235, 242)
+            textSize = 10.sp.toPx()
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        }
+        val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.rgb(139, 152, 165)
+            textSize = 8.sp.toPx()
+            textAlign = Paint.Align.CENTER
+        }
+
+        nodes.forEachIndexed { index, node ->
+            val point = positions[index]
+            val isSelf = node.optString("id") == selfId || node.optBoolean("self")
+            val online = isSelf || node.optBoolean("connected")
+            nodePaint.color = when {
+                isSelf -> android.graphics.Color.rgb(229, 234, 240)
+                online -> android.graphics.Color.rgb(131, 201, 154)
+                else -> android.graphics.Color.rgb(229, 140, 134)
+            }
+            val nodeRadius = if (nodes.size > 12) 7.dp.toPx() else 10.dp.toPx()
+            drawCircle(Color(nodePaint.color), nodeRadius, point)
+            val name = node.optString("name", "SciNET").ifBlank { "SciNET" }
+            val label = if (name.length > 13) name.take(11) + "…" else name
+            native.drawText(label, point.x, point.y + nodeRadius + 14.dp.toPx(), labelPaint)
+            native.drawText(
+                if (isSelf) "THIS DEVICE" else if (online) "ONLINE" else "OFFLINE",
+                point.x,
+                point.y + nodeRadius + 25.dp.toPx(),
+                detailPaint
+            )
         }
     }
 }
+
 @Composable
-internal fun StatCard(title: String, value: String, detail: String? = null) {
-    PanelCard {
-        Text(title, color = Muted, fontSize = 9.sp, letterSpacing = 1.2.sp)
-        Text(value, fontSize = 27.sp, fontWeight = FontWeight.Bold)
-        if (detail != null) Text(detail, color = Muted, fontSize = 9.sp)
+private fun LegendDot(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Box(Modifier.size(7.dp).background(color, RoundedCornerShape(50)))
+        androidx.compose.material3.Text(label, color = TextMuted, fontSize = 8.sp)
     }
 }
+
 @Composable
-internal fun EmptyText(text: String) { Text(text, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 6.dp)) }
-internal fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
-internal fun formatBytes(bytes: Long): String {
-    if (bytes <= 0) return "0 B"
-    val units = listOf("B", "KB", "MB", "GB", "TB")
-    val i = (kotlin.math.ln(bytes.toDouble()) / kotlin.math.ln(1024.0)).toInt().coerceIn(0, 4)
-    val value = bytes / Math.pow(1024.0, i.toDouble())
-    return String.format(java.util.Locale.getDefault(), if (i == 0) "%.0f %s" else "%.1f %s", value, units[i])
-}
-internal fun formatUptime(s: Long): String {
-    var n = s.coerceAtLeast(0); val days = n / 86400; n %= 86400
-    val h = n / 3600; n %= 3600; val m = n / 60; val sec = n % 60
-    return (if (days > 0) "%02d:".format(days) else "") + "%02d:%02d:%02d".format(h, m, sec)
-}
-
-
-private fun localNetworkIpv4(): String {
-    return try {
-        java.net.NetworkInterface.getNetworkInterfaces().toList()
-            .asSequence()
-            .filter { it.isUp && !it.isLoopback }
-            .flatMap { it.inetAddresses.toList().asSequence() }
-            .filterIsInstance<java.net.Inet4Address>()
-            .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
-            ?.hostAddress.orEmpty()
-    } catch (_: Exception) { "" }
+private fun MeshNodeRow(node: JSONObject, isSelf: Boolean) {
+    val connected = isSelf || node.optBoolean("connected")
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            Modifier.size(32.dp).background(Raised, RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.material3.Text(
+                if (isSelf) "●" else "◉",
+                color = if (isSelf) LocalNode else if (connected) Connected else Disconnected,
+                fontSize = 14.sp
+            )
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            androidx.compose.material3.Text(
+                node.optString("name", "SciNET device").ifBlank { "SciNET device" },
+                color = TextPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            androidx.compose.material3.Text(
+                node.optString("platform", "unknown").uppercase(Locale.ROOT) +
+                    "  ·  " + node.optString("id").take(8).uppercase(Locale.ROOT),
+                color = TextMuted,
+                fontSize = 8.sp,
+                letterSpacing = .5.sp
+            )
+        }
+        androidx.compose.material3.Text(
+            if (isSelf) "THIS NODE" else if (connected) "ONLINE" else "OFFLINE",
+            color = if (connected) Connected else Disconnected,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
 }

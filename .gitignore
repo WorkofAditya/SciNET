@@ -1,16 +1,6 @@
-.venv/
-__pycache__/
-*.pyc
-storage/*
-!storage/.gitkeep
-
-# Keep transferred files out of version control
-shared_files/*
-!shared_files/.gitkeep
+# Android / Gradle
 .gradle/
 **/build/
 local.properties
 .idea/
 *.iml
-device_identity.json
-device_identity.tmp

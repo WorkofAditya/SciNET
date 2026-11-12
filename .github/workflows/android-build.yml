@@ -1,10 +1,8 @@
-name: Android build
+name: SciNET Android APK
 
 on:
   push:
     branches:
-      - main
-      - feature/native-android-app
       - feature/multi-device-peer-network
   pull_request:
     branches:
@@ -12,30 +10,42 @@ on:
       - feature/multi-device-peer-network
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  assemble-debug:
+  build:
+    name: Build debug APK
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
-      - name: Check Python server syntax
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Compile Python server
-        run: python -m py_compile server.py
-      - name: Check dashboard JavaScript syntax
-        run: node --check legacy-web/app.js
-      - name: Install Gradle
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.11.1'
-      - name: Verify Gradle projects
-        run: gradle projects
-      - name: Build Android debug APK
+          gradle-version: "8.11.1"
+
+      - name: Assemble APK
         run: gradle :app:assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scinet-mesh-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
