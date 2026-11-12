@@ -14,9 +14,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,6 +41,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -52,6 +56,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.geometry.Offset
@@ -124,6 +130,7 @@ private fun MeshGraphScreen() {
     var messageTarget by remember { mutableStateOf<PeerTarget?>(null) }
     var messageDraft by remember { mutableStateOf("") }
     var pendingFileBroadcast by remember { mutableStateOf(false) }
+    var inviteSession by remember { mutableStateOf<InviteApkServer.Session?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -197,6 +204,15 @@ private fun MeshGraphScreen() {
             onSelfLongPress = {
                 messageTarget = PeerTarget(selfId, "All connected devices", isSelf = true)
                 messageDraft = ""
+            },
+            onSelfDoubleTap = {
+                if (inviteSession == null) {
+                    runCatching { InviteApkServer.start(context.applicationContext) }
+                        .onSuccess { inviteSession = it }
+                        .onFailure {
+                            Toast.makeText(context, "Could not start SciNET sharing: ${it.message ?: "network unavailable"}", Toast.LENGTH_LONG).show()
+                        }
+                }
             }
         )
 
@@ -225,6 +241,53 @@ private fun MeshGraphScreen() {
                 }
             }
         }
+    }
+
+    if (inviteSession != null) {
+        val session = inviteSession!!
+        AlertDialog(
+            onDismissRequest = {
+                session.server.close()
+                inviteSession = null
+            },
+            title = { Text("Share SciNET") },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Image(
+                        bitmap = session.qrCode.asImageBitmap(),
+                        contentDescription = "Scan to download SciNET",
+                        modifier = Modifier.size(224.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    Text("Scan this QR code on the other device to download SciNET.", color = LabelColor)
+                    SelectionContainer {
+                        Text(session.url, color = PeerNodeColor, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text("Keep this screen open while the APK is downloading.", color = LabelColor, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = {
+                        context.getSystemService(ClipboardManager::class.java)
+                            .setPrimaryClip(ClipData.newPlainText("SciNET download address", session.url))
+                        Toast.makeText(context, "Download address copied", Toast.LENGTH_SHORT).show()
+                    }) { Text("Copy address") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    session.server.close()
+                    inviteSession = null
+                }) { Text("Done") }
+            },
+            containerColor = Color(0xFF121923),
+            titleContentColor = LocalNodeColor,
+            textContentColor = LabelColor
+        )
+    }
+
+    androidx.compose.runtime.DisposableEffect(inviteSession) {
+        onDispose { inviteSession?.server?.close() }
     }
 
     if (messageTarget != null) {
@@ -417,7 +480,8 @@ private fun MeshGraph(
     messagePulses: List<MessagePulse>,
     onPeerTap: (PeerTarget) -> Unit,
     onPeerLongPress: (PeerTarget) -> Unit,
-    onSelfLongPress: () -> Unit
+    onSelfLongPress: () -> Unit,
+    onSelfDoubleTap: () -> Unit
 ) {
     val density = LocalDensity.current
     val labelSize = with(density) { 11.sp.toPx() }
@@ -431,6 +495,7 @@ private fun MeshGraph(
     val currentOnPeerTap by rememberUpdatedState(onPeerTap)
     val currentOnPeerLongPress by rememberUpdatedState(onPeerLongPress)
     val currentOnSelfLongPress by rememberUpdatedState(onSelfLongPress)
+    val currentOnSelfDoubleTap by rememberUpdatedState(onSelfDoubleTap)
     val hasAnimations = activeTransfers.isNotEmpty() || messagePulses.isNotEmpty()
     var animationTime by remember { mutableStateOf(System.currentTimeMillis()) }
 
@@ -448,6 +513,13 @@ private fun MeshGraph(
             .fillMaxSize()
             .pointerInput(Unit) {
                 detectTapGestures(
+                    onDoubleTap = { position ->
+                        findNodeAt(
+                            position.x, position.y, currentNodes, currentSelfId,
+                            size.width.toFloat(), size.height.toFloat(),
+                            currentLabelSize, currentPeerRadius, currentLabelOffset
+                        )?.takeIf { it.isSelf }?.let { currentOnSelfDoubleTap() }
+                    },
                     onTap = { position ->
                         findNodeAt(
                             position.x, position.y, currentNodes, currentSelfId,
