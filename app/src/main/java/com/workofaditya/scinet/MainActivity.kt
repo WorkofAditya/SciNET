@@ -2,6 +2,7 @@ package com.workofaditya.scinet
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -9,12 +10,12 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -41,8 +42,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -56,8 +55,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.geometry.Offset
@@ -130,7 +127,6 @@ private fun MeshGraphScreen() {
     var messageTarget by remember { mutableStateOf<PeerTarget?>(null) }
     var messageDraft by remember { mutableStateOf("") }
     var pendingFileBroadcast by remember { mutableStateOf(false) }
-    var inviteSession by remember { mutableStateOf<InviteApkServer.Session?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -205,15 +201,7 @@ private fun MeshGraphScreen() {
                 messageTarget = PeerTarget(selfId, "All connected devices", isSelf = true)
                 messageDraft = ""
             },
-            onSelfDoubleTap = {
-                if (inviteSession == null) {
-                    runCatching { InviteApkServer.start(context.applicationContext) }
-                        .onSuccess { inviteSession = it }
-                        .onFailure {
-                            Toast.makeText(context, "Could not start SciNET sharing: ${it.message ?: "network unavailable"}", Toast.LENGTH_LONG).show()
-                        }
-                }
-            }
+            onSelfDoubleTap = { shareInstalledApk(context) }
         )
 
         if (visibleTransfers.isNotEmpty()) {
@@ -241,53 +229,6 @@ private fun MeshGraphScreen() {
                 }
             }
         }
-    }
-
-    if (inviteSession != null) {
-        val session = inviteSession!!
-        AlertDialog(
-            onDismissRequest = {
-                session.server.close()
-                inviteSession = null
-            },
-            title = { Text("Share SciNET") },
-            text = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Image(
-                        bitmap = session.qrCode.asImageBitmap(),
-                        contentDescription = "Scan to download SciNET",
-                        modifier = Modifier.size(224.dp),
-                        contentScale = ContentScale.Fit
-                    )
-                    Text("Scan this QR code on the other device to download SciNET.", color = LabelColor)
-                    SelectionContainer {
-                        Text(session.url, color = PeerNodeColor, style = MaterialTheme.typography.bodySmall)
-                    }
-                    Text("Keep this screen open while the APK is downloading.", color = LabelColor, style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = {
-                        context.getSystemService(ClipboardManager::class.java)
-                            .setPrimaryClip(ClipData.newPlainText("SciNET download address", session.url))
-                        Toast.makeText(context, "Download address copied", Toast.LENGTH_SHORT).show()
-                    }) { Text("Copy address") }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    session.server.close()
-                    inviteSession = null
-                }) { Text("Done") }
-            },
-            containerColor = Color(0xFF121923),
-            titleContentColor = LocalNodeColor,
-            textContentColor = LabelColor
-        )
-    }
-
-    androidx.compose.runtime.DisposableEffect(inviteSession) {
-        onDispose { inviteSession?.server?.close() }
     }
 
     if (messageTarget != null) {
@@ -744,6 +685,44 @@ private fun findNodeAt(
             y >= baseline - labelSize - 4f && y <= baseline + 5f
         onDot || onLabel
     }?.let { PeerTarget(it.optString("id"), it.optString("name").ifBlank { "SciNET device" }) }
+}
+
+private fun shareInstalledApk(context: Context) {
+    val appInfo = runCatching {
+        context.packageManager.getApplicationInfo(context.packageName, 0)
+    }.getOrElse {
+        Toast.makeText(context, "Could not locate the installed SciNET APK", Toast.LENGTH_LONG).show()
+        return
+    }
+
+    if (!appInfo.splitSourceDirs.isNullOrEmpty()) {
+        Toast.makeText(
+            context,
+            "This installation uses split APKs. A single APK cannot be shared.",
+            Toast.LENGTH_LONG
+        ).show()
+        return
+    }
+
+    if (PeerNetworkState.peers.isEmpty()) {
+        Toast.makeText(context, "Connect another SciNET device first", Toast.LENGTH_LONG).show()
+        return
+    }
+
+    val sent = FileTransferManager.beginOutgoingFileToAll(
+        File(appInfo.sourceDir),
+        "SciNET.apk",
+        "application/vnd.android.package-archive"
+    )
+    if (sent > 0) {
+        Toast.makeText(
+            context,
+            "SciNET APK offered to $sent device(s). Accept the file on the receiving device.",
+            Toast.LENGTH_LONG
+        ).show()
+    } else {
+        Toast.makeText(context, "Could not offer the APK. Check the peer connection and try again.", Toast.LENGTH_LONG).show()
+    }
 }
 
 private fun openTransferredFile(context: android.content.Context, uri: Uri, mimeType: String) {
