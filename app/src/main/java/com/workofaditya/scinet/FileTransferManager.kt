@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -133,8 +134,8 @@ internal object FileTransferManager {
     }
 
     fun beginOutgoingToAll(context: Context, uri: Uri): Int {
-        val connectedPeers = PeerNetworkState.peers.values
-            .map { it.optString("id") to it.optString("name").ifBlank { "SciNET device" } }
+        val connectedPeers = PeerNetworkState.peers.entries
+            .map { it.key to it.value.optString("name").ifBlank { "SciNET device" } }
             .filter { it.first.isNotBlank() }
             .distinctBy { it.first }
         return connectedPeers.count { (peerId, peerName) ->
@@ -161,7 +162,10 @@ internal object FileTransferManager {
         if (size < 0L || size > MAX_FILE_SIZE) return false
 
         val safeName = safeFileName(fileName)
-        val mime = resolver.getType(uri) ?: "application/octet-stream"
+        val extension = safeName.substringAfterLast('.', "").lowercase()
+        val mime = resolver.getType(uri)
+            ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+            ?: "application/octet-stream"
         val id = UUID.randomUUID().toString().replace("-", "")
         val record = TransferRecord(
             id = id,
