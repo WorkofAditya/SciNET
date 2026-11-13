@@ -564,61 +564,29 @@ private fun MeshGraph(
                 )
             }
     ) {
-        val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
-        val peers = nodes
-            .filterNot { it.optString("id") == selfId || it.optBoolean("self") }
+        val connectedNodes = nodes
+            .filter { it.optString("id").isNotBlank() && (it.optString("id") == selfId || it.optBoolean("self") || it.optBoolean("connected")) }
+            .distinctBy { it.optString("id") }
             .sortedBy { it.optString("id") }
-        val positions = graphPeerPositions(
-            peers, size.width, size.height
-        ).toMutableMap()
-        nodes.firstOrNull { it.optString("id") == selfId || it.optBoolean("self") }?.let {
-            positions[it.optString("id")] = center
-        }
-        if (selfId.isNotBlank()) positions[selfId] = center
+        val positions = graphNodePositions(connectedNodes, size.width, size.height)
+        val connectedIds = connectedNodes.map { it.optString("id") }
 
-        // Render a full mesh between every currently connected node.
-        // This is presentation only; actual peer sockets and routing remain unchanged.
-        val connectedIds = nodes
-            .filter { it.optString("id").isNotBlank() && (it.optString("id") == selfId || it.optBoolean("connected")) }
-            .map { it.optString("id") }
-            .distinct()
+        // Three devices form an actual triangle. More devices are distributed
+        // evenly across concentric rings; every pair is joined by a straight edge.
         for (i in connectedIds.indices) {
             for (j in i + 1 until connectedIds.size) {
                 val a = positions[connectedIds[i]] ?: continue
                 val b = positions[connectedIds[j]] ?: continue
-                val isLocalLink = connectedIds[i] == selfId || connectedIds[j] == selfId
-                if (isLocalLink) {
-                    drawLine(
-                        color = ActiveLinkColor.copy(alpha = 0.76f),
-                        start = a,
-                        end = b,
-                        strokeWidth = 1.5.dp.toPx()
-                    )
-                } else {
-                    // Peer-to-peer links must remain visible even when the two
-                    // peers and this device happen to lie on the same axis.
-                    // Bend the edge away from the local node instead of drawing
-                    // it directly through the centre node and hiding the link.
-                    val dx = b.x - a.x
-                    val dy = b.y - a.y
-                    val distance = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
-                    val bend = 84.dp.toPx()
-                    val control = Offset(
-                        (a.x + b.x) / 2f - (dy / distance) * bend,
-                        (a.y + b.y) / 2f + (dx / distance) * bend
-                    )
-                    val peerLink = Path().apply {
-                        moveTo(a.x, a.y)
-                        quadraticTo(control.x, control.y, b.x, b.y)
-                    }
-                    drawPath(
-                        path = peerLink,
-                        color = ActiveLinkColor.copy(alpha = 0.68f),
-                        style = Stroke(width = 1.35.dp.toPx())
-                    )
-                }
+                val localLink = connectedIds[i] == selfId || connectedIds[j] == selfId
+                drawLine(
+                    color = ActiveLinkColor.copy(alpha = if (localLink) 0.78f else 0.62f),
+                    start = a,
+                    end = b,
+                    strokeWidth = if (localLink) 1.55.dp.toPx() else 1.3.dp.toPx()
+                )
             }
         }
+        val center = Offset(size.width / 2f, size.height / 2f)
 
         // AirLink-style expanding signal ring: starts at this device and
         // travels continuously to the farthest screen edge, fading as it expands.
@@ -752,25 +720,39 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMessageFlash(
     drawCircle(Color.White, radius = radius, center = point)
 }
 
-private fun graphPeerPositions(
-    peers: List<JSONObject>,
+private fun graphNodePositions(
+    nodes: List<JSONObject>,
     width: Float,
     height: Float
-): Map<String, androidx.compose.ui.geometry.Offset> {
+): Map<String, Offset> {
     val centerX = width / 2f
     val centerY = height / 2f
-    val availableRadius = minOf(width, height) * 0.37f
-    val positions = HashMap<String, androidx.compose.ui.geometry.Offset>()
-    peers.forEachIndexed { index, node ->
-        val ring = index / 10
-        val indexInRing = index % 10
-        val countInRing = minOf(10, peers.size - ring * 10)
-        val ringRadius = availableRadius * (0.72f + ring * 0.34f)
-        val angle = -PI / 2.0 + (2.0 * PI * indexInRing / countInRing)
-        positions[node.optString("id")] = androidx.compose.ui.geometry.Offset(
-            centerX + cos(angle).toFloat() * ringRadius,
-            centerY + sin(angle).toFloat() * ringRadius
-        )
+    val maxRadius = minOf(width, height) * 0.36f
+    val positions = HashMap<String, Offset>()
+    val count = nodes.size
+    if (count == 0) return positions
+    if (count == 1) {
+        positions[nodes[0].optString("id")] = Offset(centerX, centerY)
+        return positions
+    }
+
+    val ringCount = if (count <= 8) 1 else kotlin.math.ceil(count / 8.0).toInt()
+    val baseCount = count / ringCount
+    val extra = count % ringCount
+    var index = 0
+    for (ring in 0 until ringCount) {
+        val ringSize = baseCount + if (ring < extra) 1 else 0
+        val radius = if (ringCount == 1) maxRadius else {
+            maxRadius * (0.42f + 0.58f * (ring.toFloat() / (ringCount - 1).toFloat()))
+        }
+        for (slot in 0 until ringSize) {
+            val angle = -PI / 2.0 + (2.0 * PI * slot / ringSize) + (ring * PI / ringCount)
+            positions[nodes[index].optString("id")] = Offset(
+                centerX + cos(angle).toFloat() * radius,
+                centerY + sin(angle).toFloat() * radius
+            )
+            index++
+        }
     }
     return positions
 }
@@ -786,16 +768,16 @@ private fun findNodeAt(
     peerRadius: Float,
     labelOffset: Float
 ): PeerTarget? {
-    val allPeers = nodes
-        .filterNot { it.optString("id") == selfId || it.optBoolean("self") }
+    val connectedNodes = nodes
+        .filter { it.optString("id").isNotBlank() && (it.optString("id") == selfId || it.optBoolean("self") || it.optBoolean("connected")) }
+        .distinctBy { it.optString("id") }
         .sortedBy { it.optString("id") }
-    val peers = allPeers.filter { it.optBoolean("connected") }
-    val positions = graphPeerPositions(allPeers, width, height)
+    val positions = graphNodePositions(connectedNodes, width, height)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = labelSize }
 
     val selfNode = nodes.firstOrNull { it.optString("id") == selfId || it.optBoolean("self") }
     if (selfNode != null) {
-        val point = Offset(width / 2f, height / 2f)
+        val point = positions[selfId] ?: Offset(width / 2f, height / 2f)
         val name = selfNode.optString("name").ifBlank { "This device" }.take(22)
         val halfWidth = paint.measureText(name) / 2f + 9f
         val baseline = point.y + peerRadius * 9f / 7f + labelOffset
@@ -808,7 +790,8 @@ private fun findNodeAt(
         }
     }
 
-    return peers.firstOrNull { node ->
+    return connectedNodes.firstOrNull { node ->
+        if (node.optString("id") == selfId || !node.optBoolean("connected")) return@firstOrNull false
         val point = positions[node.optString("id")] ?: return@firstOrNull false
         val name = node.optString("name").ifBlank { "SciNET node" }.take(22)
         val halfWidth = paint.measureText(name) / 2f + 9f
