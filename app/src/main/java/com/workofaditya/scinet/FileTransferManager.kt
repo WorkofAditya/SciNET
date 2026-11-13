@@ -153,11 +153,8 @@ internal object FileTransferManager {
         val to = message.optString("toPeerId")
         if (from.isBlank() || to.isBlank() || from == to) return
         when (message.optString("activity")) {
-            "message" -> {
-                if (PeerNetworkState.localDeviceId == to) addMessagePulse(from, to)
-            }
+            "message" -> addMessagePulse(from, to)
             "file_start" -> {
-                if (PeerNetworkState.localDeviceId == from || PeerNetworkState.localDeviceId == to) return
                 val id = message.optString("transferId")
                 if (id.isNotBlank()) {
                     meshTransfers[id] = MeshTransferActivity(
@@ -166,11 +163,7 @@ internal object FileTransferManager {
                     )
                 }
             }
-            "file_stop" -> {
-                if (PeerNetworkState.localDeviceId != from && PeerNetworkState.localDeviceId != to) {
-                    meshTransfers.remove(message.optString("transferId"))
-                }
-            }
+            "file_stop" -> meshTransfers.remove(message.optString("transferId"))
         }
     }
 
@@ -178,10 +171,10 @@ internal object FileTransferManager {
         activity: String, fromPeerId: String, toPeerId: String,
         transferId: String = "", fileName: String = ""
     ) {
-        PeerNetworkState.publishMeshActivity(
-            JSONObject().put("activity", activity).put("fromPeerId", fromPeerId)
-                .put("toPeerId", toPeerId).put("transferId", transferId).put("fileName", fileName)
-        )
+        val event = JSONObject().put("activity", activity).put("fromPeerId", fromPeerId)
+            .put("toPeerId", toPeerId).put("transferId", transferId).put("fileName", fileName)
+        handleMeshActivity(event)
+        PeerNetworkState.publishMeshActivity(event)
     }
 
     private fun publishFileActivity(record: TransferRecord, active: Boolean) {
