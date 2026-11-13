@@ -359,11 +359,11 @@ private fun MeshGraphScreen() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                    value = messageDraft,
-                    onValueChange = { messageDraft = it.take(16000) },
-                    placeholder = { Text("Write a message") },
-                    minLines = 2,
-                    maxLines = 6
+                        value = messageDraft,
+                        onValueChange = { messageDraft = it.take(16000) },
+                        placeholder = { Text("Write a message") },
+                        minLines = 2,
+                        maxLines = 6
                     )
                     if (target.isTestDevice) {
                         Text("Simulated device · no message will be sent", color = LabelColor, style = MaterialTheme.typography.bodySmall)
