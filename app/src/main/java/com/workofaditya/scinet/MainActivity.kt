@@ -587,37 +587,41 @@ private fun MeshGraph(
             }
         }
         val center = Offset(size.width / 2f, size.height / 2f)
+        val localPoint = positions[selfId] ?: center
 
-        // AirLink-style expanding signal ring: starts at this device and
-        // travels continuously to the farthest screen edge, fading as it expands.
+        // Keep the discovery pulse anchored to this device's actual vertex.
         val signalPhase = (animationTime % 6000L).toFloat() / 6000f
         val signalMaxRadius = kotlin.math.sqrt(
-            (center.x * center.x + center.y * center.y) +
-                ((size.width - center.x) * (size.width - center.x) +
-                    (size.height - center.y) * (size.height - center.y))
+            maxOf(
+                localPoint.x * localPoint.x + localPoint.y * localPoint.y,
+                (size.width - localPoint.x) * (size.width - localPoint.x) +
+                    (size.height - localPoint.y) * (size.height - localPoint.y)
+            )
         )
         drawCircle(
             color = PeerNodeColor.copy(alpha = 0.42f * (1f - signalPhase)),
             radius = (signalMaxRadius * signalPhase).coerceAtLeast(0.5f),
-            center = center,
+            center = localPoint,
             style = Stroke(width = 1.15.dp.toPx())
         )
 
         activeTransfers.forEach { transfer ->
             val peerPoint = positions[transfer.peerId] ?: return@forEach
             val localToPeer = transfer.direction == "outgoing"
-            val start = if (localToPeer) center else peerPoint
-            val end = if (localToPeer) peerPoint else center
+            val start = if (localToPeer) localPoint else peerPoint
+            val end = if (localToPeer) peerPoint else localPoint
             val progress = (animationTime % 1450L).toFloat() / 1450f
             drawDataPacket(start, end, progress, 2.4.dp.toPx())
         }
 
-        meshTransferActivities.forEach { activity ->
-            val start = positions[activity.fromPeerId] ?: return@forEach
-            val end = positions[activity.toPeerId] ?: return@forEach
-            val progress = (animationTime % 1450L).toFloat() / 1450f
-            drawDataPacket(start, end, progress, 2.4.dp.toPx())
-        }
+        meshTransferActivities
+            .filter { it.fromPeerId != selfId && it.toPeerId != selfId }
+            .forEach { activity ->
+                val start = positions[activity.fromPeerId] ?: return@forEach
+                val end = positions[activity.toPeerId] ?: return@forEach
+                val progress = (animationTime % 1450L).toFloat() / 1450f
+                drawDataPacket(start, end, progress, 2.4.dp.toPx())
+            }
 
         messagePulses.forEach { pulse ->
             val age = (animationTime - pulse.createdAt).coerceAtLeast(0L)
