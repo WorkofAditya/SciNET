@@ -89,21 +89,43 @@ internal object PeerNetworkState {
         messageSenders.values.forEach { sender -> runCatching { sender(payload) } }
     }
 
+    private fun sendMeshActivitySnapshot(peerId: String) {
+        val sender = messageSenders[peerId] ?: return
+        FileTransferManager.meshTransferActivities().forEach { activity ->
+            val now = System.currentTimeMillis()
+            val event = JSONObject()
+                .put("type", "mesh_activity")
+                .put("eventId", UUID.randomUUID().toString())
+                .put("originId", activity.fromPeerId)
+                .put("sentAt", now)
+                .put("snapshot", true)
+                .put("activity", "file_start")
+                .put("fromPeerId", activity.fromPeerId)
+                .put("toPeerId", activity.toPeerId)
+                .put("transferId", activity.transferId)
+                .put("fileName", activity.fileName)
+            seenMeshActivityEvents[event.optString("eventId")] = now
+            runCatching { sender(event.toString()) }
+        }
+    }
+
     fun relayMeshActivity(fromPeerId: String, event: JSONObject) {
         val eventId = event.optString("eventId")
         if (eventId.isBlank() || eventId.length > 80) return
         val now = System.currentTimeMillis()
         seenMeshActivityEvents.entries.removeIf { now - it.value > 120_000L }
         if (seenMeshActivityEvents.putIfAbsent(eventId, now) != null) return
+        FileTransferManager.handleMeshActivity(event)
+        if (event.optBoolean("snapshot")) return
         val payload = event.toString()
         messageSenders.forEach { (peerId, sender) ->
             if (peerId != fromPeerId) runCatching { sender(payload) }
         }
-        FileTransferManager.handleMeshActivity(event)
     }
 
     fun registerMessageSender(peerId: String, sender: (String) -> Boolean) {
         messageSenders[peerId] = sender
+        sendMeshActivitySnapshot(peerId)
     }
 
     fun unregisterMessageSender(peerId: String) {
