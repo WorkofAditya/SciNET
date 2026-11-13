@@ -324,9 +324,39 @@ internal object FileTransferManager {
                         ?: "SciNET device"
                     messages.add(IncomingTextMessage(message.optString("messageId").ifBlank { UUID.randomUUID().toString() }, peerName, text))
                     addMessagePulse(peerId, fromLocal = false)
+                    if (!MainActivity.isAppVisible) {
+                        showIncomingMessageNotification(context, peerName, text)
+                    }
                 }
             }
         }
+    }
+
+
+    private fun showIncomingMessageNotification(context: Context, peerName: String, text: String) {
+        if (MainActivity.isAppVisible) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val channelId = "scinet-incoming-messages"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                android.app.NotificationChannel(
+                    channelId,
+                    "SciNET messages",
+                    android.app.NotificationManager.IMPORTANCE_HIGH
+                ).apply { description = "Messages received while SciNET is in the background." }
+            )
+        }
+        val notification = android.app.Notification.Builder(context, channelId)
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle("Message · $peerName")
+            .setContentText(text.take(180))
+            .setStyle(android.app.Notification.BigTextStyle().bigText(text.take(3000)))
+            .setAutoCancel(true)
+            .build()
+        manager.notify(("message-" + System.currentTimeMillis()).hashCode(), notification)
     }
 
     fun writeIncomingChunk(
