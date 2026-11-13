@@ -720,7 +720,6 @@ class PeerNetworkService : Service() {
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
                 val nextAddresses = linkProperties.linkAddresses.joinToString("|") { it.toString() }
                 val changed = observedNetwork == network &&
-                    observedLinkAddresses.isNotBlank() &&
                     observedLinkAddresses != nextAddresses
                 observedLinkAddresses = nextAddresses
 
