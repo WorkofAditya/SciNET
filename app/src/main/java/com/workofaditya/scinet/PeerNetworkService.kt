@@ -627,8 +627,11 @@ class PeerNetworkService : Service() {
         runCatching { nsdManager.stopServiceDiscovery(listener) }
     }
 
-    private fun restartServiceDiscovery() {
+    private suspend fun restartServiceDiscovery() {
         stopServiceDiscovery()
+        // NSD stop is asynchronous; give Android's discovery daemon time to
+        // release the previous listener before registering a fresh one.
+        delay(500L)
         startServiceDiscovery()
     }
 
@@ -660,7 +663,6 @@ class PeerNetworkService : Service() {
 
             nsdRecoveryScheduled.set(false)
             if (shouldReregister) startNsd()
-            else startServiceDiscovery()
 
             // Preserve a full re-registration request that arrived while the
             // previous recovery was already running.
