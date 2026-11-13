@@ -590,22 +590,19 @@ private fun MeshGraph(
             }
         }
 
-        // Minimal radar sweep around the local node.
-        val radarPhase = (animationTime % 2600L).toFloat() / 2600f
-        val radarRadius = 34.dp.toPx()
-        drawCircle(
-            color = PeerNodeColor.copy(alpha = 0.12f),
-            radius = radarRadius,
-            center = center,
-            style = Stroke(width = 1.dp.toPx())
+        // AirLink-style expanding signal ring: starts at this device and
+        // travels continuously to the farthest screen edge, fading as it expands.
+        val signalPhase = (animationTime % 6000L).toFloat() / 6000f
+        val signalMaxRadius = kotlin.math.sqrt(
+            (center.x * center.x + center.y * center.y) +
+                ((size.width - center.x) * (size.width - center.x) +
+                    (size.height - center.y) * (size.height - center.y))
         )
-        drawArc(
-            color = PeerNodeColor.copy(alpha = 0.16f * (1f - radarPhase * 0.35f)),
-            startAngle = radarPhase * 360f - 18f,
-            sweepAngle = 36f,
-            useCenter = true,
-            topLeft = Offset(center.x - radarRadius, center.y - radarRadius),
-            size = Size(radarRadius * 2f, radarRadius * 2f)
+        drawCircle(
+            color = PeerNodeColor.copy(alpha = 0.42f * (1f - signalPhase)),
+            radius = (signalMaxRadius * signalPhase).coerceAtLeast(0.5f),
+            center = center,
+            style = Stroke(width = 1.15.dp.toPx())
         )
 
         activeTransfers.forEach { transfer ->
