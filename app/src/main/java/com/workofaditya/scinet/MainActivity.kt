@@ -144,6 +144,7 @@ private fun MeshGraphScreen() {
     var topology by remember { mutableStateOf(JSONObject()) }
     var transfers by remember { mutableStateOf(emptyList<TransferUiItem>()) }
     var messagePulses by remember { mutableStateOf(emptyList<MessagePulse>()) }
+    var meshTransferActivities by remember { mutableStateOf(emptyList<MeshTransferActivity>()) }
     var incomingMessage by remember { mutableStateOf<IncomingTextMessage?>(null) }
     var pendingFilePeer by remember { mutableStateOf<PeerTarget?>(null) }
     var messageTarget by remember { mutableStateOf<PeerTarget?>(null) }
@@ -182,6 +183,7 @@ private fun MeshGraphScreen() {
     LaunchedEffect(Unit) {
         while (true) {
             messagePulses = FileTransferManager.messagePulses()
+            meshTransferActivities = FileTransferManager.meshTransferActivities()
             delay(40)
         }
     }
@@ -210,6 +212,7 @@ private fun MeshGraphScreen() {
             links = links,
             selfId = selfId,
             activeTransfers = transfers.filter { it.status == "transferring" },
+            meshTransferActivities = meshTransferActivities,
             messagePulses = messagePulses,
             onPeerTap = { peer ->
                 pendingFilePeer = peer.takeUnless { it.isSelf }
@@ -496,6 +499,7 @@ private fun MeshGraph(
     links: List<JSONObject>,
     selfId: String,
     activeTransfers: List<TransferUiItem>,
+    meshTransferActivities: List<MeshTransferActivity>,
     messagePulses: List<MessagePulse>,
     onPeerTap: (PeerTarget) -> Unit,
     onPeerLongPress: (PeerTarget) -> Unit,
@@ -640,13 +644,18 @@ private fun MeshGraph(
             drawDataPacket(start, end, progress, 2.4.dp.toPx())
         }
 
+        meshTransferActivities.forEach { activity ->
+            val start = positions[activity.fromPeerId] ?: return@forEach
+            val end = positions[activity.toPeerId] ?: return@forEach
+            val progress = (animationTime % 1450L).toFloat() / 1450f
+            drawDataPacket(start, end, progress, 2.4.dp.toPx())
+        }
+
         messagePulses.forEach { pulse ->
             val age = (animationTime - pulse.createdAt).coerceAtLeast(0L)
             if (age > 700L) return@forEach
-            val peerPoint = positions[pulse.peerId] ?: return@forEach
-            val localToPeer = pulse.fromLocal
-            val start = if (localToPeer) center else peerPoint
-            val end = if (localToPeer) peerPoint else center
+            val start = positions[pulse.fromPeerId] ?: return@forEach
+            val end = positions[pulse.toPeerId] ?: return@forEach
             drawMessageFlash(start, end, age.toFloat() / 700f, 2.8.dp.toPx())
         }
 
