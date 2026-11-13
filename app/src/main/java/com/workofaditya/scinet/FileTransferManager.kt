@@ -458,7 +458,7 @@ internal object FileTransferManager {
                 if (record.status != "transferring") throw IllegalStateException("Transfer stopped")
 
                 val length = minOf(CHUNK_SIZE.toLong(), record.totalBytes - offset).toInt()
-                val url = "http://" + formatPeerUrlHost(host) + ":$port/api/transfers/" + record.id +
+                val url = "http://$host:$port/api/transfers/" + record.id +
                     "/chunk?offset=$offset&length=$length"
                 val request = Request.Builder()
                     .url(url)
