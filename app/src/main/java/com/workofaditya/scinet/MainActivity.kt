@@ -55,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -581,12 +582,37 @@ private fun MeshGraph(
             for (j in i + 1 until connectedIds.size) {
                 val a = positions[connectedIds[i]] ?: continue
                 val b = positions[connectedIds[j]] ?: continue
-                drawLine(
-                    color = ActiveLinkColor.copy(alpha = if (connectedIds[i] == selfId || connectedIds[j] == selfId) 0.76f else 0.48f),
-                    start = a,
-                    end = b,
-                    strokeWidth = if (connectedIds[i] == selfId || connectedIds[j] == selfId) 1.5.dp.toPx() else 1.15.dp.toPx()
-                )
+                val isLocalLink = connectedIds[i] == selfId || connectedIds[j] == selfId
+                if (isLocalLink) {
+                    drawLine(
+                        color = ActiveLinkColor.copy(alpha = 0.76f),
+                        start = a,
+                        end = b,
+                        strokeWidth = 1.5.dp.toPx()
+                    )
+                } else {
+                    // Peer-to-peer links must remain visible even when the two
+                    // peers and this device happen to lie on the same axis.
+                    // Bend the edge away from the local node instead of drawing
+                    // it directly through the centre node and hiding the link.
+                    val dx = b.x - a.x
+                    val dy = b.y - a.y
+                    val distance = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
+                    val bend = 84.dp.toPx()
+                    val control = Offset(
+                        (a.x + b.x) / 2f - (dy / distance) * bend,
+                        (a.y + b.y) / 2f + (dx / distance) * bend
+                    )
+                    val peerLink = Path().apply {
+                        moveTo(a.x, a.y)
+                        quadraticTo(control.x, control.y, b.x, b.y)
+                    }
+                    drawPath(
+                        path = peerLink,
+                        color = ActiveLinkColor.copy(alpha = 0.68f),
+                        style = Stroke(width = 1.35.dp.toPx())
+                    )
+                }
             }
         }
 
