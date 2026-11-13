@@ -86,7 +86,7 @@ private val PanelColor = Color(0xF0111720)
 private val LabelColor = Color(0xFFB1BECA)
 private val LabelPaintColor = android.graphics.Color.rgb(177, 190, 202)
 
-private data class PeerTarget(val id: String, val name: String, val isSelf: Boolean = false)
+private data class PeerTarget(val id: String, val name: String, val isSelf: Boolean = false, val isTestDevice: Boolean = false)
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -142,6 +142,7 @@ class MainActivity : ComponentActivity() {
 private fun MeshGraphScreen() {
     val context = LocalContext.current
     var topology by remember { mutableStateOf(JSONObject()) }
+    var testDevices by remember { mutableStateOf(emptyList<JSONObject>()) }
     var transfers by remember { mutableStateOf(emptyList<TransferUiItem>()) }
     var messagePulses by remember { mutableStateOf(emptyList<MessagePulse>()) }
     var meshTransferActivities by remember { mutableStateOf(emptyList<MeshTransferActivity>()) }
@@ -161,7 +162,11 @@ private fun MeshGraphScreen() {
                 FileTransferManager.beginOutgoingToAll(context, uri)
             } else {
                 pendingFilePeer?.let { target ->
-                    FileTransferManager.beginOutgoing(context, target.id, target.name, uri)
+                    if (target.isTestDevice) {
+                        Toast.makeText(context, "Test device selected — file transfer is UI simulation only", Toast.LENGTH_SHORT).show()
+                    } else {
+                        FileTransferManager.beginOutgoing(context, target.id, target.name, uri)
+                    }
                 }
             }
         }
@@ -188,19 +193,30 @@ private fun MeshGraphScreen() {
         }
     }
 
-    val nodes = remember(topology) {
+    val nodes = remember(topology, testDevices) {
         val array = topology.optJSONArray("nodes")
-        if (array == null) emptyList() else
+        val actualNodes = if (array == null) emptyList() else
             (0 until array.length()).mapNotNull { index ->
                 array.optJSONObject(index)?.let { JSONObject(it.toString()) }
             }
+        actualNodes + testDevices.map { JSONObject(it.toString()) }
     }
-    val links = remember(topology) {
+    val links = remember(topology, testDevices) {
         val array = topology.optJSONArray("links")
-        if (array == null) emptyList() else
+        val actualLinks = if (array == null) emptyList() else
             (0 until array.length()).mapNotNull { index ->
                 array.optJSONObject(index)?.let { JSONObject(it.toString()) }
             }
+        val testIds = testDevices.map { it.optString("id") }
+        val simulatedLinks = buildList {
+            testIds.forEach { id ->
+                add(JSONObject().put("a", topology.optString("selfId")).put("b", id).put("connected", true))
+            }
+            for (i in testIds.indices) for (j in i + 1 until testIds.size) {
+                add(JSONObject().put("a", testIds[i]).put("b", testIds[j]).put("connected", true))
+            }
+        }
+        actualLinks + simulatedLinks
     }
     val selfId = topology.optString("selfId")
     val visibleTransfers = transfers.filter { it.status != "offered" }.takeLast(3)
@@ -235,6 +251,23 @@ private fun MeshGraphScreen() {
                     }
             }
         )
+
+        Card(
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = PanelColor)
+        ) {
+            TextButton(
+                onClick = {
+                    testDevices = if (testDevices.isEmpty()) listOf(
+                        JSONObject().put("id", "test-device-phone").put("name", "Test Phone").put("platform", "android").put("connected", true).put("self", false).put("testDevice", true),
+                        JSONObject().put("id", "test-device-tablet").put("name", "Test Tablet").put("platform", "android").put("connected", true).put("self", false).put("testDevice", true)
+                    ) else emptyList()
+                }
+            ) {
+                Text(if (testDevices.isEmpty()) "＋  Add test devices" else "Remove test devices", color = PeerNodeColor)
+            }
+        }
 
         if (visibleTransfers.isNotEmpty()) {
             Column(
@@ -324,19 +357,26 @@ private fun MeshGraphScreen() {
                 )
             },
             text = {
-                OutlinedTextField(
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
                     value = messageDraft,
                     onValueChange = { messageDraft = it.take(16000) },
                     placeholder = { Text("Write a message") },
                     minLines = 2,
                     maxLines = 6
-                )
+                    )
+                    if (target.isTestDevice) {
+                        Text("Simulated device · no message will be sent", color = LabelColor, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
                     enabled = messageDraft.isNotBlank(),
                     onClick = {
-                        if (target.isSelf) {
+                        if (target.isTestDevice) {
+                            Toast.makeText(context, "Test device selected — messaging is UI simulation only", Toast.LENGTH_SHORT).show()
+                        } else if (target.isSelf) {
                             FileTransferManager.sendTextToAll(messageDraft)
                         } else {
                             FileTransferManager.sendText(target.id, messageDraft)
@@ -805,7 +845,13 @@ private fun findNodeAt(
         val onLabel = x >= point.x - halfWidth && x <= point.x + halfWidth &&
             y >= baseline - labelSize - 4f && y <= baseline + 5f
         onDot || onLabel
-    }?.let { PeerTarget(it.optString("id"), it.optString("name").ifBlank { "SciNET device" }) }
+    }?.let { node ->
+        PeerTarget(
+            node.optString("id"),
+            node.optString("name").ifBlank { "SciNET device" },
+            isTestDevice = node.optBoolean("testDevice")
+        )
+    }
 }
 
 private fun openTransferredFile(context: android.content.Context, uri: Uri, mimeType: String) {
