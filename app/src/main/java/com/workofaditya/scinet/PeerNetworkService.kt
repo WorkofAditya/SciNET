@@ -4,6 +4,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -247,10 +249,38 @@ class PeerNetworkService : Service() {
             startForeground(PEER_NOTIFICATION_ID, notification)
         }
         if (httpServer == null) startPeerServer()
+        startConnectionFeedbackMonitor()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun startConnectionFeedbackMonitor() {
+        scope.launch {
+            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 65)
+            val previous = mutableSetOf<String>()
+            try {
+                while (isActive) {
+                    val current = PeerNetworkState.peers.keys.toSet()
+                    val connected = current - previous
+                    val disconnected = previous - current
+                    if (connected.isNotEmpty()) {
+                        tone.startTone(ToneGenerator.TONE_PROP_BEEP, 90)
+                        delay(130)
+                        tone.startTone(ToneGenerator.TONE_PROP_BEEP, 90)
+                    }
+                    if (disconnected.isNotEmpty()) {
+                        tone.startTone(ToneGenerator.TONE_PROP_BEEP, 110)
+                    }
+                    previous.clear()
+                    previous.addAll(current)
+                    delay(350)
+                }
+            } finally {
+                tone.release()
+            }
+        }
+    }
 
     private fun startPeerServer() {
         try {
