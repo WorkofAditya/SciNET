@@ -86,7 +86,7 @@ private val PanelColor = Color(0xF0111720)
 private val LabelColor = Color(0xFFB1BECA)
 private val LabelPaintColor = android.graphics.Color.rgb(177, 190, 202)
 
-private data class PeerTarget(val id: String, val name: String, val isSelf: Boolean = false, val isTestDevice: Boolean = false)
+private data class PeerTarget(val id: String, val name: String, val isSelf: Boolean = false)
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -142,7 +142,6 @@ class MainActivity : ComponentActivity() {
 private fun MeshGraphScreen() {
     val context = LocalContext.current
     var topology by remember { mutableStateOf(JSONObject()) }
-    var testDevices by remember { mutableStateOf(emptyList<JSONObject>()) }
     var transfers by remember { mutableStateOf(emptyList<TransferUiItem>()) }
     var messagePulses by remember { mutableStateOf(emptyList<MessagePulse>()) }
     var meshTransferActivities by remember { mutableStateOf(emptyList<MeshTransferActivity>()) }
@@ -162,11 +161,7 @@ private fun MeshGraphScreen() {
                 FileTransferManager.beginOutgoingToAll(context, uri)
             } else {
                 pendingFilePeer?.let { target ->
-                    if (target.isTestDevice) {
-                        Toast.makeText(context, "Test device selected — file transfer is UI simulation only", Toast.LENGTH_SHORT).show()
-                    } else {
-                        FileTransferManager.beginOutgoing(context, target.id, target.name, uri)
-                    }
+                    FileTransferManager.beginOutgoing(context, target.id, target.name, uri)
                 }
             }
         }
@@ -193,30 +188,19 @@ private fun MeshGraphScreen() {
         }
     }
 
-    val nodes = remember(topology, testDevices) {
+    val nodes = remember(topology) {
         val array = topology.optJSONArray("nodes")
-        val actualNodes = if (array == null) emptyList() else
+        if (array == null) emptyList() else
             (0 until array.length()).mapNotNull { index ->
                 array.optJSONObject(index)?.let { JSONObject(it.toString()) }
             }
-        actualNodes + testDevices.map { JSONObject(it.toString()) }
     }
-    val links = remember(topology, testDevices) {
+    val links = remember(topology) {
         val array = topology.optJSONArray("links")
-        val actualLinks = if (array == null) emptyList() else
+        if (array == null) emptyList() else
             (0 until array.length()).mapNotNull { index ->
                 array.optJSONObject(index)?.let { JSONObject(it.toString()) }
             }
-        val testIds = testDevices.map { it.optString("id") }
-        val simulatedLinks = buildList {
-            testIds.forEach { id ->
-                add(JSONObject().put("a", topology.optString("selfId")).put("b", id).put("connected", true))
-            }
-            for (i in testIds.indices) for (j in i + 1 until testIds.size) {
-                add(JSONObject().put("a", testIds[i]).put("b", testIds[j]).put("connected", true))
-            }
-        }
-        actualLinks + simulatedLinks
     }
     val selfId = topology.optString("selfId")
     val visibleTransfers = transfers.filter { it.status != "offered" }.takeLast(3)
@@ -251,38 +235,6 @@ private fun MeshGraphScreen() {
                     }
             }
         )
-
-        Card(
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp),
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(containerColor = PanelColor)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.padding(horizontal = 6.dp)
-            ) {
-                TextButton(
-                    onClick = {
-                        val nextNumber = (testDevices.size + 1)
-                        testDevices = testDevices + JSONObject()
-                            .put("id", "test-device-$nextNumber")
-                            .put("name", "Test Device $nextNumber")
-                            .put("platform", "android")
-                            .put("connected", true)
-                            .put("self", false)
-                            .put("testDevice", true)
-                    }
-                ) {
-                    Text("＋  Add test device", color = PeerNodeColor)
-                }
-                if (testDevices.isNotEmpty()) {
-                    TextButton(onClick = { testDevices = emptyList() }) {
-                        Text("Remove all", color = LabelColor)
-                    }
-                }
-            }
-        }
 
         if (visibleTransfers.isNotEmpty()) {
             Column(
@@ -380,18 +332,13 @@ private fun MeshGraphScreen() {
                         minLines = 2,
                         maxLines = 6
                     )
-                    if (target.isTestDevice) {
-                        Text("Simulated device · no message will be sent", color = LabelColor, style = MaterialTheme.typography.bodySmall)
-                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     enabled = messageDraft.isNotBlank(),
                     onClick = {
-                        if (target.isTestDevice) {
-                            Toast.makeText(context, "Test device selected — messaging is UI simulation only", Toast.LENGTH_SHORT).show()
-                        } else if (target.isSelf) {
+                        if (target.isSelf) {
                             FileTransferManager.sendTextToAll(messageDraft)
                         } else {
                             FileTransferManager.sendText(target.id, messageDraft)
@@ -644,19 +591,20 @@ private fun MeshGraph(
         val center = Offset(size.width / 2f, size.height / 2f)
         val localPoint = positions[selfId] ?: center
 
-        // Keep the discovery pulse anchored to this device's actual vertex.
+        // The discovery pulse expands from the screen center, independently
+        // of the local device node's position in the mesh.
         val signalPhase = (animationTime % 6000L).toFloat() / 6000f
         val signalMaxRadius = kotlin.math.sqrt(
             maxOf(
-                localPoint.x * localPoint.x + localPoint.y * localPoint.y,
-                (size.width - localPoint.x) * (size.width - localPoint.x) +
-                    (size.height - localPoint.y) * (size.height - localPoint.y)
+                center.x * center.x + center.y * center.y,
+                (size.width - center.x) * (size.width - center.x) +
+                    (size.height - center.y) * (size.height - center.y)
             )
         )
         drawCircle(
             color = PeerNodeColor.copy(alpha = 0.42f * (1f - signalPhase)),
             radius = (signalMaxRadius * signalPhase).coerceAtLeast(0.5f),
-            center = localPoint,
+            center = center,
             style = Stroke(width = 1.15.dp.toPx())
         )
 
@@ -864,7 +812,6 @@ private fun findNodeAt(
         PeerTarget(
             node.optString("id"),
             node.optString("name").ifBlank { "SciNET device" },
-            isTestDevice = node.optBoolean("testDevice")
         )
     }
 }
