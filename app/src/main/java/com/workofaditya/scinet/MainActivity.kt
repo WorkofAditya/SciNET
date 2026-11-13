@@ -88,6 +88,20 @@ private val LabelPaintColor = android.graphics.Color.rgb(177, 190, 202)
 private data class PeerTarget(val id: String, val name: String, val isSelf: Boolean = false)
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        @Volatile var isAppVisible: Boolean = false
+    }
+
+    override fun onStart() {
+        super.onStart()
+        isAppVisible = true
+    }
+
+    override fun onStop() {
+        isAppVisible = false
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -494,7 +508,7 @@ private fun MeshGraph(
     val currentOnPeerLongPress by rememberUpdatedState(onPeerLongPress)
     val currentOnSelfLongPress by rememberUpdatedState(onSelfLongPress)
     val currentOnSelfDoubleTap by rememberUpdatedState(onSelfDoubleTap)
-    val hasAnimations = activeTransfers.isNotEmpty() || messagePulses.isNotEmpty()
+    val hasAnimations = true
     var animationTime by remember { mutableStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(hasAnimations) {
@@ -551,17 +565,42 @@ private fun MeshGraph(
         }
         if (selfId.isNotBlank()) positions[selfId] = center
 
-        links.forEach { link ->
-            val a = positions[link.optString("a")] ?: return@forEach
-            val b = positions[link.optString("b")] ?: return@forEach
-            val connected = link.optBoolean("connected")
-            drawLine(
-                color = if (connected) ActiveLinkColor.copy(alpha = 0.78f) else InactiveLinkColor,
-                start = a,
-                end = b,
-                strokeWidth = if (connected) 1.6.dp.toPx() else 1.dp.toPx()
-            )
+        // Render a full mesh between every currently connected node.
+        // This is presentation only; actual peer sockets and routing remain unchanged.
+        val connectedIds = nodes
+            .filter { it.optString("id").isNotBlank() && (it.optString("id") == selfId || it.optBoolean("connected")) }
+            .map { it.optString("id") }
+            .distinct()
+        for (i in connectedIds.indices) {
+            for (j in i + 1 until connectedIds.size) {
+                val a = positions[connectedIds[i]] ?: continue
+                val b = positions[connectedIds[j]] ?: continue
+                drawLine(
+                    color = ActiveLinkColor.copy(alpha = if (connectedIds[i] == selfId || connectedIds[j] == selfId) 0.76f else 0.48f),
+                    start = a,
+                    end = b,
+                    strokeWidth = if (connectedIds[i] == selfId || connectedIds[j] == selfId) 1.5.dp.toPx() else 1.15.dp.toPx()
+                )
+            }
         }
+
+        // Minimal radar sweep around the local node.
+        val radarPhase = (animationTime % 2600L).toFloat() / 2600f
+        val radarRadius = 34.dp.toPx()
+        drawCircle(
+            color = PeerNodeColor.copy(alpha = 0.12f),
+            radius = radarRadius,
+            center = center,
+            style = Stroke(width = 1.dp.toPx())
+        )
+        drawArc(
+            color = PeerNodeColor.copy(alpha = 0.16f * (1f - radarPhase * 0.35f)),
+            startAngle = radarPhase * 360f - 18f,
+            sweepAngle = 36f,
+            useCenter = true,
+            topLeft = Offset(center.x - radarRadius, center.y - radarRadius),
+            size = Size(radarRadius * 2f, radarRadius * 2f)
+        )
 
         activeTransfers.forEach { transfer ->
             val peerPoint = positions[transfer.peerId] ?: return@forEach
