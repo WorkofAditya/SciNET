@@ -311,7 +311,6 @@ internal object FileTransferManager {
                 .put("text", message)
         )
         if (sent) {
-            addMessagePulse(PeerNetworkState.localDeviceId, peerId)
             publishMeshActivity("message", PeerNetworkState.localDeviceId, peerId)
         }
         return sent
