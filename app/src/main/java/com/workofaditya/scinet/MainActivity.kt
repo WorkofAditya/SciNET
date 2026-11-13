@@ -257,15 +257,30 @@ private fun MeshGraphScreen() {
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(containerColor = PanelColor)
         ) {
-            TextButton(
-                onClick = {
-                    testDevices = if (testDevices.isEmpty()) listOf(
-                        JSONObject().put("id", "test-device-phone").put("name", "Test Phone").put("platform", "android").put("connected", true).put("self", false).put("testDevice", true),
-                        JSONObject().put("id", "test-device-tablet").put("name", "Test Tablet").put("platform", "android").put("connected", true).put("self", false).put("testDevice", true)
-                    ) else emptyList()
-                }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(horizontal = 6.dp)
             ) {
-                Text(if (testDevices.isEmpty()) "＋  Add test devices" else "Remove test devices", color = PeerNodeColor)
+                TextButton(
+                    onClick = {
+                        val nextNumber = (testDevices.size + 1)
+                        testDevices = testDevices + JSONObject()
+                            .put("id", "test-device-$nextNumber")
+                            .put("name", "Test Device $nextNumber")
+                            .put("platform", "android")
+                            .put("connected", true)
+                            .put("self", false)
+                            .put("testDevice", true)
+                    }
+                ) {
+                    Text("＋  Add test device", color = PeerNodeColor)
+                }
+                if (testDevices.isNotEmpty()) {
+                    TextButton(onClick = { testDevices = emptyList() }) {
+                        Text("Remove all", color = LabelColor)
+                    }
+                }
             }
         }
 
