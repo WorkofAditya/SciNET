@@ -207,6 +207,7 @@ class PeerNetworkService : Service() {
     private val resolvingService = AtomicBoolean(false)
     private val connectionJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     private val sockets = ConcurrentHashMap<String, WebSocket>()
+    private val connectionFeedbackRunning = AtomicBoolean(false)
 
     private lateinit var nsdManager: NsdManager
     private var registrationListener: NsdManager.RegistrationListener? = null
@@ -256,28 +257,36 @@ class PeerNetworkService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startConnectionFeedbackMonitor() {
+        if (!connectionFeedbackRunning.compareAndSet(false, true)) return
         scope.launch {
             val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 65)
             val previous = mutableSetOf<String>()
+            var initialized = false
             try {
                 while (isActive) {
                     val current = PeerNetworkState.peers.keys.toSet()
-                    val connected = current - previous
-                    val disconnected = previous - current
-                    if (connected.isNotEmpty()) {
-                        tone.startTone(ToneGenerator.TONE_PROP_BEEP, 90)
-                        delay(130)
-                        tone.startTone(ToneGenerator.TONE_PROP_BEEP, 90)
+                    if (!initialized) {
+                        previous.addAll(current)
+                        initialized = true
+                    } else {
+                        val connected = current - previous
+                        val disconnected = previous - current
+                        if (connected.isNotEmpty()) {
+                            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 90)
+                            delay(130)
+                            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 90)
+                        }
+                        if (disconnected.isNotEmpty()) {
+                            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 110)
+                        }
+                        previous.clear()
+                        previous.addAll(current)
                     }
-                    if (disconnected.isNotEmpty()) {
-                        tone.startTone(ToneGenerator.TONE_PROP_BEEP, 110)
-                    }
-                    previous.clear()
-                    previous.addAll(current)
                     delay(350)
                 }
             } finally {
                 tone.release()
+                connectionFeedbackRunning.set(false)
             }
         }
     }
