@@ -30,6 +30,7 @@ import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -44,7 +45,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.net.Inet4Address
-import java.net.Inet6Address
 import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -61,9 +61,6 @@ private const val PEER_CHANNEL_ID = "scinet-mesh-network"
 private const val PEER_NOTIFICATION_ID = 8765
 private const val NSD_RESOLUTION_TIMEOUT_MS = 15000L
 private const val NSD_DISCOVERY_REFRESH_MS = 180000L
-
-internal fun formatPeerUrlHost(host: String): String =
-    if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
 
 internal object PeerNetworkState {
     @Volatile var localDeviceId: String = ""
@@ -532,14 +529,16 @@ class PeerNetworkService : Service() {
             override fun onServiceRegistered(service: NsdServiceInfo) = Unit
 
             override fun onRegistrationFailed(service: NsdServiceInfo, errorCode: Int) {
-                if (registrationListener === this) registrationListener = null
+                if (registrationListener !== this) return
+                registrationListener = null
                 scheduleNsdRecovery(reRegister = true)
             }
 
             override fun onServiceUnregistered(service: NsdServiceInfo) = Unit
 
             override fun onUnregistrationFailed(service: NsdServiceInfo, errorCode: Int) {
-                if (registrationListener === this) registrationListener = null
+                if (registrationListener !== this) return
+                registrationListener = null
                 scheduleNsdRecovery(reRegister = true)
             }
         }
@@ -811,9 +810,11 @@ class PeerNetworkService : Service() {
                         } else {
                             listOfNotNull(info.host)
                         }
-                        val address = addresses.firstOrNull { it is Inet4Address }
-                            ?: addresses.firstOrNull { it is Inet6Address && !it.isLinkLocalAddress }
-                        val host = address?.hostAddress.orEmpty()
+                        // This server is currently bound to 0.0.0.0, so dial
+                        // the IPv4 result even when Android also reports IPv6.
+                        val host = addresses.firstOrNull { it is Inet4Address }
+                            ?.hostAddress
+                            .orEmpty()
                         if (host.isBlank()) {
                             retry = true
                             return
@@ -854,7 +855,8 @@ class PeerNetworkService : Service() {
         if (deviceId >= peer.id) return
         if (connectionJobs[peer.id]?.isActive == true) return
 
-        connectionJobs[peer.id] = scope.launch {
+        lateinit var connectionJob: kotlinx.coroutines.Job
+        connectionJob = scope.launch(start = CoroutineStart.LAZY) {
             while (isActive) {
                 // Always use the latest resolved address. A DHCP/network change can
                 // replace the endpoint while a previous connection attempt is ending.
@@ -862,7 +864,7 @@ class PeerNetworkService : Service() {
                 val opened = CompletableDeferred<Boolean>()
                 val closed = CompletableDeferred<Unit>()
                 val request = Request.Builder()
-                    .url("ws://" + formatPeerUrlHost(currentPeer.host) + ":" + currentPeer.port + "/ws/peer")
+                    .url("ws://" + currentPeer.host + ":" + currentPeer.port + "/ws/peer")
                     .header("User-Agent", "SciNET Android Mesh/1")
                     .build()
 
@@ -973,22 +975,18 @@ class PeerNetworkService : Service() {
 
             // If an endpoint was rediscovered while this job was shutting down,
             // make sure the new endpoint gets a connection attempt.
-            connectionJobs.remove(peer.id)
+            connectionJobs.remove(peer.id, connectionJob)
             if (isActive) {
                 endpoints[peer.id]?.let { latest -> startPeerConnection(latest) }
             }
         }
+        connectionJobs[peer.id] = connectionJob
+        connectionJob.start()
     }
 
     private fun isPrivateLanAddress(host: String): Boolean {
         val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
-        val bytes = address.address
-        val uniqueLocalIpv6 = address is Inet6Address &&
-            bytes.isNotEmpty() && (bytes[0].toInt() and 0xFE) == 0xFC
-        return address.isSiteLocalAddress ||
-            address.isLoopbackAddress ||
-            address.isLinkLocalAddress ||
-            uniqueLocalIpv6
+        return address.isSiteLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress
     }
 
     private fun acquireMulticastLock() {
