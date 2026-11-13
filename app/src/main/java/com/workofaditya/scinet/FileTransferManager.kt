@@ -47,9 +47,17 @@ internal data class IncomingTextMessage(
 )
 
 internal data class MessagePulse(
-    val peerId: String,
-    val fromLocal: Boolean,
+    val fromPeerId: String,
+    val toPeerId: String,
     val createdAt: Long
+)
+
+internal data class MeshTransferActivity(
+    val transferId: String,
+    val fromPeerId: String,
+    val toPeerId: String,
+    val fileName: String,
+    val updatedAt: Long
 )
 
 internal data class ChunkWriteResult(
@@ -95,6 +103,7 @@ internal object FileTransferManager {
     private val records = ConcurrentHashMap<String, TransferRecord>()
     private val messages = CopyOnWriteArrayList<IncomingTextMessage>()
     private val pulses = CopyOnWriteArrayList<MessagePulse>()
+    private val meshTransfers = ConcurrentHashMap<String, MeshTransferActivity>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)
@@ -128,9 +137,57 @@ internal object FileTransferManager {
         return pulses.toList()
     }
 
-    private fun addMessagePulse(peerId: String, fromLocal: Boolean) {
-        pulses.add(MessagePulse(peerId, fromLocal, System.currentTimeMillis()))
+    private fun addMessagePulse(fromPeerId: String, toPeerId: String) {
+        pulses.add(MessagePulse(fromPeerId, toPeerId, System.currentTimeMillis()))
         while (pulses.size > 64) pulses.removeAt(0)
+    }
+
+    fun meshTransferActivities(): List<MeshTransferActivity> {
+        val now = System.currentTimeMillis()
+        meshTransfers.entries.removeIf { now - it.value.updatedAt > 30_000L }
+        return meshTransfers.values.toList()
+    }
+
+    fun handleMeshActivity(message: JSONObject) {
+        val from = message.optString("fromPeerId")
+        val to = message.optString("toPeerId")
+        if (from.isBlank() || to.isBlank() || from == to) return
+        when (message.optString("activity")) {
+            "message" -> {
+                if (PeerNetworkState.localDeviceId == to) addMessagePulse(from, to)
+            }
+            "file_start" -> {
+                if (PeerNetworkState.localDeviceId == from || PeerNetworkState.localDeviceId == to) return
+                val id = message.optString("transferId")
+                if (id.isNotBlank()) {
+                    meshTransfers[id] = MeshTransferActivity(
+                        id, from, to, safeFileName(message.optString("fileName", "file")),
+                        System.currentTimeMillis()
+                    )
+                }
+            }
+            "file_stop" -> {
+                if (PeerNetworkState.localDeviceId != from && PeerNetworkState.localDeviceId != to) {
+                    meshTransfers.remove(message.optString("transferId"))
+                }
+            }
+        }
+    }
+
+    private fun publishMeshActivity(
+        activity: String, fromPeerId: String, toPeerId: String,
+        transferId: String = "", fileName: String = ""
+    ) {
+        PeerNetworkState.publishMeshActivity(
+            JSONObject().put("activity", activity).put("fromPeerId", fromPeerId)
+                .put("toPeerId", toPeerId).put("transferId", transferId).put("fileName", fileName)
+        )
+    }
+
+    private fun publishFileActivity(record: TransferRecord, active: Boolean) {
+        val from = if (record.direction == "outgoing") PeerNetworkState.localDeviceId else record.peerId
+        val to = if (record.direction == "outgoing") record.peerId else PeerNetworkState.localDeviceId
+        publishMeshActivity(if (active) "file_start" else "file_stop", from, to, record.id, record.fileName)
     }
 
     fun beginOutgoingToAll(context: Context, uri: Uri): Int {
@@ -235,6 +292,8 @@ internal object FileTransferManager {
             }
             else -> return
         }
+        if (action == "pause" || action == "cancel") publishFileActivity(record, active = false)
+        if (action == "resume") publishFileActivity(record, active = true)
         send(
             record.peerId,
             JSONObject().put("type", "file_control")
@@ -258,7 +317,10 @@ internal object FileTransferManager {
                 .put("messageId", UUID.randomUUID().toString())
                 .put("text", message)
         )
-        if (sent) addMessagePulse(peerId, fromLocal = true)
+        if (sent) {
+            addMessagePulse(PeerNetworkState.localDeviceId, peerId)
+            publishMeshActivity("message", PeerNetworkState.localDeviceId, peerId)
+        }
         return sent
     }
 
@@ -290,9 +352,13 @@ internal object FileTransferManager {
                 val record = records[transferId] ?: return
                 if (record.direction == "outgoing" && record.status == "offering") {
                     record.status = "transferring"
+                    publishFileActivity(record, active = true)
                 }
             }
-            "file_reject" -> records[transferId]?.status = "rejected"
+            "file_reject" -> records[transferId]?.let {
+                it.status = "rejected"
+                publishFileActivity(it, active = false)
+            }
             "file_progress" -> {
                 val record = records[transferId] ?: return
                 val bytes = message.optLong("transferredBytes", record.transferredBytes)
@@ -301,10 +367,17 @@ internal object FileTransferManager {
             "file_control" -> {
                 val record = records[transferId] ?: return
                 when (message.optString("action")) {
-                    "pause" -> if (record.status == "transferring") record.status = "paused"
-                    "resume" -> if (record.status == "paused") record.status = "transferring"
+                    "pause" -> if (record.status == "transferring") {
+                        record.status = "paused"
+                        publishFileActivity(record, active = false)
+                    }
+                    "resume" -> if (record.status == "paused") {
+                        record.status = "transferring"
+                        publishFileActivity(record, active = true)
+                    }
                     "cancel" -> {
                         record.status = "cancelled"
+                        publishFileActivity(record, active = false)
                         if (record.direction == "incoming") partialFile(context, transferId).delete()
                     }
                 }
@@ -314,16 +387,19 @@ internal object FileTransferManager {
                     it.transferredBytes = it.totalBytes
                     it.status = "completed"
                     it.completedAt = System.currentTimeMillis()
+                    publishFileActivity(it, active = false)
                 }
             }
-            "file_error" -> records[transferId]?.status = "failed"
+            "file_error" -> records[transferId]?.let {
+                it.status = "failed"
+                publishFileActivity(it, active = false)
+            }
             "text_message" -> {
                 val text = message.optString("text").take(16000)
                 if (text.isNotBlank()) {
                     val peerName = PeerNetworkState.peers[peerId]?.optString("name")?.ifBlank { "SciNET device" }
                         ?: "SciNET device"
                     messages.add(IncomingTextMessage(message.optString("messageId").ifBlank { UUID.randomUUID().toString() }, peerName, text))
-                    addMessagePulse(peerId, fromLocal = false)
                     if (!MainActivity.isAppVisible) {
                         showIncomingMessageNotification(context, peerName, text)
                     }
@@ -482,6 +558,7 @@ internal object FileTransferManager {
         } catch (error: Exception) {
             if (record.status !in setOf("cancelled", "completed")) {
                 record.status = "failed"
+                publishFileActivity(record, active = false)
                 send(
                     record.peerId,
                     JSONObject().put("type", "file_error")
@@ -534,9 +611,11 @@ internal object FileTransferManager {
             record.transferredBytes = record.totalBytes
             record.status = "completed"
             record.completedAt = System.currentTimeMillis()
+            publishFileActivity(record, active = false)
             send(record.peerId, JSONObject().put("type", "file_complete").put("transferId", record.id))
         } catch (error: Exception) {
             record.status = "failed"
+            publishFileActivity(record, active = false)
             send(
                 record.peerId,
                 JSONObject().put("type", "file_error")
