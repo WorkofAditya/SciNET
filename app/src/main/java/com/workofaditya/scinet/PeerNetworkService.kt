@@ -71,6 +71,36 @@ internal object PeerNetworkState {
     val reportedNodes = ConcurrentHashMap<String, JSONObject>()
     val reportedLinks = ConcurrentHashMap<String, JSONObject>()
     private val messageSenders = ConcurrentHashMap<String, (String) -> Boolean>()
+    private val seenMeshActivityEvents = ConcurrentHashMap<String, Long>()
+
+    fun publishMeshActivity(activity: JSONObject) {
+        val eventId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        seenMeshActivityEvents[eventId] = now
+        if (seenMeshActivityEvents.size > 512) {
+            seenMeshActivityEvents.entries.removeIf { now - it.value > 120_000L }
+        }
+        val event = JSONObject(activity.toString())
+            .put("type", "mesh_activity")
+            .put("eventId", eventId)
+            .put("originId", localDeviceId)
+            .put("sentAt", now)
+        val payload = event.toString()
+        messageSenders.values.forEach { sender -> runCatching { sender(payload) } }
+    }
+
+    fun relayMeshActivity(fromPeerId: String, event: JSONObject) {
+        val eventId = event.optString("eventId")
+        if (eventId.isBlank() || eventId.length > 80) return
+        val now = System.currentTimeMillis()
+        seenMeshActivityEvents.entries.removeIf { now - it.value > 120_000L }
+        if (seenMeshActivityEvents.putIfAbsent(eventId, now) != null) return
+        val payload = event.toString()
+        messageSenders.forEach { (peerId, sender) ->
+            if (peerId != fromPeerId) runCatching { sender(payload) }
+        }
+        FileTransferManager.handleMeshActivity(event)
+    }
 
     fun registerMessageSender(peerId: String, sender: (String) -> Boolean) {
         messageSenders[peerId] = sender
@@ -462,7 +492,11 @@ class PeerNetworkService : Service() {
                                 if (frame !is Frame.Text) continue
                                 val message = runCatching { JSONObject(frame.readText()) }.getOrNull() ?: continue
                                 PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
-                                FileTransferManager.handleSignal(applicationContext, remoteId, message)
+                                if (message.optString("type") == "mesh_activity") {
+                                    PeerNetworkState.relayMeshActivity(remoteId, message)
+                                } else {
+                                    FileTransferManager.handleSignal(applicationContext, remoteId, message)
+                                }
                                 if (message.optString("type") == "heartbeat") {
                                     peerRecord.put("lastSeen", System.currentTimeMillis())
                                     PeerNetworkState.knownPeers[remoteId]
@@ -888,7 +922,11 @@ class PeerNetworkService : Service() {
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         val message = runCatching { JSONObject(text) }.getOrNull() ?: return
                         PeerNetworkState.mergeTopology(message.optJSONObject("topology"))
-                        FileTransferManager.handleSignal(applicationContext, peer.id, message)
+                        if (message.optString("type") == "mesh_activity") {
+                            PeerNetworkState.relayMeshActivity(peer.id, message)
+                        } else {
+                            FileTransferManager.handleSignal(applicationContext, peer.id, message)
+                        }
                         when (message.optString("type")) {
                             "welcome" -> {
                                 if (message.optString("deviceId") != peer.id ||
