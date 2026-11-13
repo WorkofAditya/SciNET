@@ -144,7 +144,7 @@ internal object FileTransferManager {
 
     fun meshTransferActivities(): List<MeshTransferActivity> {
         val now = System.currentTimeMillis()
-        meshTransfers.entries.removeIf { now - it.value.updatedAt > 30_000L }
+        meshTransfers.entries.removeIf { now - it.value.updatedAt > 300_000L }
         return meshTransfers.values.toList()
     }
 
@@ -363,6 +363,7 @@ internal object FileTransferManager {
                 val record = records[transferId] ?: return
                 val bytes = message.optLong("transferredBytes", record.transferredBytes)
                 record.transferredBytes = bytes.coerceIn(0L, record.totalBytes)
+                if (record.status == "transferring") publishFileActivity(record, active = true)
             }
             "file_control" -> {
                 val record = records[transferId] ?: return
