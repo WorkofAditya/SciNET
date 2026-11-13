@@ -9,6 +9,9 @@ import android.media.ToneGenerator
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -40,12 +43,15 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Duration.Companion.seconds
 
 private const val PEER_PORT = 8765
@@ -53,6 +59,11 @@ private const val PEER_SERVICE_TYPE = "_scinet._tcp."
 private const val PEER_PROTOCOL_VERSION = 2
 private const val PEER_CHANNEL_ID = "scinet-mesh-network"
 private const val PEER_NOTIFICATION_ID = 8765
+private const val NSD_RESOLUTION_TIMEOUT_MS = 15000L
+private const val NSD_DISCOVERY_REFRESH_MS = 180000L
+
+internal fun formatPeerUrlHost(host: String): String =
+    if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
 
 internal object PeerNetworkState {
     @Volatile var localDeviceId: String = ""
@@ -204,10 +215,19 @@ class PeerNetworkService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val endpoints = ConcurrentHashMap<String, PeerEndpoint>()
     private val serviceResolutionQueue = ConcurrentLinkedQueue<NsdServiceInfo>()
+    private val queuedServiceNames = ConcurrentHashMap.newKeySet<String>()
+    private val resolutionAttempts = ConcurrentHashMap<String, Int>()
+    private val resolutionGeneration = AtomicLong(0L)
     private val resolvingService = AtomicBoolean(false)
+    private val nsdRecoveryScheduled = AtomicBoolean(false)
     private val connectionJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     private val sockets = ConcurrentHashMap<String, WebSocket>()
     private val connectionFeedbackRunning = AtomicBoolean(false)
+    private var discoveryRefreshJob: kotlinx.coroutines.Job? = null
+    private var serverRetryJob: kotlinx.coroutines.Job? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var observedNetwork: Network? = null
+    private var observedLinkAddresses: String = ""
 
     private lateinit var nsdManager: NsdManager
     private var registrationListener: NsdManager.RegistrationListener? = null
@@ -250,6 +270,8 @@ class PeerNetworkService : Service() {
             startForeground(PEER_NOTIFICATION_ID, notification)
         }
         if (httpServer == null) startPeerServer()
+        startNetworkMonitor()
+        startDiscoveryRefreshWatchdog()
         startConnectionFeedbackMonitor()
         return START_STICKY
     }
@@ -475,11 +497,22 @@ class PeerNetworkService : Service() {
         } catch (error: Exception) {
             httpServer = null
             updateNotification("Peer server could not start: " + (error.message ?: "port unavailable"))
+            if (serverRetryJob?.isActive != true) {
+                serverRetryJob = scope.launch {
+                    delay(5000L)
+                    if (isActive && httpServer == null) startPeerServer()
+                }
+            }
         }
     }
 
     private fun startNsd() {
-        val serviceInfo = NsdServiceInfo().apply {
+        if (registrationListener == null) startNsdRegistration()
+        startServiceDiscovery()
+    }
+
+    private fun createPeerServiceInfo(): NsdServiceInfo =
+        NsdServiceInfo().apply {
             serviceName = "SciNET-" + deviceId.take(8)
             serviceType = PEER_SERVICE_TYPE
             port = PEER_PORT
@@ -490,33 +523,77 @@ class PeerNetworkService : Service() {
             setAttribute("ws", "/ws/peer")
         }
 
-        registrationListener = object : NsdManager.RegistrationListener {
+    private fun startNsdRegistration() {
+        val serviceInfo = createPeerServiceInfo()
+        lateinit var listener: NsdManager.RegistrationListener
+        listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(service: NsdServiceInfo) = Unit
-            override fun onRegistrationFailed(service: NsdServiceInfo, errorCode: Int) = Unit
-            override fun onServiceUnregistered(service: NsdServiceInfo) = Unit
-            override fun onUnregistrationFailed(service: NsdServiceInfo, errorCode: Int) = Unit
-        }
 
-        discoveryListener = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(serviceType: String) = Unit
-            override fun onDiscoveryStopped(serviceType: String) = Unit
-
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                runCatching { nsdManager.stopServiceDiscovery(this) }
+            override fun onRegistrationFailed(service: NsdServiceInfo, errorCode: Int) {
+                if (registrationListener === this) registrationListener = null
+                scheduleNsdRecovery(reRegister = true)
             }
 
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) = Unit
+            override fun onServiceUnregistered(service: NsdServiceInfo) = Unit
+
+            override fun onUnregistrationFailed(service: NsdServiceInfo, errorCode: Int) {
+                if (registrationListener === this) registrationListener = null
+                scheduleNsdRecovery(reRegister = true)
+            }
+        }
+
+        registrationListener = listener
+        try {
+            nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (_: Exception) {
+            if (registrationListener === listener) registrationListener = null
+            scheduleNsdRecovery(reRegister = true)
+        }
+    }
+
+    private fun startServiceDiscovery() {
+        if (discoveryListener != null) return
+
+        lateinit var listener: NsdManager.DiscoveryListener
+        listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) = Unit
+
+            override fun onDiscoveryStopped(serviceType: String) {
+                if (discoveryListener === this) {
+                    discoveryListener = null
+                    scheduleNsdRecovery()
+                }
+            }
+
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                if (discoveryListener === this) discoveryListener = null
+                // Android documents that a failed start is not an active discovery.
+                scheduleNsdRecovery()
+            }
+
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                if (discoveryListener === this) discoveryListener = null
+                scheduleNsdRecovery()
+            }
 
             override fun onServiceFound(service: NsdServiceInfo) {
-                if (service.serviceName == serviceInfo.serviceName) return
+                if (discoveryListener !== this) return
+                if (service.serviceName == "SciNET-" + deviceId.take(8)) return
                 if (!service.serviceName.startsWith("SciNET-")) return
-                serviceResolutionQueue.add(service)
-                resolveNextService()
+                if (queuedServiceNames.add(service.serviceName)) {
+                    serviceResolutionQueue.add(service)
+                    resolveNextService()
+                }
             }
 
             override fun onServiceLost(service: NsdServiceInfo) {
+                if (discoveryListener !== this) return
                 serviceResolutionQueue.removeIf { it.serviceName == service.serviceName }
-                val shortId = service.serviceName.substringAfter("SciNET-", "").takeIf { it.isNotBlank() }
+                queuedServiceNames.remove(service.serviceName)
+                resolutionAttempts.remove(service.serviceName)
+
+                val shortId = service.serviceName.substringAfter("SciNET-", "")
+                    .takeIf { it.isNotBlank() }
                 if (shortId != null) {
                     val peerId = endpoints.keys.firstOrNull { it.startsWith(shortId, ignoreCase = true) }
                     if (peerId != null) {
@@ -530,8 +607,144 @@ class PeerNetworkService : Service() {
             }
         }
 
-        nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, registrationListener!!)
-        nsdManager.discoverServices(PEER_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener!!)
+        discoveryListener = listener
+        try {
+            nsdManager.discoverServices(
+                PEER_SERVICE_TYPE,
+                NsdManager.PROTOCOL_DNS_SD,
+                listener
+            )
+        } catch (_: Exception) {
+            if (discoveryListener === listener) discoveryListener = null
+            scheduleNsdRecovery()
+        }
+    }
+
+    private fun stopServiceDiscovery() {
+        val listener = discoveryListener ?: return
+        discoveryListener = null
+        runCatching { nsdManager.stopServiceDiscovery(listener) }
+    }
+
+    private fun restartServiceDiscovery() {
+        stopServiceDiscovery()
+        startServiceDiscovery()
+    }
+
+    private fun stopNsdRegistration() {
+        val listener = registrationListener ?: return
+        registrationListener = null
+        runCatching { nsdManager.unregisterService(listener) }
+    }
+
+    private fun scheduleNsdRecovery(reRegister: Boolean = false) {
+        if (!scope.isActive || !nsdRecoveryScheduled.compareAndSet(false, true)) return
+
+        scope.launch {
+            delay(1800L)
+            if (reRegister) {
+                stopServiceDiscovery()
+                stopNsdRegistration()
+                resolutionGeneration.incrementAndGet()
+                serviceResolutionQueue.clear()
+                queuedServiceNames.clear()
+                resolutionAttempts.clear()
+                resolvingService.set(false)
+                delay(700L)
+            } else {
+                restartServiceDiscovery()
+            }
+
+            nsdRecoveryScheduled.set(false)
+            if (reRegister) startNsd()
+            else startServiceDiscovery()
+        }
+    }
+
+    private fun startDiscoveryRefreshWatchdog() {
+        if (discoveryRefreshJob?.isActive == true) return
+        discoveryRefreshJob = scope.launch {
+            while (isActive) {
+                delay(NSD_DISCOVERY_REFRESH_MS)
+                // Periodically renew the browse operation in case the platform's
+                // mDNS discovery callback silently stops delivering results.
+                restartServiceDiscovery()
+            }
+        }
+    }
+
+    private fun startNetworkMonitor() {
+        if (networkCallback != null) return
+
+        val manager = getSystemService(ConnectivityManager::class.java)
+        observedNetwork = manager.activeNetwork
+        observedLinkAddresses = manager.getLinkProperties(observedNetwork)
+            ?.linkAddresses
+            ?.joinToString("|") { it.toString() }
+            .orEmpty()
+
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val previous = observedNetwork
+                observedNetwork = network
+                observedLinkAddresses = manager.getLinkProperties(network)
+                    ?.linkAddresses
+                    ?.joinToString("|") { it.toString() }
+                    .orEmpty()
+
+                if (previous != network && httpServer != null) {
+                    // Existing sockets belong to the old network. Drop outgoing
+                    // sockets and let fresh NSD results supply the new addresses.
+                    sockets.values.forEach { it.cancel() }
+                    scheduleNsdRecovery(reRegister = true)
+                }
+            }
+
+            override fun onLost(network: Network) {
+                if (observedNetwork == network) {
+                    observedNetwork = null
+                    observedLinkAddresses = ""
+                }
+            }
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                val nextAddresses = linkProperties.linkAddresses.joinToString("|") { it.toString() }
+                val changed = observedNetwork == network &&
+                    observedLinkAddresses.isNotBlank() &&
+                    observedLinkAddresses != nextAddresses
+                observedLinkAddresses = nextAddresses
+
+                if (changed && httpServer != null) {
+                    sockets.values.forEach { it.cancel() }
+                    scheduleNsdRecovery(reRegister = true)
+                }
+            }
+        }
+
+        runCatching {
+            manager.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        }
+    }
+
+    private fun retryServiceResolution(service: NsdServiceInfo) {
+        val attempts = resolutionAttempts.merge(service.serviceName, 1) { previous, oneMore ->
+            previous + oneMore
+        } ?: 1
+
+        if (attempts > 2) {
+            resolutionAttempts.remove(service.serviceName)
+            scheduleNsdRecovery()
+            return
+        }
+
+        scope.launch {
+            delay(1200L * attempts)
+            if (queuedServiceNames.add(service.serviceName)) {
+                serviceResolutionQueue.add(service)
+                resolveNextService()
+            }
+        }
     }
 
     private fun resolveNextService() {
@@ -539,29 +752,62 @@ class PeerNetworkService : Service() {
         val service = serviceResolutionQueue.poll()
         if (service == null) {
             resolvingService.set(false)
-            if (serviceResolutionQueue.isNotEmpty()) resolveNextService()
             return
         }
 
-        fun finishResolution() {
+        val generation = resolutionGeneration.get()
+        val finished = AtomicBoolean(false)
+        lateinit var timeoutJob: kotlinx.coroutines.Job
+
+        fun finishResolution(retry: Boolean) {
+            if (!finished.compareAndSet(false, true)) return
+            timeoutJob.cancel()
+            if (generation != resolutionGeneration.get()) return
+
+            queuedServiceNames.remove(service.serviceName)
             resolvingService.set(false)
-            if (serviceResolutionQueue.isNotEmpty()) resolveNextService()
+            if (retry) retryServiceResolution(service)
+            resolveNextService()
+        }
+
+        timeoutJob = scope.launch {
+            delay(NSD_RESOLUTION_TIMEOUT_MS)
+            finishResolution(retry = true)
         }
 
         try {
             nsdManager.resolveService(service, object : NsdManager.ResolveListener {
                 override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
-                    finishResolution()
+                    finishResolution(retry = true)
                 }
 
                 override fun onServiceResolved(info: NsdServiceInfo) {
+                    if (finished.get() || generation != resolutionGeneration.get()) return
+                    var retry = false
                     try {
                         val id = info.attributes["id"]?.toString(Charsets.UTF_8).orEmpty()
-                        val host = info.host?.hostAddress.orEmpty()
                         val version = info.attributes["protocol"]?.toString(Charsets.UTF_8)?.toIntOrNull()
-                        if (id.isBlank() || id == deviceId || host.isBlank() || host.contains(":") ||
-                            version != PEER_PROTOCOL_VERSION || info.port !in 1..65535
-                        ) return
+                        if (id.isBlank() || id == deviceId || version != PEER_PROTOCOL_VERSION ||
+                            info.port !in 1..65535
+                        ) {
+                            resolutionAttempts.remove(service.serviceName)
+                            return
+                        }
+
+                        // Android 14+ exposes all resolved addresses. Prefer IPv4
+                        // whenever available; older Android versions fall back to host.
+                        val addresses = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            info.hostAddresses
+                        } else {
+                            listOfNotNull(info.host)
+                        }
+                        val address = addresses.firstOrNull { it is Inet4Address }
+                            ?: addresses.firstOrNull { it is Inet6Address && !it.isLinkLocalAddress }
+                        val host = address?.hostAddress.orEmpty()
+                        if (host.isBlank()) {
+                            retry = true
+                            return
+                        }
 
                         val endpoint = PeerEndpoint(
                             id = id,
@@ -581,14 +827,15 @@ class PeerNetworkService : Service() {
                             .put("port", endpoint.port)
                             .put("connected", PeerNetworkState.peers[id]?.optBoolean("connected") == true)
                             .put("updatedAt", System.currentTimeMillis())
+                        resolutionAttempts.remove(service.serviceName)
                         startPeerConnection(endpoint)
                     } finally {
-                        finishResolution()
+                        finishResolution(retry = retry)
                     }
                 }
             })
         } catch (_: Exception) {
-            finishResolution()
+            finishResolution(retry = true)
         }
     }
 
@@ -598,11 +845,14 @@ class PeerNetworkService : Service() {
         if (connectionJobs[peer.id]?.isActive == true) return
 
         connectionJobs[peer.id] = scope.launch {
-            while (isActive && endpoints.containsKey(peer.id)) {
+            while (isActive) {
+                // Always use the latest resolved address. A DHCP/network change can
+                // replace the endpoint while a previous connection attempt is ending.
+                val currentPeer = endpoints[peer.id] ?: break
                 val opened = CompletableDeferred<Boolean>()
                 val closed = CompletableDeferred<Unit>()
                 val request = Request.Builder()
-                    .url("ws://" + peer.host + ":" + peer.port + "/ws/peer")
+                    .url("ws://" + formatPeerUrlHost(currentPeer.host) + ":" + currentPeer.port + "/ws/peer")
                     .header("User-Agent", "SciNET Android Mesh/1")
                     .build()
 
@@ -636,10 +886,10 @@ class PeerNetworkService : Service() {
                                 }
                                 val record = JSONObject()
                                     .put("id", peer.id)
-                                    .put("name", message.optString("deviceName", peer.name))
-                                    .put("platform", message.optString("platform", peer.platform))
-                                    .put("host", peer.host)
-                                    .put("port", peer.port)
+                                    .put("name", message.optString("deviceName", currentPeer.name))
+                                    .put("platform", message.optString("platform", currentPeer.platform))
+                                    .put("host", currentPeer.host)
+                                    .put("port", currentPeer.port)
                                     .put("connected", true)
                                     .put("lastSeen", System.currentTimeMillis())
                                 PeerNetworkState.peers[peer.id] = record
@@ -715,7 +965,13 @@ class PeerNetworkService : Service() {
 
     private fun isPrivateLanAddress(host: String): Boolean {
         val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
-        return address.isSiteLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress
+        val bytes = address.address
+        val uniqueLocalIpv6 = address is Inet6Address &&
+            bytes.isNotEmpty() && (bytes[0].toInt() and 0xFE) == 0xFC
+        return address.isSiteLocalAddress ||
+            address.isLoopbackAddress ||
+            address.isLinkLocalAddress ||
+            uniqueLocalIpv6
     }
 
     private fun acquireMulticastLock() {
@@ -757,9 +1013,18 @@ class PeerNetworkService : Service() {
     }
 
     override fun onDestroy() {
-        runCatching { discoveryListener?.let { nsdManager.stopServiceDiscovery(it) } }
-        runCatching { registrationListener?.let { nsdManager.unregisterService(it) } }
+        discoveryRefreshJob?.cancel()
+        serverRetryJob?.cancel()
+        networkCallback?.let { callback ->
+            runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
+        }
+        networkCallback = null
+        stopServiceDiscovery()
+        stopNsdRegistration()
+        resolutionGeneration.incrementAndGet()
         serviceResolutionQueue.clear()
+        queuedServiceNames.clear()
+        resolutionAttempts.clear()
         resolvingService.set(false)
         sockets.values.forEach { it.close(1001, "SciNET node stopped") }
         connectionJobs.values.forEach { it.cancel() }
