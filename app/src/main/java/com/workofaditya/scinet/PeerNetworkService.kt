@@ -220,6 +220,7 @@ class PeerNetworkService : Service() {
     private val resolutionGeneration = AtomicLong(0L)
     private val resolvingService = AtomicBoolean(false)
     private val nsdRecoveryScheduled = AtomicBoolean(false)
+    private val nsdReregisterRequested = AtomicBoolean(false)
     private val connectionJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     private val sockets = ConcurrentHashMap<String, WebSocket>()
     private val connectionFeedbackRunning = AtomicBoolean(false)
@@ -500,6 +501,7 @@ class PeerNetworkService : Service() {
             if (serverRetryJob?.isActive != true) {
                 serverRetryJob = scope.launch {
                     delay(5000L)
+                    serverRetryJob = null
                     if (isActive && httpServer == null) startPeerServer()
                 }
             }
@@ -638,11 +640,13 @@ class PeerNetworkService : Service() {
     }
 
     private fun scheduleNsdRecovery(reRegister: Boolean = false) {
+        if (reRegister) nsdReregisterRequested.set(true)
         if (!scope.isActive || !nsdRecoveryScheduled.compareAndSet(false, true)) return
 
         scope.launch {
             delay(1800L)
-            if (reRegister) {
+            val shouldReregister = nsdReregisterRequested.getAndSet(false)
+            if (shouldReregister) {
                 stopServiceDiscovery()
                 stopNsdRegistration()
                 resolutionGeneration.incrementAndGet()
@@ -656,8 +660,12 @@ class PeerNetworkService : Service() {
             }
 
             nsdRecoveryScheduled.set(false)
-            if (reRegister) startNsd()
+            if (shouldReregister) startNsd()
             else startServiceDiscovery()
+
+            // Preserve a full re-registration request that arrived while the
+            // previous recovery was already running.
+            if (nsdReregisterRequested.get()) scheduleNsdRecovery(reRegister = true)
         }
     }
 
@@ -695,6 +703,7 @@ class PeerNetworkService : Service() {
                 if (previous != network && httpServer != null) {
                     // Existing sockets belong to the old network. Drop outgoing
                     // sockets and let fresh NSD results supply the new addresses.
+                    endpoints.clear()
                     sockets.values.forEach { it.cancel() }
                     scheduleNsdRecovery(reRegister = true)
                 }
@@ -715,6 +724,7 @@ class PeerNetworkService : Service() {
                 observedLinkAddresses = nextAddresses
 
                 if (changed && httpServer != null) {
+                    endpoints.clear()
                     sockets.values.forEach { it.cancel() }
                     scheduleNsdRecovery(reRegister = true)
                 }
@@ -959,6 +969,13 @@ class PeerNetworkService : Service() {
                     ?.put("connected", false)
                     ?.put("updatedAt", System.currentTimeMillis())
                 if (isActive && endpoints.containsKey(peer.id)) delay(3.seconds)
+            }
+
+            // If an endpoint was rediscovered while this job was shutting down,
+            // make sure the new endpoint gets a connection attempt.
+            connectionJobs.remove(peer.id)
+            if (isActive) {
+                endpoints[peer.id]?.let { latest -> startPeerConnection(latest) }
             }
         }
     }
