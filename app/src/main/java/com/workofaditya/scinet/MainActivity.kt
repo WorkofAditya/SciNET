@@ -590,26 +590,20 @@ private fun MeshGraph(
             }
         }
 
-        // Quiet discovery pulse: three small, staggered waves radiate from
-        // this device. The restrained radius keeps the graph readable while
-        // still making it clear that SciNET is actively searching for peers.
-        val waveCycle = 2400L
-        val waveTravel = 1900L
-        for (waveIndex in 0 until 3) {
-            val elapsed = (animationTime % waveCycle + waveIndex * (waveCycle / 3L)) % waveCycle
-            if (elapsed < waveTravel) {
-                val progress = elapsed.toFloat() / waveTravel.toFloat()
-                val radius = with(density) { 20.dp.toPx() } +
-                    with(density) { 48.dp.toPx() } * progress
-                val fade = (1f - progress) * 0.28f
-                drawCircle(
-                    color = PeerNodeColor.copy(alpha = fade),
-                    radius = radius,
-                    center = center,
-                    style = Stroke(width = 1.15.dp.toPx())
-                )
-            }
-        }
+        // AirLink-style expanding signal ring: starts at this device and
+        // travels continuously to the farthest screen edge, fading as it expands.
+        val signalPhase = (animationTime % 6000L).toFloat() / 6000f
+        val signalMaxRadius = kotlin.math.sqrt(
+            (center.x * center.x + center.y * center.y) +
+                ((size.width - center.x) * (size.width - center.x) +
+                    (size.height - center.y) * (size.height - center.y))
+        )
+        drawCircle(
+            color = PeerNodeColor.copy(alpha = 0.42f * (1f - signalPhase)),
+            radius = (signalMaxRadius * signalPhase).coerceAtLeast(0.5f),
+            center = center,
+            style = Stroke(width = 1.15.dp.toPx())
+        )
 
         activeTransfers.forEach { transfer ->
             val peerPoint = positions[transfer.peerId] ?: return@forEach
