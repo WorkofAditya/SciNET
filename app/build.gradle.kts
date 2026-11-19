@@ -9,7 +9,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.workofaditya.scinet"
+        applicationId = "com.workofaditya.scinetremote"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
