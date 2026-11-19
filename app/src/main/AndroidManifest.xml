@@ -7,19 +7,12 @@
     <application
         android:allowBackup="true"
         android:hardwareAccelerated="true"
-        android:label="SciNET"
+        android:label="SciNET Remote"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="true"
         android:supportsRtl="true">
-        <activity
-            android:name=".QrScannerActivity"
-            android:exported="false"
-            android:screenOrientation="unspecified" />
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:screenOrientation="unspecified"
-            android:configChanges="orientation|screenSize|keyboardHidden">
+        <activity android:name=".QrScannerActivity" android:exported="false" android:screenOrientation="unspecified" />
+        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="unspecified" android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
