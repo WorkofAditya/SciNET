@@ -14,10 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SciNET"
-
-// Declare the Android application as a real Gradle subproject and point it
-// explicitly at its Kotlin DSL build file. This is not a Run Configuration.
+rootProject.name = "SciNET-Remote"
 include(":app")
 project(":app").projectDir = file("app")
 project(":app").buildFileName = "build.gradle.kts"
