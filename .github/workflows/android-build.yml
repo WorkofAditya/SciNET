@@ -1,13 +1,13 @@
-name: Android build
+name: SciNET Remote Android APK
 
 on:
   push:
     branches:
-      - feature/native-android-app
+      - main
   pull_request:
     branches:
       - main
-      - feature/native-android-app
+      - main
   workflow_dispatch:
 
 jobs:
