@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <application
+        android:icon="@mipmap/scinet_icon"
+        android:roundIcon="@mipmap/scinet_icon"
         android:allowBackup="true"
         android:hardwareAccelerated="true"
         android:label="SciNET Remote"
