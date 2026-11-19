@@ -268,7 +268,7 @@ private fun SciNETApp() {
                                         val message = e.message.orEmpty()
                                         onComplete(
                                             if (message.contains("404")) {
-                                                "PC SciNET server is outdated. Update server.py from feature/native-android-app, then restart the PC server."
+                                                "PC SciNET server is outdated. Update server.py from the SciNET Remote repository, then restart the PC server."
                                             } else {
                                                 message.ifBlank { "Could not send the game shortcut." }
                                             }
