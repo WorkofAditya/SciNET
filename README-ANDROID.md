@@ -1,41 +1,38 @@
-# SciNET Android client
+# SciNET Remote Android app
 
-SciNET's Android client is a native Kotlin + Jetpack Compose application. It does not load the website in a WebView. The Python server, shared storage, Windows input injection, process enumeration, FTP service, and desktop capture remain on the Windows PC.
+SciNET Remote is the native Kotlin + Jetpack Compose Android client for the SciNET Windows host.
 
-## Open in Android Studio
+## Build
 
-1. Open this repository as a Gradle project.
-2. Use JDK 17 and install Android SDK 36 if Android Studio prompts for it.
-3. Let Gradle sync. The first sync downloads the Android Gradle Plugin, Compose dependencies, and WebRTC SDK.
-4. Select the `app` run configuration and launch it on your Android device or emulator.
+- JDK 17
+- Android SDK 36
+- Gradle 8.11.1
+
+Run:
+
+```bash
+gradle :app:assembleDebug
+```
+
+APK output: `app/build/outputs/apk/debug/app-debug.apk`.
+
+## Install identity
+
+- Display name: **SciNET Remote**
+- Application ID: `com.workofaditya.scinetremote`
+
+This distinct application ID allows SciNET Remote and SciNET Link to coexist on one Android device.
 
 ## Connect
 
-1. Start SciNET on the Windows PC with `start.bat`.
-2. Connect the phone and PC to the same reachable private network.
-3. Find the PC's local IPv4 address and enter `http://<PC-IP>:8000` in the app.
-4. Tap **Connect to PC** the first time. The address is saved on the phone and the app attempts to reconnect automatically on later launches. Use **Log Out / Change PC** at the end of the dashboard to clear it and choose another host.
+1. Start the Windows host with `start.bat`.
+2. Connect Android and Windows to the same reachable private network.
+3. Enter the Windows host address (port 8000) in the app and connect.
 
-If the app cannot connect, check Windows Firewall, hotspot/client-isolation settings, and confirm that the server is listening on port 8000.
+## Features
 
-## Native modules
+Dashboard and metrics, remote touchpad/input, keyboard and media keys, shared files, clipboard, process manager, WebRTC screen streaming and game-controller modes. Feature availability depends on the Windows host and required drivers.
 
-- **Dashboard:** polls the existing system API once per second while visible and shows host metrics, a live network traffic graph, connected devices, and a compact scrollable activity log.
-- **Remote control:** touchpad, scroll-mode toggle, mouse clicks, live text input and special keys, media controls, volume, and confirmed power actions. The live shared clipboard is embedded after System Volume in this screen.
-- **Files:** browse shared folders in a thumbnail card grid, upload and download files using Android's document picker, create folders, rename/delete items, preview files externally, and edit supported UTF-8 text files up to the server's 2 MB limit.
-- **Live clipboard:** text changes sync automatically with SciNET and connected browser clients; incoming shared text updates the phone clipboard while the app is open. Android OS restrictions mean clipboard monitoring is foreground-only.
-- **Processes:** starts monitoring only after explicit user action; supports search, sorting, app grouping, window controls, end-task, and force-stop actions subject to server-side protection.
-- **Screen mirroring:** uses the Android WebRTC SDK to receive the existing on-demand desktop stream, with resolution/frame-rate selection and pointer interaction.
-- **Game controller:** choose WASD or an analog joystick in Controller Settings. Joystick mode streams continuous two-axis input to a virtual Xbox 360 controller, so games that support XInput can use full 360-degree movement. The Windows PC needs the ViGEmBus virtual gamepad driver installed; `start.bat` installs the Python `vgamepad` package automatically.
+## Security
 
-## Analog joystick prerequisite
-
-Install the ViGEmBus virtual gamepad driver on the Windows PC before selecting Joystick mode. Restart SciNET after installation. Without the driver, WASD mode continues to work, but Windows cannot expose the virtual Xbox controller to games.
-
-## Important network and security notes
-
-SciNET is intended for a trusted private network. The server does not provide a full user-account/authentication layer. Anyone who can reach the service may be able to use remote controls and shared-file APIs. Do not expose ports 8000, 2121, or FTP passive ports directly to the public internet.
-
-## Verification status
-
-The native modules and Gradle configuration have been added on `feature/native-android-app`. The project still needs a Gradle sync and an actual Android build/device test before the branch can be considered verified. In particular, validate the native WebRTC receiver against the Windows host and test uploads/downloads on a real Android device.
+Use only on trusted networks. The host has powerful remote-control functionality and should not be exposed publicly.
